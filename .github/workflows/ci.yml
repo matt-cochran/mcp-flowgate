@@ -1,0 +1,92 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
+
+env:
+    CARGO_TERM_COLOR: always
+    RUSTFLAGS: "-Dwarnings"
+
+jobs:
+    build-test:
+        name: build + test + lint
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  components: clippy, rustfmt
+
+            - name: Cache cargo registry + build
+              uses: Swatinem/rust-cache@v2
+
+            - name: cargo fmt --check
+              run: cargo fmt --all -- --check
+
+            - name: cargo clippy
+              run: cargo clippy --workspace --all-targets -- -D warnings
+
+            - name: cargo test
+              run: cargo test --workspace
+
+            - name: Benchmark (check only)
+              run: cargo bench --bench gateway_overhead -- --warm-up-time 1 --measurement-time 5 --sample-size 50
+
+            - name: cargo build --release (for dogfood)
+              run: cargo build --release -p mcp-flowgate
+
+            - name: schema check on examples
+              run: |
+                  for f in examples/*.yaml examples/*/gateway.yaml; do
+                    echo "--- checking $f"
+                    ./target/release/mcp-flowgate check --config "$f"
+                  done
+
+            - name: migrate command smoke test
+              run: |
+                  ./target/release/mcp-flowgate migrate --config examples/simple-proxy.yaml
+
+            - name: dogfood transcript
+              run: |
+                  python3 examples/tdd/dogfood-drive.py 2>&1 | tee dogfood-transcript.txt
+
+            - name: upload dogfood transcript
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: dogfood-transcript
+                  path: dogfood-transcript.txt
+                  retention-days: 90
+
+    release-guard:
+        name: release guard (CHANGELOG must change with version)
+        runs-on: ubuntu-latest
+        if: github.event_name == 'pull_request'
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Verify CHANGELOG entry when version bumps
+              run: |
+                  base="${{ github.base_ref }}"
+                  git fetch origin "$base" --depth=1
+
+                  version_changed=$(git diff "origin/$base"..HEAD -- Cargo.toml crates/*/Cargo.toml | grep -E '^\+version =' || true)
+                  if [ -z "$version_changed" ]; then
+                    echo "No version bump detected; release guard skipped."
+                    exit 0
+                  fi
+
+                  changelog_changed=$(git diff --name-only "origin/$base"..HEAD | grep -E '^CHANGELOG\.md$' || true)
+                  if [ -z "$changelog_changed" ]; then
+                    echo "::error::Version bumped but CHANGELOG.md not updated."
+                    exit 1
+                  fi
+                  echo "Version bump accompanied by CHANGELOG.md update — OK."

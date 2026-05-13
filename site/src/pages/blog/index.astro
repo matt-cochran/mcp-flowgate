@@ -1,0 +1,88 @@
+---
+import Landing from '../../layouts/Landing.astro';
+---
+
+<Landing
+	title="Blog — mcp-flowgate"
+	description="Updates, guides, and deep dives from the mcp-flowgate project."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<section class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<h1 class="text-4xl font-bold text-slate-900 mb-4">Blog</h1>
+		<p class="text-lg text-slate-600 mb-12">
+			Project updates, technical deep dives, and things we learned building mcp-flowgate.
+		</p>
+
+		<!-- Post 1 -->
+		<article class="blog-card mb-8">
+			<a href="/blog/why-seven-tools" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-05-21">May 21, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Why seven tools is the right number
+				</h2>
+				<p class="text-slate-600">
+					Every MCP tool you register costs tokens. We measured the math,
+					built the fix, and watched models get better at tool selection
+					when given less to choose from.
+				</p>
+			</a>
+		</article>
+
+		<!-- Post 2 -->
+		<article class="blog-card mb-8">
+			<a href="/blog/deterministic-chaining-explained" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-05-21">May 21, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Deterministic chaining: skip what the LLM doesn't need to decide
+				</h2>
+				<p class="text-slate-600">
+					Not every step in a pipeline needs judgment. We built a chaining
+					mechanism that auto-executes computable steps and hands back
+					control at decision points.
+				</p>
+			</a>
+		</article>
+
+	</div>
+</section>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/examples" class="text-slate-500 hover:text-slate-300 text-sm">Examples</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate/issues" class="text-slate-500 hover:text-slate-300 text-sm">Issues</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

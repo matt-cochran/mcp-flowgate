@@ -1,0 +1,223 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const pipelineCode = `<span class="text-indigo-400">lint</span>:
+  <span class="text-indigo-400">transitions</span>:
+    <span class="text-indigo-400">run_lint</span>:
+      <span class="text-indigo-400">target</span>: <span class="text-green-400">test</span>
+      <span class="text-indigo-400">actor</span>: <span class="text-green-400">deterministic</span>
+      <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">cli</span>, <span class="text-indigo-400">command</span>: <span class="text-green-400">lint-check</span> }
+<span class="text-indigo-400">test</span>:
+  <span class="text-indigo-400">transitions</span>:
+    <span class="text-indigo-400">run_tests</span>:
+      <span class="text-indigo-400">target</span>: <span class="text-green-400">build</span>
+      <span class="text-indigo-400">actor</span>: <span class="text-green-400">deterministic</span>
+      <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">cli</span>, <span class="text-indigo-400">command</span>: <span class="text-green-400">test-runner</span> }
+<span class="text-indigo-400">build</span>:
+  <span class="text-indigo-400">transitions</span>:
+    <span class="text-indigo-400">build_artifact</span>:
+      <span class="text-indigo-400">target</span>: <span class="text-green-400">ready_to_deploy</span>
+      <span class="text-indigo-400">actor</span>: <span class="text-green-400">deterministic</span>
+<span class="text-indigo-400">ready_to_deploy</span>:
+  <span class="text-indigo-400">goal</span>: <span class="text-green-400">Confirm deployment</span>
+  <span class="text-indigo-400">guidance</span>: <span class="text-green-400">All checks passed. Review before deploying.</span>
+  <span class="text-indigo-400">transitions</span>:
+    <span class="text-indigo-400">deploy</span>:
+      <span class="text-indigo-400">target</span>: <span class="text-green-400">deployed</span>
+      <span class="text-indigo-400">actor</span>: <span class="text-green-400">agent</span>`;
+
+const depthCode = `<span class="text-indigo-400">workflows</span>:
+  <span class="text-indigo-400">deploy</span>:
+    <span class="text-indigo-400">maxChainDepth</span>: <span class="text-green-400">20</span>
+    <span class="text-indigo-400">states</span>: ...`;
+---
+
+<Landing
+	title="Deterministic chaining: skip what the LLM doesn't need to decide — mcp-flowgate"
+	description="Not every pipeline step needs judgment. We built a chaining mechanism that auto-executes computable steps and hands back control at decision points."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-05-21">May 21, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">Deterministic chaining: skip what the LLM doesn't need to decide</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				You have a deploy pipeline. Lint, test, build, then deploy. The first
+				three steps don't need judgment. They either pass or they don't. But
+				without chaining, the LLM has to babysit every single one.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The round-trip problem</h2>
+
+			<p>
+				Here's what happens without chaining. The model starts the workflow.
+				Gets back the lint step. Reads the response. Reasons about it.
+				Picks the transition. Submits it. Waits for lint to finish. Gets
+				the result. Reasons again. Picks the next transition. Submits.
+				Waits for tests...
+			</p>
+
+			<p>
+				That's three full LLM round trips for steps where there's nothing
+				to decide. Each round trip means:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li>Input tokens to re-read the workflow state</li>
+				<li>Output tokens to reason about the "choice"</li>
+				<li>Network latency for each call</li>
+				<li>API cost that scales with conversation length</li>
+			</ul>
+
+			<p>
+				For a 10-step pipeline where 8 steps are computable, that's
+				8 unnecessary round trips. Real money, real latency, zero value.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Tag it and forget it</h2>
+
+			<p>
+				The fix is one field: <code>actor: "deterministic"</code>.
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">deploy-pipeline.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={pipelineCode} /></pre>
+			</div>
+
+			<p>
+				The model calls <code>workflow.start</code>. The runtime sees
+				that the first state has only deterministic transitions. It
+				executes lint. Succeeds. Moves to test. Executes. Succeeds.
+				Moves to build. Executes. Succeeds. Arrives at
+				<code>ready_to_deploy</code> — which has an <code>agent</code>
+				transition. The chain stops.
+			</p>
+
+			<p>
+				Three executor calls. Zero LLM round trips. One response
+				back to the model with the full chain trace.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What the model gets back</h2>
+
+			<p>
+				The response includes everything the model needs to make the
+				deploy decision:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li>A <code>chain</code> array tracing each auto-executed step and its result</li>
+				<li>A <code>guidance</code> object with the <code>goal</code> and
+					<code>instructions</code> for the current state</li>
+				<li>Links to the available transitions — in this case, just "deploy"</li>
+			</ul>
+
+			<p>
+				The model reads the lint results, test results, build output. It
+				has context for the decision. And it didn't waste tokens getting here.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">When things break mid-chain</h2>
+
+			<p>
+				If the test step fails, the chain stops at the failure. The
+				response includes:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li>The partial chain trace — lint succeeded, tests failed</li>
+				<li>The error from the failed executor</li>
+				<li>A recovery link so the model can retry just the failed step</li>
+			</ul>
+
+			<p>
+				The model doesn't have to restart the whole pipeline. It sees
+				what worked, what broke, and has a link to try again.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The safety net</h2>
+
+			<p>
+				Chains have a depth limit: <code>maxChainDepth</code>, default 50.
+				If your workflow has a cycle of deterministic transitions (it
+				shouldn't, but mistakes happen), the chain stops at the limit
+				instead of running forever.
+			</p>
+
+			<p>
+				You can set it per workflow:
+			</p>
+
+			<div class="code-window my-8">
+				<pre class="text-sm"><code class="text-slate-300" set:html={depthCode} /></pre>
+			</div>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">When to use it</h2>
+
+			<p>
+				Any step where the outcome is computable — not a judgment call —
+				is a candidate. Linting, testing, building, data validation,
+				format conversion, notification sending. If a human wouldn't
+				need to think about it, the model doesn't either.
+			</p>
+
+			<p>
+				The model's time is expensive. Spend it on decisions that matter.
+			</p>
+
+			<p class="mt-8">
+				See the full
+				<a href="/guides/chaining" class="text-indigo-600 hover:text-indigo-500">chaining guide</a>
+				or explore the
+				<a href="https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/deploy-pipeline" class="text-indigo-600 hover:text-indigo-500">deploy-pipeline example</a>.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

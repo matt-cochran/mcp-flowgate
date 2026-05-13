@@ -1,0 +1,184 @@
+---
+title: "Discovery & search"
+description: "How your model finds capabilities without a bloated tool list -- search, describe, and follow links."
+---
+
+Your model never sees a list of 50 tools. Instead, it asks the gateway what's available, gets back scored results, and follows links to act. Three tools handle the entire discovery layer.
+
+## The three discovery tools
+
+| Tool | What it does |
+|------|-------------|
+| `gateway.home` | Returns the full catalog of capabilities and workflows |
+| `gateway.search` | Takes a query string, returns scored matches |
+| `gateway.describe` | Returns the full schema for a specific capability or workflow |
+
+That's it. The model searches for what it needs, drills into the details, and starts a workflow. No memorized tool catalog required.
+
+## How search works
+
+When you call `gateway.search` with a query string, the gateway tokenizes your query and scores every indexed item across six fields. Each field has a weight that reflects how important a match there is:
+
+| Field | Weight | Why |
+|-------|--------|-----|
+| `title` | 6.0 | The name you gave it -- highest signal |
+| `id` | 5.0 | The unique identifier |
+| `tags` | 3.0 | Author-declared categories |
+| `aliases` | 3.0 | Author-declared synonyms |
+| `description` | 2.0 | The human-readable summary |
+| `text` | 1.0 | Everything else -- state names, transition titles, guidance text |
+
+The total score for each item is the sum across all fields and all query terms. Higher-weighted fields dominate, so a title match beats a description match every time.
+
+### Three matching tiers
+
+For each field, the scorer tries three strategies in order and takes the first one that hits:
+
+1. **Exact substring** -- the query term appears anywhere in the field. Full weight.
+2. **Prefix match** -- a word in the field starts with the query term (minimum 2 characters). 70% of the field weight.
+3. **Trigram fuzzy match** -- for terms of 4+ characters, the scorer computes trigram similarity between the query term and each word in the field. If similarity exceeds 0.3, you get up to 50% of the field weight, scaled by the similarity score.
+
+This means you don't need exact spelling. Searching for "deply" will fuzzy-match "deploy". Searching for "dep" will prefix-match "deploy". Searching for "deploy" will exact-match it. The scoring degrades gracefully.
+
+## Making your capabilities findable
+
+Two config fields help the search system: `aliases` and `tags`.
+
+**Aliases** are search synonyms. If your capability is called `release.promote` but people think of it as "deploy" or "ship", declare those as aliases:
+
+```yaml
+proxy:
+  expose:
+    - name: release.promote
+      title: Promote release
+      description: Promote a release candidate to production.
+      aliases: [deploy, ship, push-to-prod]
+      tags: [release, production]
+      executor:
+        kind: cli
+        connection: kubectl
+        args: [apply, -f, "$.arguments.manifest"]
+```
+
+Now `gateway.search({ query: "deploy" })` finds `release.promote` through the alias match at weight 3.0.
+
+**Tags** are categories. They carry the same search weight as aliases (3.0), but they're also useful for filtering and organizing. Use tags for broad categories; use aliases for the specific words someone might type when looking for this capability.
+
+Workflows get the same treatment:
+
+```yaml
+workflows:
+  deploy_pipeline:
+    description: Lint, test, build, and deploy a service.
+    tags: [deploy, ci, pipeline]
+    aliases: [ship, release]
+    initialState: lint
+    states: { ... }
+```
+
+## The search-describe-start flow
+
+Here's the typical sequence a model follows. It looks like three steps because it is three steps -- and each one is a single tool call.
+
+**Step 1: Search.** The model has a goal ("deploy the service") and searches for it.
+
+```json
+// gateway.search
+{ "query": "deploy service" }
+```
+
+The response comes back with scored hits. Each hit includes enough metadata to decide whether it's the right one, plus a link to start it:
+
+```json
+{
+  "hits": [
+    {
+      "score": 12.0,
+      "item": {
+        "id": "deploy_pipeline",
+        "kind": "workflow",
+        "title": "Deploy Pipeline",
+        "description": "Lint, test, build, and deploy a service.",
+        "tags": ["deploy", "ci", "pipeline"],
+        "links": [
+          {
+            "rel": "start",
+            "title": "Start workflow 'deploy_pipeline'",
+            "method": "workflow.start",
+            "args": {
+              "definitionId": "deploy_pipeline",
+              "input": {}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+**Step 2: Describe (optional).** If the model needs more detail -- the full input schema, for instance -- it calls `gateway.describe`:
+
+```json
+// gateway.describe
+{ "id": "deploy_pipeline" }
+```
+
+This returns the complete item with its `inputSchema`, so the model knows exactly what arguments to pass when starting the workflow.
+
+**Step 3: Start.** The model follows the link from the search result:
+
+```json
+// workflow.start
+{
+  "definitionId": "deploy_pipeline",
+  "input": { "service": "api-gateway", "environment": "staging" }
+}
+```
+
+From here, the workflow takes over. The response includes links to the next legal transitions, and the model follows those. No more discovery needed.
+
+## What gateway.home returns
+
+`gateway.home` is the entry point. It returns links to the search and list operations -- a starting point for a model that doesn't know what's available yet. Think of it as the root of the API.
+
+If the model already knows what it's looking for, it can skip straight to `gateway.search`. But `gateway.home` is there for the cold-start case: "I just connected to this gateway. What can I do?"
+
+## Imported capabilities in discovery
+
+When you use `proxy.import` to pull in tools from an MCP server, those imported tools automatically appear in the discovery index. You can add tags at the import level to make them findable:
+
+```yaml
+proxy:
+  import:
+    - connection: github
+      prefix: github
+      include: [list_issues, create_pull_request]
+      tags: [github, source-control]
+```
+
+Every imported tool gets the tags you declare on the import block. The tool's original name and description (from the upstream MCP server's `tools/list` response) feed into the search index automatically.
+
+## Configuring what gets indexed
+
+By default, the discovery index includes proxy capabilities and workflows. You can also include connections:
+
+```yaml
+discovery:
+  index: memory
+  include: [proxy, workflows, connections]
+```
+
+The `include` array controls which categories appear in search results. Most setups leave the default (`[proxy, workflows]`) alone -- connections are rarely something a model needs to search for directly. But if you want full visibility, add `connections` to the list.
+
+## Tips for good discoverability
+
+**Write descriptive titles.** The title field has the highest search weight (6.0). A title like "Create PR" is better than "gh-pr-create" for search purposes.
+
+**Use 2-4 tags.** Tags at weight 3.0 are your second-best lever after title and id. Pick the categories someone would browse by.
+
+**Add aliases for common synonyms.** If people call the same thing by different names, aliases catch that. They score the same as tags.
+
+**Write a one-line description.** Even at weight 2.0, descriptions help disambiguate when multiple items have similar titles.
+
+**Use goal and guidance on workflow states.** These get indexed as freeform text (weight 1.0). They won't dominate scoring, but they help with long-tail queries where someone searches for a phrase that happens to appear in your guidance text.

@@ -1,0 +1,346 @@
+---
+title: "Governance"
+description: "Guards, actor enforcement, and approval gates -- how to control what the model can do and when."
+---
+
+Governance is the answer to "who can do what, and when?" You declare rules in YAML, and the runtime enforces them before any executor runs. No glue code. No per-tool wrappers.
+
+## Guards: the gating mechanism
+
+Guards are preconditions on transitions. They run after input schema validation but before the executor. If any guard fails, the transition is rejected, and the response comes back with an error and the current legal links so the model can recover.
+
+```yaml
+proxy:
+  expose:
+    - name: deploy.prod
+      guards:
+        - kind: permission
+          permission: deploy.production
+      executor: { kind: cli, connection: kubectl, args: [apply] }
+```
+
+That `permission` guard means: if the caller doesn't hold `deploy.production`, the deploy never happens. The model gets a `GUARD_REJECTED` error and links to whatever it *can* do instead.
+
+Guards run in declaration order. First failure stops the chain. Each evaluation emits a `guard.evaluated` audit event, so you always know what passed and what didn't.
+
+## The four guard kinds
+
+### permission
+
+Checks that the caller holds a named permission.
+
+```yaml
+guards:
+  - kind: permission
+    permission: deploy.production
+```
+
+This is for multi-tenant deployments where different humans share one gateway and carry different permission sets. For single-user local setups, `permission` guards will reject everyone (the bundled binary treats callers as anonymous). Reach for `expr`, `evidence`, or `actor` enforcement instead.
+
+### role
+
+Checks that the caller has a named role.
+
+```yaml
+guards:
+  - kind: role
+    role: approver
+```
+
+Same multi-tenant story as `permission`. Roles are broader categories ("approver", "admin", "finance-reviewer"); permissions are specific actions ("deploy.production", "expense.approve.manager").
+
+### expr
+
+Evaluates a binary predicate against the workflow's state. This is the guard you'll use most often.
+
+```yaml
+guards:
+  - kind: expr
+    expr: "$.context.fmeca.maxResidualRpn <= 80"
+```
+
+The expression has access to three scopes:
+
+| Scope | Reads from |
+|-------|-----------|
+| `$.arguments.*` | The caller's transition arguments |
+| `$.context.*` | The workflow's accumulated context |
+| `$.workflow.input.*` | The input passed to `workflow.start` |
+
+**Operators:** `==`, `!=` for any same-typed values. `<`, `<=`, `>`, `>=` for numbers. `starts_with`, `contains` for strings.
+
+**Operand types:** paths, numbers, quoted strings (`"foo"`), booleans (`true`/`false`), and `null`.
+
+**Path-to-path comparisons work:** `"$.context.after > $.context.before"` is valid.
+
+**Array access:** use bracket notation `items[0].name` or dot notation `items.0.name`.
+
+Some examples:
+
+```yaml
+# Amount threshold
+- kind: expr
+  expr: "$.context.amount > 1000"
+
+# String matching
+- kind: expr
+  expr: "$.arguments.branch starts_with 'feat/'"
+
+# Comparing two context values
+- kind: expr
+  expr: "$.context.reviewCount >= $.context.requiredReviews"
+
+# Boolean check
+- kind: expr
+  expr: "$.context.policyOk == true"
+```
+
+### evidence
+
+Requires that specific evidence artifacts have been recorded for this workflow before the transition can fire. Evidence comes from successful executor results -- the CLI executor records `cli_output` on every success, the human executor records `human_request`, and custom executors can emit domain-specific kinds.
+
+```yaml
+guards:
+  - kind: evidence
+    requires:
+      - tests_passed
+      - acceptance_criteria_met
+```
+
+Every listed kind must have at least one evidence record in the workflow's evidence store. You can also require a specific count for quorum-style approvals:
+
+```yaml
+guards:
+  - kind: evidence
+    requires:
+      - { kind: human_request, count: 2 }
+```
+
+That means two separate human approvals must exist before this transition can fire. Useful for high-value actions that need sign-off from multiple people.
+
+## Composing guards with combinators
+
+Guards can be combined using `allOf`, `anyOf`, and `not`:
+
+```yaml
+guards:
+  # Both must pass
+  - kind: allOf
+    guards:
+      - { kind: permission, permission: deploy.production }
+      - { kind: expr, expr: "$.context.testsPass == true" }
+
+  # Either one is sufficient
+  - kind: anyOf
+    guards:
+      - { kind: role, role: admin }
+      - { kind: evidence, requires: [override_approved] }
+
+  # Negation
+  - kind: not
+    guard: { kind: expr, expr: "$.context.blocked == true" }
+```
+
+You can nest these arbitrarily. An `allOf` inside an `anyOf` inside another `allOf` works fine. But if you find yourself nesting three levels deep, consider whether the workflow should have more states instead.
+
+## Actor enforcement
+
+The `actor` field on a transition controls *who* can submit it. Four values:
+
+| Actor | Who can submit |
+|-------|---------------|
+| `agent` | The LLM (default) |
+| `human` | A human -- the runtime rejects agents with `ACTOR_MISMATCH` |
+| `system` | Internal system calls |
+| `deterministic` | The runtime itself -- auto-executes without waiting for anyone |
+
+The most important one for governance is `human`:
+
+```yaml
+transitions:
+  approve:
+    actor: human
+    target: approved
+    guards:
+      - kind: permission
+        permission: workflow.approve
+```
+
+When a transition is marked `actor: human`, the LLM literally cannot submit it. The runtime checks `Principal::is_human()` on the submitter and rejects with `ACTOR_MISMATCH` before the executor runs or the workflow advances. This isn't a guard that can be bypassed -- it's a hard gate in the runtime.
+
+This is defense in depth. You might also have a `permission` guard on the same transition, and the executor itself might be a `human` executor. All three layers are independent and composable:
+
+- **Actor gate**: rejects non-human principals at the runtime level
+- **Permission guard**: checks the human has the right permission
+- **Human executor**: records the approval request and returns pending
+
+## The human executor
+
+The `human` executor doesn't execute anything. It records an approval request, emits a `human.approval.requested` audit event, and returns a pending status. The workflow stays in its current state until a human resolves the request.
+
+```yaml
+transitions:
+  request_approval:
+    target: awaiting_approval
+    executor:
+      kind: human
+      queue: engineering-approvals
+```
+
+The `queue` field is a label -- it tells your approval integration (Slack bot, Linear sync, CLI watcher) which queue this request belongs to. The gateway doesn't manage queues itself; it just records the event.
+
+A human resolves the request through your approval tooling, which calls back into the gateway to advance the workflow. The full approval integration patterns are in the governance docs.
+
+## A complete governed workflow
+
+Here's an expense approval workflow that combines all the guard kinds. Notice how different states use different enforcement strategies:
+
+```yaml
+workflows:
+  expense_approval:
+    description: Submit, classify, approve, and reimburse an expense.
+    tags: [expense, finance, governed]
+
+    inputSchema:
+      type: object
+      required: [employee, amount, category]
+      properties:
+        employee: { type: string }
+        amount:   { type: number, minimum: 0 }
+        category: { type: string }
+
+    initialState: submitted
+    initialContext:
+      policyOk: null
+      requiresFinance: null
+
+    states:
+      submitted:
+        onEnter:
+          executor:
+            kind: mcp
+            connection: classifier
+            tool: classify_expense
+          output:
+            policyOk: "$.output.policyOk"
+            requiresFinance: "$.output.requiresFinance"
+
+        linkFilter: byGuards
+        transitions:
+          to_manager:
+            title: Send to manager for approval
+            target: manager_review
+            guards:
+              - { kind: expr, expr: "$.context.policyOk == true" }
+
+          policy_reject:
+            title: Reject -- violates policy
+            target: rejected
+            guards:
+              - { kind: expr, expr: "$.context.policyOk == false" }
+
+      manager_review:
+        transitions:
+          approve:
+            title: Approve the expense
+            actor: human
+            target: reimbursement
+            guards:
+              - kind: permission
+                permission: expense.approve.manager
+              - kind: expr
+                expr: "$.context.requiresFinance == false"
+
+          approve_to_finance:
+            title: Approve and forward to finance
+            actor: human
+            target: finance_review
+            guards:
+              - kind: permission
+                permission: expense.approve.manager
+              - kind: expr
+                expr: "$.context.requiresFinance == true"
+
+          reject:
+            title: Reject the expense
+            actor: human
+            target: rejected
+            guards:
+              - kind: permission
+                permission: expense.approve.manager
+
+      finance_review:
+        transitions:
+          finance_approve:
+            title: Finance approval
+            actor: human
+            target: reimbursement
+            guards:
+              - kind: permission
+                permission: expense.approve.finance
+
+          finance_reject:
+            title: Finance rejection
+            actor: human
+            target: rejected
+            guards:
+              - kind: permission
+                permission: expense.approve.finance
+
+      reimbursement:
+        onEnter:
+          executor:
+            kind: rest
+            connection: payroll
+            method: POST
+            path: /reimbursements
+            body:
+              employee: "$.workflow.input.employee"
+              amount: "$.workflow.input.amount"
+            idempotencyKey: true
+          reliability:
+            retry:
+              maxAttempts: 3
+              backoff: exponential
+              initialDelayMs: 1000
+        transitions:
+          mark_paid:
+            target: paid
+
+      paid:
+        terminal: true
+
+      rejected:
+        terminal: true
+```
+
+Walk through what's happening:
+
+1. **`submitted`** -- the classifier runs on entry (`onEnter`), stores its verdict in context. `expr` guards on the transitions route based on the classifier's output. `linkFilter: byGuards` means the model only sees the transition that actually applies.
+
+2. **`manager_review`** -- every transition requires `actor: human` (the LLM can't approve) plus a `permission` guard (only managers can approve). The `expr` guard routes high-value expenses to finance.
+
+3. **`finance_review`** -- same pattern, different permission. Only finance reviewers can act here.
+
+4. **`reimbursement`** -- the REST executor fires the payment with an idempotency key (retries don't double-pay) and exponential backoff retry.
+
+5. **Terminal states** -- `paid` and `rejected` have no outgoing transitions. The workflow is done.
+
+## Link filtering
+
+By default, every workflow response includes links for all transitions from the current state. The model picks one, and if the guards reject it, the error response includes the legal links for recovery.
+
+If you'd rather the model only sees transitions it can actually take right now, set `linkFilter: byGuards`:
+
+```yaml
+workflows:
+  demo:
+    linkFilter: byGuards    # workflow-wide default
+    states:
+      triaged:
+        linkFilter: byGuards  # or per-state (overrides the workflow setting)
+```
+
+When set, the runtime evaluates each transition's guards silently against the current context and principal, and only returns links for transitions that would pass. This is useful when guards are mutually exclusive -- the model doesn't have to guess which one applies.
+
+One caveat: guards that depend on `$.arguments.*` can't be evaluated at link-generation time (no arguments exist yet), so those transitions typically filter out. Use `linkFilter: byGuards` when your guards depend on `$.context.*` and `$.workflow.input.*`.

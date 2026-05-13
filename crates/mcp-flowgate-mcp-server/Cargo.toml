@@ -1,0 +1,24 @@
+[package]
+name = "mcp-flowgate-mcp-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server tool surface for mcp-flowgate (workflow.start/get/submit/explain)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mcp-flowgate-core = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+rmcp = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

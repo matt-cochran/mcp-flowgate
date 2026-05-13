@@ -1,0 +1,9 @@
+target/
+node_modules/
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+.vscode
+.idea
+site/dist/
+site/.astro/

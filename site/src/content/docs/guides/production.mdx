@@ -1,0 +1,114 @@
+---
+title: "Going to production"
+description: "What to change before your gateway handles real traffic -- storage, audit, validation, and operational concerns."
+---
+
+## The defaults are for development
+
+Out of the box, mcp-flowgate uses an in-memory store and no audit sink. That's fine for trying things out. It's not fine for production, because a restart erases all workflow state and you have no record of what happened.
+
+Here's what to change before you go live.
+
+## Durable storage
+
+The default `memory` store loses everything on restart. Switch to a durable backend:
+
+```yaml
+# SQLite -- good for single-node deployments
+store:
+  kind: sqlite
+  path: /var/lib/mcp-flowgate/workflows.db
+
+# Postgres -- good for multi-node / HA setups
+store:
+  kind: postgres
+  url: postgres://user:pass@db.example.com/flowgate
+```
+
+SQLite is the simplest path. One file, no extra infrastructure, handles thousands of concurrent workflows. Use Postgres when you need multiple gateway instances sharing state, or when your ops team already runs Postgres and you want everything in one place.
+
+## Audit trail
+
+By default, audit events go nowhere. You want them going somewhere:
+
+```yaml
+audit:
+  sink: file
+  path: /var/log/mcp-flowgate/audit.jsonl
+```
+
+Every workflow start, transition, executor call, guard evaluation, and error gets written as a structured JSON line. Each line is a self-contained event with a timestamp, workflow ID, event type, and relevant details.
+
+Set up log rotation (logrotate, systemd journal, or your preferred tool) so the file doesn't grow unbounded. The JSON lines format plays well with any log aggregation system -- pipe it to your observability stack and you get full visibility into what every model did, when, and with what inputs.
+
+## Validate config in CI
+
+Don't find out your config is broken when you deploy it. Run the checker in your CI pipeline:
+
+```bash
+mcp-flowgate check --config gateway.yaml
+```
+
+This catches problems that YAML syntax checking misses:
+
+- **Dangling targets** -- a transition points to a state that doesn't exist.
+- **Unreachable states** -- a state that no transition ever leads to.
+- **Dead-ends** -- a non-terminal state with no outbound transitions.
+- **Schema issues** -- malformed input schemas, invalid executor references.
+
+It's fast and deterministic. Add it right next to your linter.
+
+## Schema-aware editing
+
+Point your editor's YAML language server at the config schema for autocomplete and inline validation:
+
+```json
+// .vscode/settings.json
+{
+  "yaml.schemas": {
+    "./schemas/gateway-config.schema.json": "gateway.yaml"
+  }
+}
+```
+
+You get red squiggles for typos, autocomplete for field names, and documentation on hover. Catches mistakes before you even save the file.
+
+## Hot reload
+
+You don't need to restart the gateway to pick up config changes. Send SIGHUP:
+
+```bash
+kill -HUP $(pgrep mcp-flowgate)
+```
+
+Definitions, executors, connections, and the discovery index all rebuild and swap atomically. In-flight workflows keep running on their current definitions. A `config.reloaded` audit event confirms the reload happened. See the [hot reload guide](/docs/guides/hot-reload) for details.
+
+## Multi-tenancy
+
+mcp-flowgate runs as a single-user, same-trust-boundary system. If every model connecting to your gateway is operating on behalf of the same user or within the same trust boundary, you're good to go.
+
+For cross-trust-boundary deployments -- where different users or teams need isolation -- put an identity proxy in front of the gateway. [Envoy](https://www.envoyproxy.io/), [OAuth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/), or any reverse proxy that injects identity headers will work. The gateway sees the identity from headers and can scope workflows accordingly.
+
+Don't skip this if you have untrusted callers. The gateway itself doesn't authenticate requests.
+
+## High availability
+
+For HA deployments:
+
+1. Use the Postgres store so all instances share workflow state.
+2. Put a load balancer in front of multiple gateway instances.
+3. Any instance can serve any request -- there's no sticky session requirement because all state lives in Postgres.
+
+Scaling is straightforward: add more gateway instances behind the load balancer. The Postgres store handles concurrent access.
+
+## Monitoring
+
+Every audit event is structured JSON. This is your monitoring surface. Pipe audit output to your observability stack and you get:
+
+- **Workflow throughput** -- count `workflow.started` events per time window.
+- **Error rates** -- count `executor.failed` events, break down by workflow and transition.
+- **Latency** -- measure time between `workflow.started` and terminal state events.
+- **Guard rejections** -- track `guard.rejected` events to see what's being blocked and why.
+- **Human approval queues** -- monitor `approval.pending` events to catch bottlenecks.
+
+You don't need a custom metrics integration. The audit stream already has everything. Build dashboards from the JSON lines the same way you would from any structured log source.

@@ -1,0 +1,59 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mcp-flowgate-schema",
+    "crates/mcp-flowgate-core",
+    "crates/mcp-flowgate-executors",
+    "crates/mcp-flowgate-mcp-server",
+    "crates/mcp-flowgate",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "Apache-2.0"
+repository = "https://github.com/matt-cochran/mcp-flowgate"
+
+[workspace.dependencies]
+mcp-flowgate-schema = { path = "crates/mcp-flowgate-schema", version = "0.1.0" }
+mcp-flowgate-core = { path = "crates/mcp-flowgate-core", version = "0.1.0" }
+mcp-flowgate-executors = { path = "crates/mcp-flowgate-executors", version = "0.1.0" }
+mcp-flowgate-mcp-server = { path = "crates/mcp-flowgate-mcp-server", version = "0.1.0" }
+
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+jsonschema = { version = "0.46", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+rmcp = { version = "1.6", default-features = false, features = ["server", "client", "macros", "transport-io", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# build-deps
+typify = "0.6"
+prettyplease = "0.2"
+syn = { version = "2", features = ["full"] }
+schemars = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.bench]
+debug = true
+
+[profile.dev]
+opt-level = 0
+debug = 1

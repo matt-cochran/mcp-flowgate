@@ -1,0 +1,529 @@
+{
+  "$id": "https://mcp-flowgate.dev/schemas/gateway-config.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GatewayConfig",
+  "type": "object",
+  "required": ["version"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "string" },
+    "include": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Sibling YAML files to merge in before resolving. Maps merge (later wins on key collisions), arrays concatenate."
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/capabilityDefinition" },
+      "default": {},
+      "description": "Named, reusable capabilities. Referenced from `proxy.expose[].capability` and from workflow transition `executor: { capability: name }`."
+    },
+    "connections": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/connection" },
+      "default": {}
+    },
+    "proxy": { "$ref": "#/$defs/proxyConfig" },
+    "workflows": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/workflowDefinition" },
+      "default": {}
+    },
+    "audit": { "$ref": "#/$defs/auditConfig" },
+    "discovery": { "$ref": "#/$defs/discoveryConfig" },
+    "store": { "$ref": "#/$defs/storeConfig" }
+  },
+  "$defs": {
+    "connection": {
+      "oneOf": [
+        { "$ref": "#/$defs/mcpConnection" },
+        { "$ref": "#/$defs/cliConnection" },
+        { "$ref": "#/$defs/restConnection" }
+      ]
+    },
+    "mcpConnection": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "mcp" },
+        "command": { "type": "string" },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "url": { "type": "string" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        }
+      }
+    },
+    "cliConnection": {
+      "type": "object",
+      "required": ["kind", "command"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "cli" },
+        "command": { "type": "string" },
+        "workingDirectory": { "type": "string" },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        }
+      }
+    },
+    "restConnection": {
+      "type": "object",
+      "required": ["kind", "baseUrl"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "rest" },
+        "baseUrl": { "type": "string" },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        }
+      }
+    },
+    "proxyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expose": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/proxyExposure" },
+          "default": []
+        },
+        "import": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/proxyImport" },
+          "default": []
+        }
+      }
+    },
+    "proxyImport": {
+      "type": "object",
+      "required": ["connection"],
+      "additionalProperties": false,
+      "properties": {
+        "connection": { "type": "string" },
+        "prefix": { "type": "string" },
+        "include": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "capabilityDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A reusable capability. Either declares an executor inline or wraps another named capability adding guards / reliability / metadata.",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "inputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "wraps": {
+          "type": "string",
+          "description": "Name of a capability to wrap. The wrapper's guards and reliability stack on top of the wrapped capability's; the executor is inherited."
+        },
+        "executor": { "$ref": "#/$defs/executor" },
+        "guards": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/guard" },
+          "default": []
+        },
+        "reliability": { "$ref": "#/$defs/reliabilityPolicy" }
+      }
+    },
+    "proxyExposure": {
+      "oneOf": [
+        { "$ref": "#/$defs/proxyExposureInline" },
+        { "$ref": "#/$defs/proxyExposureRef" }
+      ]
+    },
+    "proxyExposureRef": {
+      "type": "object",
+      "required": ["capability"],
+      "additionalProperties": false,
+      "description": "Expose a named capability. Optional `as:` aliases the proxy name; guards/reliability stack on top of the capability's.",
+      "properties": {
+        "capability": { "type": "string" },
+        "as": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]*$"
+        },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Search synonyms for discovery. A capability named release.promote with aliases: [deploy, ship] will be found by those terms."
+        },
+        "guards": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/guard" },
+          "default": []
+        },
+        "reliability": { "$ref": "#/$defs/reliabilityPolicy" }
+      }
+    },
+    "proxyExposureInline": {
+      "type": "object",
+      "required": ["name", "executor"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]*$"
+        },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Search synonyms for discovery."
+        },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "inputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "guards": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/guard" },
+          "default": []
+        },
+        "executor": { "$ref": "#/$defs/executor" },
+        "reliability": { "$ref": "#/$defs/reliabilityPolicy" }
+      }
+    },
+    "workflowDefinition": {
+      "type": "object",
+      "required": ["initialState", "states"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Search synonyms for discovery."
+        },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        },
+        "initialState": { "type": "string" },
+        "initialContext": {
+          "type": "object",
+          "description": "Seed values written into instance.context at start. Lets you declare counters / flags without an onEnter that re-fires on self-loops.",
+          "default": {}
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Lazy workflow-level timeout. If the next `submit` or `get` occurs more than this many milliseconds after the workflow started, the instance auto-transitions to `onTimeout.target` (or `failed` if no onTimeout block is declared)."
+        },
+        "maxChainDepth": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 50,
+          "description": "Maximum number of deterministic transitions the runtime will chain automatically before halting. Prevents infinite loops in misconfigured workflows."
+        },
+        "onTimeout": { "$ref": "#/$defs/onTimeout" },
+        "linkFilter": {
+          "type": "string",
+          "enum": ["all", "byGuards"],
+          "default": "all",
+          "description": "How transition links are filtered for this workflow's responses. `byGuards` runs each transition's guards silently against the current state and only returns links for those that would pass. `all` returns every legal-by-state transition."
+        },
+        "inputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "states": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/state" }
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "goal": {
+          "type": "string",
+          "description": "What the LLM should aim to accomplish in this phase. Returned in the workflow response as guidance."
+        },
+        "guidance": {
+          "type": "string",
+          "description": "Behavioral instructions for the LLM in this phase. Returned in the workflow response as guidance."
+        },
+        "terminal": { "type": "boolean", "default": false },
+        "onEnter": { "$ref": "#/$defs/action" },
+        "linkFilter": {
+          "type": "string",
+          "enum": ["all", "byGuards"],
+          "description": "Per-state override of the workflow's linkFilter. `byGuards` runs each transition's guards silently against the current state and only returns links for those that would pass."
+        },
+        "transitions": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/transition" },
+          "default": {}
+        }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "required": ["target"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "target": { "type": "string" },
+        "actor": {
+          "type": "string",
+          "enum": ["agent", "human", "system", "deterministic"],
+          "default": "agent"
+        },
+        "inputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "guards": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/guard" },
+          "default": []
+        },
+        "executor": { "$ref": "#/$defs/executor" },
+        "output": { "$ref": "#/$defs/outputMapping" },
+        "evidence": { "$ref": "#/$defs/evidenceRequirement" },
+        "reliability": { "$ref": "#/$defs/reliabilityPolicy" },
+        "prefill": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Argument values to pre-resolve into each link for this transition. Reduces what an LLM caller has to generate to only the genuinely-unknown fields. Each value uses the same expression syntax as output mappings: a path string ($.context.x, $.workflow.input.x), an operator object ({ set: ... }, { add: [...] }), or a literal."
+        },
+        "branches": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/transitionBranch" },
+          "default": [],
+          "description": "Auto-branch the destination state based on the executor's result. Evaluated after the executor succeeds and after `output` mappings have been applied. First branch whose `when` guard passes wins; if none match, falls back to the transition's `target`."
+        }
+      }
+    },
+    "transitionBranch": {
+      "type": "object",
+      "required": ["when", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "when": { "$ref": "#/$defs/guard" },
+        "target": { "type": "string" }
+      }
+    },
+    "action": {
+      "type": "object",
+      "required": ["executor"],
+      "additionalProperties": false,
+      "properties": {
+        "executor": { "$ref": "#/$defs/executor" },
+        "output": { "$ref": "#/$defs/outputMapping" },
+        "reliability": { "$ref": "#/$defs/reliabilityPolicy" }
+      }
+    },
+    "onTimeout": {
+      "type": "object",
+      "required": ["target"],
+      "additionalProperties": false,
+      "properties": {
+        "target": { "type": "string" },
+        "executor": { "$ref": "#/$defs/executor" },
+        "output": { "$ref": "#/$defs/outputMapping" }
+      }
+    },
+    "executor": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Either inline (`kind: ...`) or a capability reference (`capability: <name>`). The latter resolves at config-load time to the named capability's executor and merges the capability's guards/reliability into the calling context.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop"]
+        },
+        "connection": { "type": "string" },
+        "capability": { "type": "string" },
+        "idempotencyKey": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "string" }
+          ],
+          "description": "If `true`, an idempotency key is auto-derived from workflowId + transition + correlationId — same key across retries and fallback candidates so downstream dedup works. If a string, it's used as a literal template; supported tokens: {workflowId}, {transition}, {correlationId}."
+        }
+      },
+      "oneOf": [
+        { "required": ["kind"] },
+        { "required": ["capability"] }
+      ]
+    },
+    "guard": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "examples": ["permission", "role", "expr", "evidence"]
+        }
+      }
+    },
+    "outputMapping": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "evidenceRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requires": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
+        }
+      }
+    },
+    "reliabilityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "fallback": { "$ref": "#/$defs/fallbackPolicy" }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1, "default": 1 },
+        "backoff": {
+          "type": "string",
+          "enum": ["none", "fixed", "exponential"],
+          "default": "none"
+        },
+        "initialDelayMs": { "type": "integer", "minimum": 0, "default": 0 },
+        "maxDelayMs": { "type": "integer", "minimum": 0 },
+        "retryOn": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["timeout", "transient_error", "rate_limited", "connection_error"]
+          },
+          "default": ["timeout", "transient_error", "rate_limited"]
+        }
+      }
+    },
+    "fallbackPolicy": {
+      "type": "object",
+      "required": ["executors"],
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["first_success"],
+          "default": "first_success"
+        },
+        "executors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/executor" },
+          "minItems": 1
+        }
+      }
+    },
+    "discoveryConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "index": {
+          "type": "string",
+          "enum": ["memory"],
+          "default": "memory"
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["proxy", "workflows", "connections"]
+          },
+          "default": ["proxy", "workflows"]
+        }
+      }
+    },
+    "auditConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sink": {
+          "type": "string",
+          "enum": ["stdout", "memory", "file", "none"],
+          "default": "stdout"
+        },
+        "path": { "type": "string" }
+      }
+    },
+    "storeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["memory", "file", "sqlite"],
+          "default": "memory"
+        },
+        "path": { "type": "string" }
+      }
+    },
+    "jsonSchema": { "type": "object" }
+  }
+}

@@ -1,0 +1,219 @@
+---
+title: "Audit events"
+description: "Reference for the structured audit events that every workflow action emits."
+---
+
+Every workflow action emits a structured JSON audit event. You don't add logging -- it's already there. The gateway records what happened, when, and who did it, automatically.
+
+## Configuration
+
+```yaml
+audit:
+  sink: stdout
+```
+
+Four sink options:
+
+| Sink | Behavior |
+|------|----------|
+| `stdout` | Writes one JSON line per event to stdout. Default. |
+| `file` | Appends one JSON line per event to a file. |
+| `memory` | Stores events in memory. Useful for testing. |
+| `none` | Drops all events. Disables auditing. |
+
+### File sink
+
+```yaml
+audit:
+  sink: file
+  path: ./audit/events.jsonl
+```
+
+One JSON line per event, appended to the file. The gateway creates the file if it doesn't exist.
+
+Set up log rotation externally (logrotate, your OS equivalent). The gateway opens the file for each write, so rotation works without restarting the process.
+
+### Memory sink
+
+```yaml
+audit:
+  sink: memory
+```
+
+Keeps events in process memory. Useful in tests where you want to assert on what events were emitted without touching the filesystem.
+
+## Event shape
+
+Every event has the same structure:
+
+```json
+{
+  "id": "evt_a1b2c3d4e5f6789012345678abcdef01",
+  "timestamp": "2025-06-15T14:32:08.123456Z",
+  "workflow_id": "wf_d4e5f6a1b2c3",
+  "correlation_id": "cor_f6a1b2c3d4e5789012345678abcdef01",
+  "actor": "agent@default",
+  "event_type": "workflow.started",
+  "payload": {}
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique event ID (`evt_` prefix + UUID) |
+| `timestamp` | string | ISO 8601 timestamp (UTC) |
+| `workflow_id` | string or null | The workflow instance this event belongs to |
+| `correlation_id` | string | Groups related events in the same operation (`cor_` prefix + UUID) |
+| `actor` | string or null | Who triggered the action (principal subject) |
+| `event_type` | string | What happened (see below) |
+| `payload` | object | Event-specific data |
+
+## Event types
+
+### Workflow lifecycle
+
+| Event type | When it fires |
+|-----------|---------------|
+| `workflow.started` | A new workflow instance is created via `workflow.start` |
+| `workflow.transitioned` | A workflow successfully moves to a new state |
+| `workflow.completed` | A workflow reaches a terminal state |
+| `workflow.timed_out` | A workflow exceeded its `timeoutMs` and auto-transitioned |
+
+### Transitions
+
+| Event type | When it fires |
+|-----------|---------------|
+| `transition.requested` | A `workflow.submit` call is received |
+| `transition.rejected` | A submission is rejected (guard failure, version conflict, actor mismatch, etc.) |
+| `transition.branched` | A transition's branch condition matched, changing the target state |
+
+### Deterministic chains
+
+| Event type | When it fires |
+|-----------|---------------|
+| `chain.step` | One step in a deterministic chain completed |
+| `chain.completed` | A deterministic chain finished (reached a non-deterministic state, terminal, or depth limit) |
+| `chain.failed` | A deterministic chain stopped because an executor failed |
+
+### Executors
+
+| Event type | When it fires |
+|-----------|---------------|
+| `executor.started` | An executor begins running |
+| `executor.succeeded` | An executor completed successfully |
+| `executor.failed` | An executor failed after all retries |
+| `executor.retrying` | An executor is retrying after a failure |
+| `fallback.selected` | The reliability layer is trying a fallback executor |
+
+### Guards
+
+| Event type | When it fires |
+|-----------|---------------|
+| `guard.evaluated` | A guard was evaluated (payload includes pass/fail result) |
+
+## Example events
+
+### workflow.started
+
+```json
+{
+  "id": "evt_a1b2c3d4e5f6789012345678abcdef01",
+  "timestamp": "2025-06-15T14:32:08.123456Z",
+  "workflow_id": "wf_d4e5f6a1b2c3",
+  "correlation_id": "cor_f6a1b2c3d4e5789012345678abcdef01",
+  "actor": "agent@default",
+  "event_type": "workflow.started",
+  "payload": {
+    "definitionId": "deploy_pipeline",
+    "input": {
+      "service": "payments",
+      "environment": "staging"
+    }
+  }
+}
+```
+
+### transition.requested
+
+```json
+{
+  "id": "evt_b2c3d4e5f6a1789012345678abcdef02",
+  "timestamp": "2025-06-15T14:32:09.456789Z",
+  "workflow_id": "wf_d4e5f6a1b2c3",
+  "correlation_id": "cor_a1b2c3d4e5f6789012345678abcdef02",
+  "actor": "agent@default",
+  "event_type": "transition.requested",
+  "payload": {
+    "transition": "deploy",
+    "fromState": "ready_to_deploy",
+    "expectedVersion": 4,
+    "arguments": { "confirm": true }
+  }
+}
+```
+
+### transition.rejected
+
+```json
+{
+  "id": "evt_c3d4e5f6a1b2789012345678abcdef03",
+  "timestamp": "2025-06-15T14:32:09.789012Z",
+  "workflow_id": "wf_d4e5f6a1b2c3",
+  "correlation_id": "cor_a1b2c3d4e5f6789012345678abcdef02",
+  "actor": "agent@default",
+  "event_type": "transition.rejected",
+  "payload": {
+    "transition": "deploy",
+    "code": "GUARD_REJECTED",
+    "message": "One or more guards rejected the transition."
+  }
+}
+```
+
+### executor.succeeded
+
+```json
+{
+  "id": "evt_d4e5f6a1b2c3789012345678abcdef04",
+  "timestamp": "2025-06-15T14:32:10.123456Z",
+  "workflow_id": "wf_d4e5f6a1b2c3",
+  "correlation_id": "cor_a1b2c3d4e5f6789012345678abcdef02",
+  "actor": "agent@default",
+  "event_type": "executor.succeeded",
+  "payload": {
+    "executorKind": "cli",
+    "durationMs": 1234,
+    "transition": "deploy"
+  }
+}
+```
+
+### chain.completed
+
+```json
+{
+  "id": "evt_e5f6a1b2c3d4789012345678abcdef05",
+  "timestamp": "2025-06-15T14:32:11.456789Z",
+  "workflow_id": "wf_d4e5f6a1b2c3",
+  "correlation_id": "cor_f6a1b2c3d4e5789012345678abcdef01",
+  "actor": null,
+  "event_type": "chain.completed",
+  "payload": {
+    "steps": 3,
+    "fromState": "lint",
+    "toState": "ready_to_deploy",
+    "reason": "non_deterministic_state"
+  }
+}
+```
+
+## Piping to your observability stack
+
+Audit events are structured JSON, one line per event. They're designed to be piped into whatever you already use:
+
+- **Vector** -- use a `file` source pointing at your audit log, or capture stdout with a `stdin` source.
+- **Prometheus** -- parse events into metrics (transitions per second, failure rate, latency histograms).
+- **Elasticsearch / OpenSearch** -- index the JSONL directly.
+- **CloudWatch / Datadog / Splunk** -- forward the log file or stdout stream through their agents.
+
+The `correlation_id` field ties related events together across a single operation. The `workflow_id` groups everything for one workflow instance. Between the two, you can reconstruct the full story of any workflow run.

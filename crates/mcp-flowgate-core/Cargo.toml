@@ -1,0 +1,42 @@
+[package]
+name = "mcp-flowgate-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core runtime for mcp-flowgate: workflow engine, ports, audit, reliability"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+jsonschema = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[[bench]]
+name = "workflow_bench"
+harness = false
+
+[[bench]]
+name = "gateway_overhead"
+harness = false
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+rand = "0.8"
+serde_yaml = { workspace = true }
+tempfile = "3"
+tracing-subscriber = { workspace = true }

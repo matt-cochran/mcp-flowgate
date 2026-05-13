@@ -1,0 +1,381 @@
+---
+title: "Configuration"
+description: "Complete reference for every top-level key in your mcp-flowgate YAML config."
+---
+
+Your entire gateway is one YAML file (or a few, if you split it up). Here's every top-level key you can set and what it does.
+
+## Minimal config
+
+```yaml
+version: "1.0.0"
+proxy:
+  expose:
+    - name: hello.echo
+      executor: { kind: noop }
+```
+
+That's a valid config. Everything except `version` is optional. You add keys as you need them.
+
+## version
+
+Required. Must be a semver string.
+
+```yaml
+version: "1.0.0"
+```
+
+Right now the only accepted value is `"1.0.0"`. This will let the gateway detect and migrate config formats as the schema evolves.
+
+## include
+
+Merge other YAML files into this config before the gateway starts. Maps merge (later wins on key collisions), arrays concatenate.
+
+```yaml
+include:
+  - ./connections.yaml
+  - ./workflows/deploy.yaml
+  - ./workflows/review.yaml
+```
+
+Paths are relative to the main config file. This is useful for splitting a large config across teams or environments -- keep shared connections in one file, team-specific workflows in another.
+
+## capabilities
+
+Named, reusable capability definitions. You define a capability once here, then reference it from `proxy.expose` or from workflow transition executors.
+
+```yaml
+capabilities:
+  github.list_issues:
+    title: List GitHub issues
+    description: List issues from a GitHub repository.
+    tags: [github, issues]
+    inputSchema:
+      type: object
+      required: [repo]
+      properties:
+        repo: { type: string }
+      additionalProperties: false
+    executor:
+      kind: mcp
+      connection: github
+      tool: list_issues
+    guards:
+      - { kind: role, role: developer }
+    reliability:
+      timeoutMs: 30000
+      retry:
+        maxAttempts: 2
+        backoff: fixed
+        initialDelayMs: 1000
+```
+
+You can also wrap another capability to add guards or reliability on top:
+
+```yaml
+capabilities:
+  github.list_issues.safe:
+    wraps: github.list_issues
+    guards:
+      - { kind: permission, permission: github.read }
+```
+
+The wrapper inherits the wrapped capability's executor and stacks its own guards and reliability on top.
+
+## connections
+
+Named MCP server connections. The gateway speaks to these at runtime. Three kinds:
+
+### MCP connection (stdio)
+
+```yaml
+connections:
+  github:
+    kind: mcp
+    command: github-mcp-server
+    args: []
+    env:
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+```
+
+The gateway launches this as a child process and speaks MCP over stdio. Works with any MCP server -- native binaries, `npx` shims, `uvx` launchers, Docker containers.
+
+```yaml
+connections:
+  filesystem:
+    kind: mcp
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-filesystem", "/tmp"]
+```
+
+### MCP connection (SSE)
+
+If you provide `url` instead of `command`, the gateway connects to a running MCP server over SSE:
+
+```yaml
+connections:
+  remote_server:
+    kind: mcp
+    url: https://mcp.example.com/sse
+```
+
+### CLI connection
+
+```yaml
+connections:
+  dotnet:
+    kind: cli
+    command: dotnet
+    workingDirectory: /path/to/project
+    env:
+      DOTNET_ENV: production
+```
+
+Used with the `cli` executor. The gateway runs shell commands through this connection.
+
+### REST connection
+
+```yaml
+connections:
+  payroll:
+    kind: rest
+    baseUrl: https://payroll.example.com
+    headers:
+      Authorization: "Bearer ${PAYROLL_TOKEN}"
+```
+
+Used with the `rest` executor. Headers defined here apply to every request through this connection.
+
+## proxy
+
+The proxy section defines what capabilities the gateway exposes to the model. Two mechanisms: `expose` (define inline or reference capabilities) and `import` (auto-import from MCP connections).
+
+### proxy.expose
+
+Each entry is either an inline definition or a reference to a named capability.
+
+**Inline definition** -- you define everything right here:
+
+```yaml
+proxy:
+  expose:
+    - name: github.list_issues
+      title: List GitHub issues
+      description: List issues from a GitHub repository.
+      tags: [github, issues, read]
+      aliases: [gh-issues, list-issues]
+      examples:
+        - "List all open issues in the main repo"
+      inputSchema:
+        type: object
+        required: [repo]
+        properties:
+          repo: { type: string }
+        additionalProperties: false
+      executor:
+        kind: mcp
+        connection: github
+        tool: list_issues
+      guards:
+        - { kind: role, role: developer }
+      reliability:
+        timeoutMs: 30000
+```
+
+**Capability reference** -- point to a named capability:
+
+```yaml
+proxy:
+  expose:
+    - capability: github.list_issues
+      as: issues.list          # optional: rename for the proxy
+      description: Override description if you want
+      tags: [extra-tag]        # merged with the capability's tags
+      aliases: [find-issues]   # search synonyms
+      guards:                  # stacked on top of the capability's guards
+        - { kind: permission, permission: repo.read }
+```
+
+### proxy.import
+
+Auto-import tools from a connected MCP server. The gateway calls `tools/list` on the connection at startup and creates a proxy exposure for each tool.
+
+```yaml
+proxy:
+  import:
+    - connection: github
+      prefix: github           # tools become github.list_issues, github.create_issue, etc.
+      include: [list_issues, create_issue]  # only these tools (omit for all)
+      exclude: [delete_repo]               # skip these tools
+      tags: [github, source-control]       # applied to all imported tools
+```
+
+You can mix imports with explicit declarations. Declared capabilities can carry guards and reliability that imports don't have by default.
+
+## workflows
+
+Multi-state workflow definitions. Each workflow is a state machine with states, transitions, guards, and executors.
+
+```yaml
+workflows:
+  deploy_pipeline:
+    description: Lint, test, build, and deploy a service.
+    tags: [deploy, pipeline]
+    aliases: [ship, release]
+    examples:
+      - "Deploy the payments service to staging"
+
+    inputSchema:
+      type: object
+      required: [service]
+      properties:
+        service: { type: string }
+        environment:
+          type: string
+          enum: [staging, production]
+          default: staging
+      additionalProperties: false
+
+    initialState: lint
+    initialContext:              # seed values for workflow context
+      attempts: 0
+    maxChainDepth: 10           # max deterministic transitions before halting (default: 50)
+    timeoutMs: 3600000          # workflow-level timeout (1 hour)
+    linkFilter: all             # "all" or "byGuards" — controls which transitions appear as links
+
+    onTimeout:                  # what happens if the workflow times out
+      target: failed
+      executor:
+        kind: mcp
+        connection: notifier
+        tool: send_alert
+
+    states:
+      lint:
+        goal: Validate code quality
+        guidance: This step runs automatically.
+        transitions:
+          run_lint:
+            title: Run linter
+            target: test
+            actor: deterministic          # runs automatically, no model decision
+            executor:
+              kind: cli
+              command: lint-check
+              args: ["$.input.service"]
+            output:
+              lintPassed: "$.output.json.passed"
+
+      test:
+        transitions:
+          run_tests:
+            title: Run test suite
+            target: ready_to_deploy
+            actor: deterministic
+            executor:
+              kind: cli
+              command: test-runner
+            output:
+              testsPassed: "$.output.json.passed"
+
+      ready_to_deploy:
+        linkFilter: byGuards    # per-state override — only show transitions whose guards pass
+        transitions:
+          deploy:
+            title: Deploy to environment
+            target: deployed
+            actor: agent
+            guards:
+              - { kind: expr, expr: "$.context.testsPassed == true" }
+            executor:
+              kind: cli
+              command: deploy
+              args: ["$.context.artifactId"]
+            output:
+              deploymentId: "$.output.json.deploymentId"
+            reliability:
+              timeoutMs: 60000
+              retry:
+                maxAttempts: 3
+                backoff: exponential
+                initialDelayMs: 2000
+
+          abort:
+            title: Abort deployment
+            target: aborted
+
+      deployed:
+        terminal: true
+
+      aborted:
+        terminal: true
+
+      failed:
+        terminal: true
+```
+
+### Transition details
+
+Each transition supports:
+
+| Key | Purpose |
+|-----|---------|
+| `target` | Destination state (required) |
+| `title` | Human-readable name, shown in links |
+| `description` | Longer explanation |
+| `actor` | Who can trigger: `agent`, `human`, `system`, `deterministic` (default: `agent`) |
+| `inputSchema` | JSON Schema for transition arguments |
+| `guards` | Array of [guards](/reference/guards) that must all pass |
+| `executor` | What runs when the transition fires (see [executors](/reference/executors)) |
+| `output` | Maps executor output into workflow context |
+| `evidence` | Requires specific evidence artifacts |
+| `reliability` | Timeout, retry, and fallback policies |
+| `prefill` | Pre-resolved argument values for links, reducing what the model has to generate |
+| `branches` | Auto-branch destination based on executor result (first matching `when` guard wins, otherwise falls back to `target`) |
+
+### Actor types
+
+| Actor | Behavior |
+|-------|----------|
+| `agent` | Default. The model decides when to take this transition. |
+| `human` | Only a human principal can submit. The gateway rejects agent submissions with `ACTOR_MISMATCH`. |
+| `system` | Reserved for system-triggered transitions. |
+| `deterministic` | The runtime chains through this automatically -- no model decision needed. Multiple deterministic transitions execute in a single round trip. |
+
+## audit
+
+Controls where audit events go. Every workflow action emits structured JSON events automatically.
+
+```yaml
+audit:
+  sink: stdout           # stdout | file | memory | none
+  path: ./audit.jsonl    # required when sink is "file"
+```
+
+See [audit events](/reference/audit) for the full event reference.
+
+## discovery
+
+Controls what gets indexed for search.
+
+```yaml
+discovery:
+  enabled: true         # default: true
+  index: memory         # only "memory" for now
+  include:              # what to index
+    - proxy             # proxy capabilities (default: included)
+    - workflows         # workflow definitions (default: included)
+    - connections       # raw connections (default: not included)
+```
+
+By default, proxy capabilities and workflows are indexed. Add `connections` if you want raw connections to appear in search results too.
+
+## store
+
+Where workflow instances are persisted. See [stores](/reference/stores) for the full reference.
+
+```yaml
+store:
+  kind: memory          # memory | sqlite
+  path: ./workflows.db  # required for sqlite
+```

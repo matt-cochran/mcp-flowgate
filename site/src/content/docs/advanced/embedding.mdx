@@ -1,0 +1,115 @@
+---
+title: "Embedding the library"
+description: "Use mcp-flowgate-core as a Rust library to embed workflow governance directly into your own application."
+---
+
+mcp-flowgate ships as a standalone binary, but the engine underneath it is a plain Rust library. If you want to embed workflow governance inside your own app -- a custom MCP server, an API gateway, a CLI tool -- you can pull in `mcp-flowgate-core` and wire it up yourself.
+
+## Add the dependency
+
+```toml
+[dependencies]
+mcp-flowgate-core = "0.1"
+```
+
+That gives you the `WorkflowRuntime`, all the port traits, and the model types. No binary, no CLI, no opinions about how you serve traffic.
+
+## The six port traits
+
+The library is built around six narrow traits that define the boundaries between the runtime and the outside world. Each one does exactly one job:
+
+| Trait | What it does |
+|-------|-------------|
+| `DefinitionStore` | Loads workflow definitions by ID. You decide where they live -- files, a database, an API. |
+| `WorkflowStore` | Creates, loads, and saves workflow instances with optimistic concurrency (version checks). |
+| `Executor` | Runs a single action and returns a result. This is where your actual work happens. |
+| `ExecutorRegistry` | Maps executor `kind` strings to `Executor` implementations. The runtime asks "give me the executor for `kind: http`" and you hand one back. |
+| `GuardEvaluator` | Evaluates a guard condition against the current workflow state, arguments, and principal. Returns pass/fail. |
+| `EvidenceStore` | Records and retrieves evidence attached to workflow instances. Used by evidence-based guards. |
+
+You can implement any of these to customize behavior. Want definitions from a Postgres table? Implement `DefinitionStore`. Want a custom executor that talks to your internal API? Implement `Executor` and register it in your `ExecutorRegistry`.
+
+The trait signatures are intentionally small. Here's what `Executor` looks like:
+
+```rust
+#[async_trait]
+pub trait Executor: Send + Sync {
+    async fn execute(
+        &self,
+        request: ExecuteRequest,
+    ) -> Result<ExecuteResult, ExecutorError>;
+}
+```
+
+One method. One input. One output. That's it.
+
+## Constructing the runtime
+
+`WorkflowRuntime` is the core engine. You build one by passing in your trait implementations:
+
+```rust
+use std::sync::Arc;
+use mcp_flowgate_core::runtime::WorkflowRuntime;
+
+let runtime = WorkflowRuntime::new(
+    Arc::new(my_definition_store),
+    Arc::new(my_workflow_store),
+    Arc::new(my_executor_registry),
+    Arc::new(my_guard_evaluator),
+    Arc::new(my_audit_sink),
+);
+```
+
+The five arguments are the required ports. If you also want evidence tracking (for guards that check accumulated evidence across transitions), chain on `.with_evidence()`:
+
+```rust
+let runtime = WorkflowRuntime::new(
+    Arc::new(my_definition_store),
+    Arc::new(my_workflow_store),
+    Arc::new(my_executor_registry),
+    Arc::new(my_guard_evaluator),
+    Arc::new(my_audit_sink),
+).with_evidence(Arc::new(my_evidence_store));
+```
+
+Everything is `Arc`-wrapped, so the runtime is cheap to clone and safe to share across async tasks.
+
+## The Principal model
+
+Every operation in the runtime takes a `Principal` -- the identity of whoever is making the request. It carries a subject, a list of roles, and a list of permissions:
+
+```rust
+use mcp_flowgate_core::model::Principal;
+
+let principal = Principal {
+    subject: "user:alice".to_string(),
+    roles: vec!["human".to_string(), "deployer".to_string()],
+    permissions: vec!["deploy.prod".to_string()],
+};
+```
+
+At the MCP server layer, mcp-flowgate uses `Principal::anonymous()` by default -- no roles, no permissions, subject is `"anonymous"`. That's fine for getting started, but it means guards that check roles or permissions will see an empty identity.
+
+When you embed the library, you control principal construction. This is where you plug in your auth layer. Extract identity from a JWT, a session cookie, an API key -- whatever you have -- and build a `Principal` with the right roles and permissions before passing it to the runtime.
+
+The special role `"human"` matters: transitions marked `actor: "human"` reject submissions from principals that don't carry it. Tag your human callers with this role so approval gates work correctly.
+
+## What you're responsible for
+
+When you embed `mcp-flowgate-core`, the library handles:
+
+- Workflow state machines (transitions, guards, deterministic chaining)
+- Guard evaluation orchestration
+- Executor dispatch through the registry
+- Optimistic concurrency on workflow state
+- Audit event emission
+- Reliability policies (retries, timeouts, fallbacks)
+
+You handle:
+
+- **Storage** -- where definitions and workflow instances live
+- **Execution** -- what actually happens when an action runs
+- **Identity** -- who the caller is (the `Principal`)
+- **Transport** -- how requests get to the runtime (HTTP, MCP, gRPC, whatever you want)
+
+The library gives you the governance engine. You give it the plumbing.

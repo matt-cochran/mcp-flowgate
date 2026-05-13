@@ -1,0 +1,87 @@
+---
+title: "Phase guidance"
+description: "Give the model goal and reasoning instructions at each workflow state so it knows what to focus on and how to think about choices."
+---
+
+## Steering without code
+
+You've got a workflow with five states. At each one, the model needs to do something different -- gather requirements, evaluate risk, pick a strategy. But the model doesn't inherently know what matters at each phase. It just sees transitions and context.
+
+Phase guidance fixes this. Each state can carry two fields:
+
+- **`goal`** -- a short description of what the model should focus on right now. Think of it as a headline.
+- **`guidance`** -- longer instructions about how to reason about the choices available. Think of it as a briefing.
+
+Both are optional. Use one or both depending on how much steering the model needs at that point.
+
+## What it looks like in YAML
+
+```yaml
+states:
+  risk_review:
+    goal: Evaluate risk and decide if remediation is needed
+    guidance: >
+      You're looking at an FMECA analysis of the proposed plan.
+      If maxResidualRpn is above 80, the plan needs remediation
+      before it can move to approval. Focus on the highest-RPN
+      failure modes first. If the risk is acceptable, move to
+      approval.
+    transitions:
+      remediate:
+        title: Apply remediation
+        target: risk_review
+      request_approval:
+        title: Request human approval
+        target: awaiting_approval
+```
+
+## What the model receives
+
+When the model calls `workflow.get` or `workflow.submit` and lands on a state with guidance, the response includes a `guidance` object:
+
+```json
+{
+  "state": "risk_review",
+  "guidance": {
+    "goal": "Evaluate risk and decide if remediation is needed",
+    "instructions": "You're looking at an FMECA analysis of the proposed plan. If maxResidualRpn is above 80, the plan needs remediation before it can move to approval. Focus on the highest-RPN failure modes first. If the risk is acceptable, move to approval."
+  },
+  "context": {
+    "fmeca": {
+      "maxResidualRpn": 120,
+      "topFailureModes": ["..."]
+    }
+  },
+  "links": [
+    { "transition": "remediate", "title": "Apply remediation" },
+    { "transition": "request_approval", "title": "Request human approval" }
+  ]
+}
+```
+
+The model sees the goal, the reasoning instructions, the relevant context, and the available actions -- all in one response. It doesn't have to guess what this phase is about.
+
+## Guidance vs. prefill
+
+mcp-flowgate has two ways to shape what the model does at a given state:
+
+- **`guidance`** shapes *reasoning* -- what to focus on and how to think about the decision.
+- **`prefill`** shapes *arguments* -- pre-populating input fields for the next transition so the model doesn't have to construct them from scratch.
+
+They complement each other. Guidance says "here's what matters." Prefill says "here's a starting point for your input." Use guidance when the model needs to understand *why* it's making a choice. Use prefill when you want to reduce the mechanical work of assembling arguments.
+
+## Searchable by design
+
+Both `goal` and `guidance` fields are indexed by `gateway.search`. When a model searches for "risk" or "FMECA" or "remediation," workflows with matching guidance text surface in the results.
+
+This means your guidance doubles as documentation for discovery. A well-written goal like "Evaluate risk and decide if remediation is needed" helps the model find this workflow when it's looking for risk-related capabilities. You don't need to duplicate that information in tags or descriptions -- though you can if you want redundancy.
+
+## Tips for writing good guidance
+
+**Keep goals under 10 words.** The model uses them to quickly orient. "Evaluate risk" works. "Evaluate the risk profile of the proposed engineering change plan and determine next steps" is too long for a headline.
+
+**Be specific in instructions.** "Review the data and make a decision" doesn't help. "If maxResidualRpn is above 80, remediate. Otherwise, approve." does. The model can reason better when you give it concrete thresholds, field names, and criteria.
+
+**Reference context fields by name.** If the context contains `fmeca.maxResidualRpn`, mention that exact field in the guidance. The model will look for it.
+
+**Skip guidance on obvious states.** A terminal state called `done` doesn't need a goal of "The workflow is complete." Save guidance for states where the model actually has a non-trivial decision to make.

@@ -1,0 +1,384 @@
+---
+title: "Workflows"
+description: "State machines that govern what your model can do and in what order -- from flat tool calls to multi-step pipelines."
+---
+
+Every capability in mcp-flowgate passes through a state machine. That might sound heavy, but the simplest case is a single state that loops back to itself -- which is just a normal tool call. The power comes when you add more states.
+
+## The simplest workflow
+
+When you declare capabilities in `proxy.expose`, the gateway compiles them into a workflow called `proxy_default` with one state (`ready`) and one transition per tool. Call any tool, end up back at `ready`.
+
+```
+ready --hello.echo--> ready
+ready --github.list_issues--> ready
+ready --dotnet.test--> ready
+```
+
+Same engine. Same wire format. You don't think about state machines until you need them.
+
+## Adding states
+
+A governed workflow has multiple states with transitions between them. Each state represents a phase, and each transition represents an action that moves you to the next phase.
+
+```yaml
+workflows:
+  content_review:
+    description: Write, review, and publish content.
+    initialState: drafting
+
+    states:
+      drafting:
+        transitions:
+          submit_draft:
+            title: Submit for review
+            target: in_review
+            inputSchema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+
+      in_review:
+        transitions:
+          approve:
+            title: Approve the content
+            target: published
+            actor: human
+          request_changes:
+            title: Request changes
+            target: drafting
+            actor: human
+
+      published:
+        terminal: true
+```
+
+Three states, three transitions. The model starts in `drafting`, submits a draft, and lands in `in_review`. From there, only a human can approve or request changes. `published` is terminal -- the workflow is done.
+
+## How state machines run
+
+**`initialState`** is where `workflow.start` lands you. The response includes links to every transition available from that state.
+
+**Terminal states** have no outgoing transitions (or set `terminal: true` explicitly). When the workflow reaches a terminal state, the response has `result.status: "completed"` and an empty `links` array.
+
+**Transitions** are the edges between states. Each transition has:
+- A `target` state
+- Optional `guards` that must pass before execution
+- Optional `executor` that does the actual work
+- Optional `inputSchema` for the arguments the caller must provide
+- Optional `output` mapping to thread results into context
+
+The model never sees the full state machine. It sees the current state and the links to legal next moves. That's the HATEOAS principle at work.
+
+## Optimistic locking
+
+Every workflow response includes a `version` number. Every `workflow.submit` requires an `expectedVersion`. If someone else advanced the workflow between your read and your write, your version is stale and the submit is rejected with `STALE_WORKFLOW_VERSION`.
+
+This prevents race conditions when multiple actors (model, human, system) operate on the same workflow. The rejection response includes the current state and links, so recovery is straightforward -- re-read, re-decide, re-submit.
+
+```json
+{
+  "workflow": {
+    "id": "wf_3f8b...",
+    "definitionId": "content_review",
+    "state": "in_review",
+    "version": 3
+  },
+  "result": { "status": "rejected" },
+  "error": {
+    "code": "STALE_WORKFLOW_VERSION",
+    "message": "Expected version 2 but current is 3."
+  },
+  "links": [
+    { "rel": "approve", "method": "workflow.submit",
+      "args": { "workflowId": "wf_3f8b...", "expectedVersion": 3, "transition": "approve" } }
+  ]
+}
+```
+
+The model doesn't need to understand version numbers intellectually. It just passes back the `expectedVersion` from the most recent response's links. The links always carry the right version.
+
+## The response wire format
+
+Every `workflow.start`, `workflow.submit`, and `workflow.get` returns the same shape:
+
+```json
+{
+  "workflow": {
+    "id": "wf_3f8b...",
+    "definitionId": "deploy_pipeline",
+    "state": "ready_to_deploy",
+    "version": 6
+  },
+  "result": {
+    "status": "waiting_for_action",
+    "message": "All automated checks passed."
+  },
+  "context": {
+    "lintPassed": true,
+    "testsPassed": true,
+    "testCount": 47,
+    "coverage": 92.3,
+    "artifactId": "img-a1b2c3"
+  },
+  "guidance": {
+    "goal": "Confirm deployment",
+    "instructions": "Review lint, test, and build results before deploying."
+  },
+  "links": [
+    {
+      "rel": "deploy",
+      "title": "Deploy to environment",
+      "method": "workflow.submit",
+      "actor": "agent",
+      "args": {
+        "workflowId": "wf_3f8b...",
+        "expectedVersion": 6,
+        "transition": "deploy"
+      }
+    },
+    {
+      "rel": "abort",
+      "title": "Abort deployment",
+      "method": "workflow.submit",
+      "actor": "agent",
+      "args": {
+        "workflowId": "wf_3f8b...",
+        "expectedVersion": 6,
+        "transition": "abort"
+      }
+    }
+  ]
+}
+```
+
+Key things to notice:
+
+- **`workflow`** tells you where you are: which workflow, which state, which version.
+- **`result.status`** tells you what happened: `started`, `waiting_for_action`, `executed`, `completed`, `rejected`, `failed`, `timed_out`.
+- **`context`** is the accumulated state from all previous steps' output mappings.
+- **`guidance`** gives the model phase-specific instructions (if declared on the state).
+- **`links`** are the legal next moves. Each link carries everything the model needs to make the call -- `workflowId`, `expectedVersion`, `transition`. The model picks one, fills in any required arguments, and submits.
+
+## Output mapping
+
+By default, an executor's result is forgotten after the transition completes. To pass data between steps, use `output` mappings:
+
+```yaml
+transitions:
+  run_tests:
+    target: build
+    executor:
+      kind: cli
+      connection: test_runner
+    output:
+      testsPassed: "$.output.json.passed"
+      testCount: "$.output.json.count"
+      coverage: "$.output.json.coverage"
+```
+
+The left side is the key in `context`. The right side is a path expression that reads from the executor's result. After this transition runs, `context.testsPassed`, `context.testCount`, and `context.coverage` are set and available to guards and prefill in subsequent states.
+
+**Expression scopes for output mapping:**
+
+| Scope | Reads from |
+|-------|-----------|
+| `$.output.*` | The executor's result (only available in output) |
+| `$.arguments.*` | The caller's transition arguments |
+| `$.context.*` | The workflow's accumulated context |
+| `$.workflow.input.*` | The input passed to `workflow.start` |
+
+You can also use operators for computed values:
+
+```yaml
+output:
+  attempts: { add: ["$.context.attempts", 1] }
+  status: "reviewed"
+  message: { concat: ["PR #", "$.context.prNumber", " is ready"] }
+```
+
+Operators: `add`, `subtract`, `multiply`, `divide`, `set`, `concat`. Arithmetic operands can be paths or literals. Missing/null values default to 0 for arithmetic, so a counter increment works on the first call.
+
+### Seeding context
+
+If you need values in context before any executor runs -- counters, flags, defaults -- declare them with `initialContext`:
+
+```yaml
+workflows:
+  deploy:
+    initialState: planning
+    initialContext:
+      attempts: 0
+      status: pending
+      approved: false
+    states: { ... }
+```
+
+`initialContext` is set once when the workflow starts. Self-loops don't reset it.
+
+## Prefill: pre-populating arguments
+
+Transitions can pre-populate argument values in the links they generate. This means the model doesn't have to reason about values the workflow already knows.
+
+```yaml
+transitions:
+  create_pr:
+    target: review
+    inputSchema:
+      type: object
+      required: [repo, base, head, title, body]
+      properties: { ... }
+    prefill:
+      repo: "$.workflow.input.repo"
+      base: "main"
+      head: "$.context.branch_name"
+    executor: { kind: mcp, connection: github, tool: create_pull_request }
+```
+
+The link that appears in the response will already have `repo`, `base`, and `head` filled in. The model only needs to generate `title` and `body` -- the genuinely creative fields.
+
+Prefill resolves at link-generation time using `$.context.*` and `$.workflow.input.*`. It's guidance, not enforcement -- the model can override prefilled values if it has reason to, and the final submission is still validated against `inputSchema`.
+
+## Branching: dynamic targets
+
+Sometimes where you go next depends on what the executor returned. Instead of a single `target`, you can declare `branches`:
+
+```yaml
+transitions:
+  run_tests:
+    target: red
+    executor:
+      kind: cli
+      connection: shell
+      args: ["-c", "cargo test"]
+      treatNonZeroAsFailure: false
+    output:
+      passed: "$.output.success"
+    branches:
+      - when: { kind: expr, expr: "$.context.passed == true" }
+        target: green
+      - when: { kind: expr, expr: "$.context.passed == false" }
+        target: red
+```
+
+Branches evaluate after the executor succeeds and after output mappings apply (so branches can reference values just produced). First match wins. If no branch matches, the transition's declared `target` is the fallback.
+
+The `treatNonZeroAsFailure: false` flag on the CLI executor is important here -- it turns a non-zero exit code into `output.success: false` instead of erroring the transition. This lets you use exit codes as data for branching.
+
+## A complete multi-state workflow
+
+Here's a deployment pipeline that puts it all together -- deterministic chaining, output mapping, prefill, and phase guidance:
+
+```yaml
+workflows:
+  deploy_pipeline:
+    description: Lint, test, build, and deploy a service.
+    tags: [deploy, ci, pipeline]
+    initialState: lint
+    maxChainDepth: 10
+
+    inputSchema:
+      type: object
+      required: [service]
+      properties:
+        service: { type: string }
+        environment:
+          type: string
+          enum: [staging, production]
+          default: staging
+
+    states:
+      lint:
+        goal: Validate code quality
+        transitions:
+          run_lint:
+            target: test
+            actor: deterministic
+            executor:
+              kind: cli
+              command: lint-check
+              args: ["$.input.service"]
+            output:
+              lintPassed: "$.output.json.passed"
+              lintReport: "$.output.json.report"
+
+      test:
+        goal: Run the test suite
+        transitions:
+          run_tests:
+            target: build
+            actor: deterministic
+            executor:
+              kind: cli
+              command: test-runner
+              args: ["$.input.service"]
+            output:
+              testsPassed: "$.output.json.passed"
+              testCount: "$.output.json.count"
+              coverage: "$.output.json.coverage"
+
+      build:
+        goal: Build the deployment artifact
+        transitions:
+          build_artifact:
+            target: ready_to_deploy
+            actor: deterministic
+            executor:
+              kind: cli
+              command: build-artifact
+              args: ["$.input.service"]
+            output:
+              artifactId: "$.output.json.artifactId"
+
+      ready_to_deploy:
+        goal: Confirm deployment
+        guidance: >
+          All automated checks passed. Review the lint report,
+          test results, and build artifact before deciding to deploy.
+        transitions:
+          deploy:
+            title: Deploy to environment
+            target: deployed
+            actor: agent
+            prefill:
+              artifact: "$.context.artifactId"
+              env: "$.workflow.input.environment"
+            executor:
+              kind: cli
+              command: deploy
+              args: ["$.context.artifactId", "$.input.environment"]
+
+          abort:
+            title: Abort deployment
+            target: aborted
+            actor: agent
+
+      deployed:
+        terminal: true
+
+      aborted:
+        terminal: true
+```
+
+When you call `workflow.start`, the runtime chains through `lint`, `test`, and `build` automatically (all three are `actor: deterministic`). The model's first response is at `ready_to_deploy` with the full context from all three steps. It sees two links: deploy or abort. The deploy link has `artifact` and `env` prefilled.
+
+The model calls `workflow.start` once and gets back the entire pipeline's results in a single round trip. It only has to make one decision: deploy or abort.
+
+## Workflow-level timeout
+
+You can set a deadline for the entire workflow:
+
+```yaml
+workflows:
+  approval:
+    timeoutMs: 86400000    # 24 hours
+    onTimeout:
+      target: timed_out
+    initialState: pending
+    states:
+      pending: { ... }
+      timed_out: { terminal: true }
+```
+
+The timeout is lazy -- it's checked on the next `submit` or `get`. If the workflow has been alive longer than `timeoutMs`, the runtime auto-transitions to `onTimeout.target` and short-circuits whatever the caller submitted. No background scheduler needed.

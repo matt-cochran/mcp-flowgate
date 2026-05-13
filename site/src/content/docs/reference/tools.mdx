@@ -1,0 +1,477 @@
+---
+title: "MCP tools"
+description: "Reference for the seven fixed MCP tools that mcp-flowgate exposes to your model."
+---
+
+No matter how many capabilities you wire in, the model always sees exactly seven tools. Three for discovery, four for workflows.
+
+## Discovery tools
+
+### gateway.home
+
+Returns the full capability catalog. This is the entry point -- the model calls it to see what's available.
+
+**Arguments:** None.
+
+**Example request:**
+
+```json
+{
+  "name": "gateway.home",
+  "arguments": {}
+}
+```
+
+**Example response:**
+
+```json
+{
+  "items": [
+    {
+      "id": "deploy_pipeline",
+      "kind": "workflow",
+      "title": "Deploy Pipeline",
+      "description": "Lint, test, build, and deploy a service.",
+      "tags": ["deploy", "pipeline"],
+      "links": [
+        {
+          "rel": "start",
+          "method": "workflow.start",
+          "args": { "definitionId": "deploy_pipeline", "input": {} }
+        }
+      ]
+    },
+    {
+      "id": "github.list_issues",
+      "kind": "capability",
+      "title": "List GitHub issues",
+      "description": "List issues from a GitHub repository.",
+      "tags": ["github", "issues"],
+      "links": [
+        {
+          "rel": "start",
+          "method": "workflow.start",
+          "args": { "definitionId": "proxy_default", "input": { "capability": "github.list_issues" } }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each item includes links telling the model what to do next. The model follows these instead of guessing tool names.
+
+---
+
+### gateway.search
+
+Full-text search across all indexed capabilities and workflows.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | Yes | Search terms |
+
+**Scoring:** Each search term is scored against multiple fields with different weights:
+
+| Field | Weight | What it matches |
+|-------|--------|-----------------|
+| title | 6.0 | Capability or workflow title |
+| id | 5.0 | The capability/workflow identifier |
+| tags | 3.0 | Tags array |
+| aliases | 3.0 | Search synonyms you define in config |
+| description | 2.0 | Description text |
+| text | 1.0 | State names, transition names, guidance text |
+
+**Matching strategy:** For each field, the scorer tries three approaches in order:
+
+1. **Exact** -- the term appears anywhere in the field (full weight)
+2. **Prefix** -- a word in the field starts with the term, minimum 2 characters (70% weight)
+3. **Fuzzy** -- trigram similarity above 0.3 threshold, minimum 4 characters (50% weight, scaled by similarity)
+
+**Example request:**
+
+```json
+{
+  "name": "gateway.search",
+  "arguments": {
+    "query": "deploy"
+  }
+}
+```
+
+**Example response:**
+
+```json
+{
+  "results": [
+    {
+      "score": 14.0,
+      "item": {
+        "id": "deploy_pipeline",
+        "kind": "workflow",
+        "title": "Deploy Pipeline",
+        "description": "Lint, test, build, and deploy a service.",
+        "tags": ["deploy", "pipeline"],
+        "links": [
+          {
+            "rel": "start",
+            "method": "workflow.start",
+            "args": { "definitionId": "deploy_pipeline", "input": {} }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Results are sorted by score (highest first). Each result includes HATEOAS links so the model can act immediately.
+
+---
+
+### gateway.describe
+
+Get the full details for a single capability or workflow.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | Yes | The capability or workflow identifier |
+
+**Example request:**
+
+```json
+{
+  "name": "gateway.describe",
+  "arguments": {
+    "id": "github.list_issues"
+  }
+}
+```
+
+**Example response:**
+
+```json
+{
+  "id": "github.list_issues",
+  "kind": "capability",
+  "title": "List GitHub issues",
+  "description": "List issues from a GitHub repository.",
+  "tags": ["github", "issues", "read"],
+  "links": [
+    {
+      "rel": "start",
+      "method": "workflow.start",
+      "args": { "definitionId": "proxy_default", "input": { "capability": "github.list_issues" } },
+      "input_schema": {
+        "type": "object",
+        "required": ["repo"],
+        "properties": {
+          "repo": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}
+```
+
+The response includes the full input schema in the link, so the model knows exactly what arguments to send when starting the workflow.
+
+---
+
+## Workflow tools
+
+### workflow.start
+
+Creates a new workflow instance at its initial state.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `definitionId` | string | Yes | The workflow definition to start |
+| `input` | object | Yes | Input data for the workflow |
+
+**Example request:**
+
+```json
+{
+  "name": "workflow.start",
+  "arguments": {
+    "definitionId": "deploy_pipeline",
+    "input": {
+      "service": "payments",
+      "environment": "staging"
+    }
+  }
+}
+```
+
+**Example response:**
+
+```json
+{
+  "workflowId": "wf_a1b2c3d4e5f6",
+  "definitionId": "deploy_pipeline",
+  "state": "lint",
+  "version": 1,
+  "context": {},
+  "links": [
+    {
+      "rel": "transition",
+      "title": "Run linter",
+      "method": "workflow.submit",
+      "args": {
+        "workflowId": "wf_a1b2c3d4e5f6",
+        "expectedVersion": 1,
+        "transition": "run_lint",
+        "arguments": {}
+      }
+    }
+  ]
+}
+```
+
+The response tells the model what it can do next. Each link is a pre-filled `workflow.submit` call -- the model just has to follow it.
+
+If the initial state has `actor: deterministic` transitions, the runtime chains through them automatically and returns the first state that needs a decision.
+
+---
+
+### workflow.get
+
+Check the current state of a running workflow.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `workflowId` | string | Yes | The workflow instance ID |
+
+**Example request:**
+
+```json
+{
+  "name": "workflow.get",
+  "arguments": {
+    "workflowId": "wf_a1b2c3d4e5f6"
+  }
+}
+```
+
+**Example response:**
+
+```json
+{
+  "workflowId": "wf_a1b2c3d4e5f6",
+  "definitionId": "deploy_pipeline",
+  "state": "ready_to_deploy",
+  "version": 4,
+  "context": {
+    "lintPassed": true,
+    "testsPassed": true,
+    "coverage": 87.5,
+    "artifactId": "art_xyz789"
+  },
+  "links": [
+    {
+      "rel": "transition",
+      "title": "Deploy to environment",
+      "method": "workflow.submit",
+      "args": {
+        "workflowId": "wf_a1b2c3d4e5f6",
+        "expectedVersion": 4,
+        "transition": "deploy",
+        "arguments": {}
+      }
+    },
+    {
+      "rel": "transition",
+      "title": "Abort deployment",
+      "method": "workflow.submit",
+      "args": {
+        "workflowId": "wf_a1b2c3d4e5f6",
+        "expectedVersion": 4,
+        "transition": "abort",
+        "arguments": {}
+      }
+    }
+  ]
+}
+```
+
+The context accumulates data from previous transitions. The links show every legal next move from the current state.
+
+---
+
+### workflow.submit
+
+Advance a workflow by firing a transition.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `workflowId` | string | Yes | The workflow instance ID |
+| `expectedVersion` | number | Yes | Optimistic lock -- must match the current version |
+| `transition` | string | Yes | The transition to fire |
+| `arguments` | object | Yes | Input arguments for the transition |
+
+**Example request:**
+
+```json
+{
+  "name": "workflow.submit",
+  "arguments": {
+    "workflowId": "wf_a1b2c3d4e5f6",
+    "expectedVersion": 4,
+    "transition": "deploy",
+    "arguments": {
+      "confirm": true
+    }
+  }
+}
+```
+
+**Example response (success):**
+
+```json
+{
+  "workflowId": "wf_a1b2c3d4e5f6",
+  "definitionId": "deploy_pipeline",
+  "state": "deployed",
+  "version": 5,
+  "context": {
+    "lintPassed": true,
+    "testsPassed": true,
+    "coverage": 87.5,
+    "artifactId": "art_xyz789",
+    "deploymentId": "dep_abc123"
+  },
+  "terminal": true,
+  "links": []
+}
+```
+
+When the workflow reaches a terminal state, `terminal` is `true` and `links` is empty.
+
+**Error responses:**
+
+The gateway rejects submissions with structured error codes:
+
+| Code | Meaning |
+|------|---------|
+| `STALE_WORKFLOW_VERSION` | Your `expectedVersion` doesn't match. Someone else advanced the workflow. Fetch the latest state with `workflow.get` and retry. |
+| `ACTOR_MISMATCH` | The transition requires a human principal but the submitter isn't human. |
+| `GUARD_REJECTED` | One or more guards rejected the transition. |
+| `INPUT_SCHEMA_VIOLATION` | The arguments don't match the transition's input schema. |
+| `INVALID_TRANSITION` | The transition doesn't exist or isn't valid from the current state. |
+| `EXECUTOR_FAILED` | The transition's executor ran but failed. |
+
+**Example error response:**
+
+```json
+{
+  "workflowId": "wf_a1b2c3d4e5f6",
+  "state": "ready_to_deploy",
+  "version": 4,
+  "error": {
+    "code": "STALE_WORKFLOW_VERSION",
+    "message": "Expected workflow version 3, but current version is 4."
+  },
+  "links": [
+    {
+      "rel": "self",
+      "method": "workflow.get",
+      "args": { "workflowId": "wf_a1b2c3d4e5f6" }
+    }
+  ]
+}
+```
+
+Even error responses include links -- typically a `workflow.get` link so the model can recover.
+
+---
+
+### workflow.explain
+
+Inspect a workflow definition or a specific transition without starting anything.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `definitionId` | string | Yes | The workflow definition to explain |
+| `transition` | string | No | A specific transition to focus on |
+
+**Example request (full workflow):**
+
+```json
+{
+  "name": "workflow.explain",
+  "arguments": {
+    "definitionId": "deploy_pipeline"
+  }
+}
+```
+
+**Example response (full workflow):**
+
+```json
+{
+  "definitionId": "deploy_pipeline",
+  "description": "Lint, test, build, and deploy a service.",
+  "initialState": "lint",
+  "states": {
+    "lint": {
+      "transitions": ["run_lint"]
+    },
+    "test": {
+      "transitions": ["run_tests"]
+    },
+    "ready_to_deploy": {
+      "transitions": ["deploy", "abort"]
+    },
+    "deployed": { "terminal": true },
+    "aborted": { "terminal": true }
+  }
+}
+```
+
+**Example request (specific transition):**
+
+```json
+{
+  "name": "workflow.explain",
+  "arguments": {
+    "definitionId": "deploy_pipeline",
+    "transition": "deploy"
+  }
+}
+```
+
+**Example response (specific transition):**
+
+```json
+{
+  "definitionId": "deploy_pipeline",
+  "transition": "deploy",
+  "title": "Deploy to environment",
+  "target": "deployed",
+  "actor": "agent",
+  "guards": [
+    { "kind": "expr", "expr": "$.context.testsPassed == true" }
+  ],
+  "inputSchema": null,
+  "executor": {
+    "kind": "cli",
+    "command": "deploy"
+  }
+}
+```
+
+This is useful for understanding what a workflow does before committing to running it. The model can inspect guards, required inputs, and executor types without side effects.

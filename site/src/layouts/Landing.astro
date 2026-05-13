@@ -1,0 +1,55 @@
+---
+import '../styles/custom.css';
+
+interface Props {
+	title: string;
+	description: string;
+}
+
+const { title, description } = Astro.props;
+const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="generator" content={Astro.generator} />
+
+		<title>{title}</title>
+		<meta name="description" content={description} />
+		<link rel="canonical" href={canonicalURL} />
+
+		<meta property="og:type" content="website" />
+		<meta property="og:url" content={canonicalURL} />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:site_name" content="mcp-flowgate" />
+
+		<meta name="twitter:card" content="summary" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+		<script type="application/ld+json" set:html={JSON.stringify({
+			"@context": "https://schema.org",
+			"@type": "SoftwareApplication",
+			"name": "mcp-flowgate",
+			"description": "Composable MCP control layer that governs how LLMs use tools",
+			"url": "https://mcp-flowgate.dev",
+			"applicationCategory": "DeveloperApplication",
+			"operatingSystem": "Linux, macOS, Windows",
+			"license": "https://opensource.org/licenses/Apache-2.0",
+			"offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+			"codeRepository": "https://github.com/matt-cochran/mcp-flowgate"
+		})} />
+	</head>
+	<body class="bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100" style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;">
+		<slot />
+	</body>
+</html>

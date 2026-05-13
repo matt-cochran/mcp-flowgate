@@ -1,0 +1,95 @@
+---
+title: "Quick start"
+description: "Create a minimal config, wire mcp-flowgate into your MCP host, and see the seven tools in action — all in about 30 seconds."
+---
+
+You're going to create one capability, connect it to your MCP host, and watch the model discover and call it through mcp-flowgate's seven tools. The whole thing takes about 30 seconds.
+
+## 1. Create a config file
+
+Save this as `hello.yaml`:
+
+```yaml
+version: "1.0.0"
+proxy:
+  expose:
+    - name: hello.echo
+      description: Returns the message you sent.
+      executor: { kind: noop }
+```
+
+That's one capability called `hello.echo` with a `noop` executor (it just echoes back). Enough to see the full flow.
+
+## 2. Start the gateway
+
+```bash
+mcp-flowgate serve --config hello.yaml
+```
+
+mcp-flowgate is now running as an MCP server over stdio, waiting for a host to connect.
+
+## 3. Wire it into your MCP host
+
+### Claude Desktop
+
+Edit your Claude Desktop config file:
+
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+Add mcp-flowgate as a server:
+
+```json
+{
+  "mcpServers": {
+    "flowgate": {
+      "command": "/absolute/path/to/mcp-flowgate",
+      "args": ["serve", "--config", "/absolute/path/to/hello.yaml"]
+    }
+  }
+}
+```
+
+Replace both paths with the actual locations on your machine. Use absolute paths -- relative paths won't resolve correctly when the host launches the process.
+
+### Zed
+
+Add it to `~/.config/zed/settings.json` under the `"language_models"` key. See the [`examples/zed-gateway/`](https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/zed-gateway) directory for a working example.
+
+## 4. Restart your host
+
+Restart Claude Desktop (or Zed). Seven tools appear in the model's tool list:
+
+- `gateway.home` -- entry point, lists top-level links
+- `gateway.search` -- keyword search across all capabilities
+- `gateway.describe` -- full schema and details for a specific capability
+- `workflow.start` -- begin executing a capability
+- `workflow.get` -- check workflow state
+- `workflow.submit` -- advance a workflow with input
+- `workflow.explain` -- describe what a workflow does before running it
+
+That's it. Seven tools, always. Whether you have one capability or five hundred behind them.
+
+## 5. Try it
+
+Ask the model to "echo hello world." It will:
+
+1. Call `gateway.search` with a query like "echo"
+2. Find `hello.echo` in the results
+3. Call `workflow.start` to execute it
+4. Get the response back
+
+You didn't teach the model about `hello.echo`. It found the capability through search, followed the links in the response to act on it, and the gateway handled schema validation and audit along the way.
+
+## What just happened
+
+Even with this minimal example, you got a few things for free:
+
+- **Discovery** -- the model searched for what it needed instead of scanning a tool list. This is where token savings come from at scale.
+- **Schema validation** -- if the model had sent malformed input, the gateway would have rejected it before it reached your executor.
+- **Audit** -- every step (the search, the workflow start, the execution) emitted structured JSON events. You have a complete trace of what happened.
+- **HATEOAS links** -- every response included links telling the model what it could do next. No guessing, no memorized tool catalogs.
+
+That was one tool with a `noop` executor. The interesting part is what happens when you add real executors -- MCP servers, CLI commands, REST APIs -- and the model's tool list stays at seven.
+
+Next up: learn how [discovery and search](/docs/guides/discovery) work, or jump straight to [governance](/docs/guides/governance) to add guards and approval gates.

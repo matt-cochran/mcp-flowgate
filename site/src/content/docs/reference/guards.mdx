@@ -1,0 +1,259 @@
+---
+title: "Guards"
+description: "Reference for all guard kinds that control when transitions can fire."
+---
+
+Guards are preconditions on transitions. Every guard in a transition's `guards` array must pass before the transition fires. If any guard fails, the gateway rejects the submission with `GUARD_REJECTED` and the workflow state doesn't change.
+
+You declare guards in YAML -- no code needed. They evaluate at submit time, before the executor runs.
+
+## Guard kinds
+
+| Kind | Purpose |
+|------|---------|
+| `permission` | Principal must hold a named permission |
+| `role` | Principal must hold a named role |
+| `expr` | Binary predicate on workflow context or input |
+| `evidence` | Requires specific evidence artifacts from earlier in the workflow |
+| `allOf` | All sub-guards must pass |
+| `anyOf` | At least one sub-guard must pass |
+| `not` | Inverts a sub-guard |
+
+## permission
+
+Checks that the submitting principal has a specific permission. Useful for RBAC on sensitive transitions.
+
+```yaml
+guards:
+  - kind: permission
+    permission: workflow.approve
+```
+
+The principal's permissions come from whatever identity layer you've wired in. If the principal doesn't have `workflow.approve`, the transition is rejected.
+
+## role
+
+Checks that the principal holds a specific role. Similar to `permission` but operates on role names.
+
+```yaml
+guards:
+  - kind: role
+    role: manager
+```
+
+## expr
+
+A binary predicate evaluated against the workflow's context, input, or arguments. This is the most flexible guard -- you can check any value in the workflow state.
+
+```yaml
+guards:
+  - kind: expr
+    expr: "$.context.fmeca.maxResidualRpn <= 80"
+```
+
+### Format
+
+Every expression follows this pattern:
+
+```
+$.path.to.value <operator> <operand>
+```
+
+### Operators
+
+| Operator | Meaning |
+|----------|---------|
+| `==` | Equal |
+| `!=` | Not equal |
+| `>` | Greater than |
+| `<` | Less than |
+| `>=` | Greater than or equal |
+| `<=` | Less than or equal |
+
+### Path resolution
+
+Paths use dot notation starting with `$`:
+
+| Prefix | Resolves to |
+|--------|-------------|
+| `$.context.*` | The workflow instance's accumulated context |
+| `$.workflow.input.*` | The input passed when the workflow was started |
+| `$.arguments.*` | The arguments passed to the current transition |
+
+Array indexing uses brackets: `$.context.items[0].name`
+
+### Operands
+
+Operands can be:
+
+- **Numbers:** `80`, `3.14`, `0`
+- **Quoted strings:** `"approved"`, `"pending"`
+- **Booleans:** `true`, `false`
+- **Paths:** Another `$.path.to.value` for comparing two dynamic values
+
+### Examples
+
+```yaml
+# Simple value check
+guards:
+  - kind: expr
+    expr: "$.context.policyOk == true"
+
+# Numeric comparison
+guards:
+  - kind: expr
+    expr: "$.context.riskScore <= 80"
+
+# String comparison
+guards:
+  - kind: expr
+    expr: "$.context.status == \"approved\""
+
+# Check workflow input
+guards:
+  - kind: expr
+    expr: "$.workflow.input.amount > 1000"
+
+# Check transition arguments
+guards:
+  - kind: expr
+    expr: "$.arguments.confirmed == true"
+
+# Boolean negation
+guards:
+  - kind: expr
+    expr: "$.context.requiresFinance == false"
+```
+
+## evidence
+
+Requires that specific evidence artifacts have been recorded earlier in the workflow. Evidence is accumulated as executors run -- for example, the `human` executor records evidence when a human acts.
+
+```yaml
+guards:
+  - kind: evidence
+    requires:
+      - tests_passed
+      - acceptance_criteria_met
+```
+
+All listed evidence kinds must be present. This is useful for defense-in-depth: even if state ordering allows a transition, the evidence guard ensures the prerequisite actions actually happened.
+
+You can also require a count of evidence records:
+
+```yaml
+guards:
+  - kind: evidence
+    requires:
+      - { kind: human_request, count: 2 }
+```
+
+This is how you implement quorum approvals -- require two human approvals before proceeding.
+
+## allOf
+
+All sub-guards must pass. This is the default behavior when you list multiple guards in an array, but `allOf` makes it explicit and lets you nest it inside `anyOf` or `not`.
+
+```yaml
+guards:
+  - kind: allOf
+    guards:
+      - { kind: role, role: manager }
+      - { kind: expr, expr: "$.context.amount <= 5000" }
+```
+
+## anyOf
+
+At least one sub-guard must pass. Useful for "either/or" conditions.
+
+```yaml
+guards:
+  - kind: anyOf
+    guards:
+      - { kind: role, role: manager }
+      - { kind: role, role: finance }
+```
+
+This means: managers **or** finance can take this transition.
+
+You can combine `anyOf` with other guards for complex policies:
+
+```yaml
+guards:
+  # The submitter must be a manager OR finance...
+  - kind: anyOf
+    guards:
+      - { kind: role, role: manager }
+      - { kind: role, role: finance }
+  # ...AND the amount must be under the limit
+  - kind: expr
+    expr: "$.context.amount <= 10000"
+```
+
+## not
+
+Inverts a sub-guard. The transition fires only if the inner guard **fails**.
+
+```yaml
+guards:
+  - kind: not
+    guard:
+      kind: role
+      role: intern
+```
+
+This means: anyone **except** interns can take this transition.
+
+Combine with `expr` to negate conditions:
+
+```yaml
+guards:
+  - kind: not
+    guard:
+      kind: expr
+      expr: "$.context.flaggedForReview == true"
+```
+
+## Composing guards
+
+Since `allOf`, `anyOf`, and `not` can nest, you can express arbitrarily complex policies:
+
+```yaml
+guards:
+  - kind: allOf
+    guards:
+      # Must be a manager or admin
+      - kind: anyOf
+        guards:
+          - { kind: role, role: manager }
+          - { kind: role, role: admin }
+      # Must NOT be flagged for conflict of interest
+      - kind: not
+        guard:
+          kind: expr
+          expr: "$.context.conflictOfInterest == true"
+      # Must have evidence of prior review
+      - kind: evidence
+        requires: [peer_review]
+```
+
+## linkFilter and guards
+
+When a workflow or state sets `linkFilter: byGuards`, the gateway evaluates each transition's guards silently against the current state before building the response. Only transitions whose guards would pass appear as links. This means the model only sees what it can actually do -- no dead-end links.
+
+```yaml
+states:
+  manager_review:
+    linkFilter: byGuards
+    transitions:
+      approve:
+        target: approved
+        guards:
+          - { kind: expr, expr: "$.context.riskScore <= 80" }
+      escalate:
+        target: executive_review
+        guards:
+          - { kind: expr, expr: "$.context.riskScore > 80" }
+```
+
+If `riskScore` is 50, the model only sees the "approve" link. If it's 90, it only sees "escalate." No wasted round trips on transitions that would fail.

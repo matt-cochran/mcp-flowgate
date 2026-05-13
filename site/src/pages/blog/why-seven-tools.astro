@@ -1,0 +1,183 @@
+---
+import Landing from '../../layouts/Landing.astro';
+---
+
+<Landing
+	title="Why seven tools is the right number — mcp-flowgate"
+	description="Every MCP tool costs tokens. We measured the math, built the fix, and watched models get better at tool selection when given less to choose from."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-05-21">May 21, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">Why seven tools is the right number</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				You've wired in 30 MCP tools. Maybe 50. Each one gets a name, a
+				description, and a JSON schema. The model reads all of them on every
+				single call.
+			</p>
+
+			<p>
+				That's the cost nobody talks about.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The token tax you're already paying</h2>
+
+			<p>
+				Every MCP tool definition costs 50–150 tokens in the model's system
+				prompt. The name, the description, the input schema — it all goes in.
+			</p>
+
+			<p>
+				Ten tools? About 1,000 tokens. Manageable.
+			</p>
+
+			<p>
+				Fifty tools? You're spending 5,000+ tokens <em>before the model
+				thinks a single thought</em>. That's input tokens on every call,
+				every turn, every retry. It compounds fast.
+			</p>
+
+			<p>
+				But the input tokens aren't even the expensive part.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The reasoning tax is worse</h2>
+
+			<p>
+				The model has to <em>look at</em> every tool in the list to decide
+				which one to call. More tools means more output tokens spent
+				reasoning through choices. And output tokens cost 3–5x more than
+				input tokens.
+			</p>
+
+			<p>
+				A model staring at 50 tools and picking the wrong one wastes a
+				full round trip — the failed call, the error handling, the retry.
+				That's not a rounding error. That's real latency and real money
+				on every mistake.
+			</p>
+
+			<p>
+				The research backs this up. Tool selection accuracy drops as the
+				number of available tools increases. It's not a subtle effect. More
+				choices means more wrong choices.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What if the list never grew?</h2>
+
+			<p>
+				That's the core idea behind mcp-flowgate. Instead of registering
+				every capability as a separate tool, you expose exactly seven:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li><strong>Three for discovery:</strong> <code>gateway.home</code>,
+					<code>gateway.search</code>, <code>gateway.describe</code></li>
+				<li><strong>Four for action:</strong> <code>workflow.start</code>,
+					<code>workflow.get</code>, <code>workflow.submit</code>,
+					<code>workflow.explain</code></li>
+			</ul>
+
+			<p>
+				Your 50 capabilities still exist. They just surface through search
+				results and response links — loaded one at a time, only when relevant.
+			</p>
+
+			<p>
+				The model's tool list stays at seven entries whether you have 5
+				capabilities or 500.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Search beats scanning</h2>
+
+			<p>
+				When the model needs to publish content, it doesn't scan 50 tool
+				definitions looking for the right one. It calls
+				<code>gateway.search</code> with <code>"publish content"</code>
+				and gets back one result.
+			</p>
+
+			<p>
+				One search call. One result. The model follows the link to start
+				the workflow. No scanning, no guessing, no wasted reasoning.
+			</p>
+
+			<p>
+				This pattern has a name in API design:
+				<a href="https://en.wikipedia.org/wiki/HATEOAS" class="text-indigo-600 hover:text-indigo-500">HATEOAS</a>.
+				The server tells the client what's legal next. The model doesn't
+				need out-of-band knowledge. It just follows the links.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Seven is a ceiling, not a target</h2>
+
+			<p>
+				We didn't pick seven because it's a magic number. We picked it
+				because it's the minimum set that covers the full lifecycle:
+				discover what's available, act on it, and inspect the rules.
+			</p>
+
+			<p>
+				Discovery needs three tools because browsing, searching, and
+				reading details are different operations. Action needs four
+				because workflows have state: you start them, check them, advance
+				them, and sometimes need to understand the rules before deciding.
+			</p>
+
+			<p>
+				Seven tools. Fixed token cost. And every capability you add behind
+				them comes with governance — guards, audit, retries, approval gates — built in.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Try it yourself</h2>
+
+			<p>
+				The <a href="/quick-start" class="text-indigo-600 hover:text-indigo-500">quick start</a>
+				takes 30 seconds. Wire in your tools, point the model at mcp-flowgate,
+				and watch the tool list shrink while your capabilities grow.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

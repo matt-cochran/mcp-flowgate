@@ -1,0 +1,63 @@
+---
+title: "Installation"
+description: "Install mcp-flowgate from a pre-built binary, Cargo, or Docker."
+---
+
+Pick whichever method fits your setup. They all give you the same `mcp-flowgate` binary.
+
+## Pre-built binary (recommended)
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/matt-cochran/mcp-flowgate/releases). Each release includes a `checksums.sha256` file so you can verify the download.
+
+```bash
+# Linux x86_64 example
+curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/mcp-flowgate-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/checksums.sha256
+
+# Verify
+sha256sum -c checksums.sha256 --ignore-missing
+
+# Extract and run
+tar xzf mcp-flowgate-*.tar.gz
+./mcp-flowgate --help
+```
+
+### Available targets
+
+| Platform | Target |
+|----------|--------|
+| Linux x86_64 | `x86_64-unknown-linux-gnu` |
+| Linux ARM64 | `aarch64-unknown-linux-gnu` |
+| macOS Intel | `x86_64-apple-darwin` |
+| macOS Apple Silicon | `aarch64-apple-darwin` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` |
+
+Move the binary somewhere on your `PATH` (e.g., `/usr/local/bin`) and you're set.
+
+## Cargo
+
+If you have a Rust toolchain installed:
+
+```bash
+cargo install mcp-flowgate
+```
+
+This builds from source, so it takes a couple of minutes. The binary lands in `~/.cargo/bin/`, which is usually already on your `PATH`.
+
+## Docker
+
+```bash
+docker run -v $(pwd)/gateway.yaml:/config/gateway.yaml ghcr.io/matt-cochran/mcp-flowgate
+```
+
+Mount your config file into `/config/gateway.yaml` and the container handles the rest. This works well for server deployments or if you want to try mcp-flowgate without installing anything locally.
+
+## Verify the installation
+
+Whichever method you used, confirm it's working:
+
+```bash
+mcp-flowgate --help
+```
+
+You should see the CLI help with the `serve` subcommand listed. Head to the [quick start](/docs/quick-start) to wire up your first capability.

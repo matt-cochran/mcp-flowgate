@@ -1,0 +1,390 @@
+---
+title: "Connections"
+description: "How to wire in MCP servers, CLI commands, and REST APIs as backend executors."
+---
+
+Connections are the backends your gateway talks to. You declare them once in the `connections` block, then reference them from executors throughout your config. Three connection kinds cover everything: MCP servers, CLI commands, and REST APIs.
+
+## MCP connections
+
+MCP connections speak the Model Context Protocol to another server. You can connect via stdio (launching a child process) or via Streamable HTTP (connecting to a running server).
+
+### Stdio (child process)
+
+The gateway spawns the process and communicates over stdin/stdout. This works with any MCP server -- native binaries, npm packages via `npx`, Python packages via `uvx`, Docker containers, anything.
+
+```yaml
+connections:
+  # Native binary on PATH
+  github:
+    kind: mcp
+    command: github-mcp-server
+
+  # npm-distributed MCP server via npx
+  filesystem:
+    kind: mcp
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+  # Python-distributed MCP server via uvx
+  fetch:
+    kind: mcp
+    command: uvx
+    args: [mcp-server-fetch]
+
+  # Containerized MCP server
+  postgres:
+    kind: mcp
+    command: docker
+    args: [run, -i, --rm, -e, DATABASE_URL, mcp/postgres:latest]
+    env:
+      DATABASE_URL: postgres://localhost/app
+```
+
+The `env` block passes environment variables to the child process. The gateway doesn't care what's inside the container or package -- if it speaks MCP over stdio, it works.
+
+### Streamable HTTP
+
+For MCP servers already running somewhere, connect via URL:
+
+```yaml
+connections:
+  remote_server:
+    kind: mcp
+    url: https://mcp.example.com/v1
+```
+
+No `command` needed -- the gateway connects to the existing server. Use this for shared MCP services, cloud-hosted servers, or anything you don't want the gateway to manage the lifecycle of.
+
+## CLI connections
+
+CLI connections run shell commands. The gateway spawns the process, passes arguments, and captures stdout.
+
+```yaml
+connections:
+  dotnet:
+    kind: cli
+    command: dotnet
+    workingDirectory: /opt/myapp
+
+  shell:
+    kind: cli
+    command: /bin/bash
+    env:
+      PATH: /usr/local/bin:/usr/bin
+```
+
+The `command` is the binary to run. `args` on the executor (not the connection) supply the specific arguments for each call. `workingDirectory` sets where the process runs. `env` passes environment variables.
+
+## REST connections
+
+REST connections make HTTP requests to any API.
+
+```yaml
+connections:
+  github_api:
+    kind: rest
+    baseUrl: https://api.github.com
+    headers:
+      Authorization: "Bearer ${GITHUB_TOKEN}"
+      Accept: application/vnd.github+json
+
+  payroll:
+    kind: rest
+    baseUrl: https://payroll.example.com
+    headers:
+      Authorization: "Bearer ${PAYROLL_TOKEN}"
+```
+
+The `baseUrl` is the root of the API. `headers` are sent with every request. Notice `${GITHUB_TOKEN}` -- environment variable interpolation works in header values, so you don't put secrets directly in your config file.
+
+## Importing tools from MCP servers
+
+The `proxy.import` block discovers tools from MCP connections at startup and turns each one into a proxy capability automatically. You don't have to declare each tool by hand.
+
+```yaml
+proxy:
+  import:
+    - connection: github
+      prefix: github
+      include: [list_issues, create_issue, create_pull_request]
+      tags: [github, source-control]
+
+    - connection: filesystem
+      prefix: fs
+      tags: [filesystem]
+
+    - connection: postgres
+      prefix: pg
+      include: [query, schema]
+      exclude: [drop_table]
+      tags: [database, sql]
+```
+
+The gateway calls `tools/list` on each connection at startup and creates proxy exposures for the matching tools. Each imported tool gets:
+- A name like `github.list_issues` (prefix + original tool name)
+- The original tool's description and input schema
+- The tags you declare on the import block
+
+**`include`** -- only import these tools (allowlist). If omitted, all tools are imported.
+
+**`exclude`** -- skip these tools (blocklist). Applied after `include`.
+
+**`prefix`** -- prepended to each tool name with a dot separator. Keeps names from colliding when you import from multiple servers.
+
+**`tags`** -- applied to all imported tools. Makes them findable in `gateway.search`.
+
+You can mix imports with explicit declarations. Declared capabilities can carry guards, reliability policies, and audit hooks that imports don't have by default:
+
+```yaml
+proxy:
+  import:
+    - connection: github
+      prefix: github
+      tags: [github]
+
+  expose:
+    - name: safe.create_pr
+      description: Create a PR with test evidence required.
+      guards:
+        - kind: evidence
+          requires: [tests_passed]
+      executor:
+        kind: mcp
+        connection: github
+        tool: create_pull_request
+```
+
+## Exposing capabilities manually
+
+The `proxy.expose` block lets you declare capabilities with full control over their schema, guards, reliability, and executor.
+
+### With an inline executor
+
+```yaml
+proxy:
+  expose:
+    - name: github.list_issues
+      title: List GitHub issues
+      description: List issues from a GitHub repository.
+      tags: [github, issues, read]
+      aliases: [issues, bugs]
+      inputSchema:
+        type: object
+        required: [repo]
+        properties:
+          repo: { type: string }
+      executor:
+        kind: mcp
+        connection: github
+        tool: list_issues
+```
+
+### With a capability reference
+
+Define the capability once, expose it (potentially with extra guards or a different name):
+
+```yaml
+capabilities:
+  raw.create_pr:
+    title: Create GitHub PR
+    executor:
+      kind: mcp
+      connection: github
+      tool: create_pull_request
+
+  safe.create_pr:
+    wraps: raw.create_pr
+    guards:
+      - kind: evidence
+        requires: [tests_passed]
+
+proxy:
+  expose:
+    - capability: safe.create_pr
+      as: github.create_pr
+      tags: [github, write]
+      aliases: [pr, pull-request]
+```
+
+The `wraps` keyword stacks guards -- `safe.create_pr` inherits the executor from `raw.create_pr` and adds its own evidence guard on top. The `as` field renames it for the proxy surface.
+
+## The six executor kinds
+
+Executors are the actual work that happens when a transition fires. They live inside `proxy.expose[].executor`, transition `executor`, state `onEnter.executor`, and fallback `executors[]`.
+
+### MCP executor
+
+Calls a tool on a connected MCP server.
+
+```yaml
+executor:
+  kind: mcp
+  connection: github
+  tool: create_pull_request
+  map:
+    title: "$.arguments.title"
+    head: "$.context.branch_name"
+    base: main
+```
+
+The `map` block feeds values into the tool call -- paths resolve from the workflow's scopes, bare strings are literals. The gateway maintains a lazy connection cache, so repeated calls to the same MCP server reuse the connection.
+
+### CLI executor
+
+Runs a shell command and captures stdout as JSON.
+
+```yaml
+executor:
+  kind: cli
+  connection: dotnet
+  args:
+    - test
+    - "$.arguments.project"
+```
+
+Arguments with `$.` prefixes are interpolated from the workflow's scopes. Everything else is passed verbatim. The executor captures stdout and attempts to parse it as JSON for output mapping.
+
+The `treatNonZeroAsFailure` flag (default `true`) controls what happens on non-zero exit codes. Set it to `false` when the exit code is data, not an error -- useful for test runners and validators where you want to branch on the result:
+
+```yaml
+executor:
+  kind: cli
+  connection: shell
+  args: ["-c", "cargo test"]
+  treatNonZeroAsFailure: false
+```
+
+### REST executor
+
+Makes HTTP requests to any API.
+
+```yaml
+executor:
+  kind: rest
+  connection: github_api
+  method: POST
+  path: "/repos/{owner}/{repo}/pulls"
+  query: { state: open }
+  headers: { X-Custom: value }
+  body:
+    title: "$.arguments.title"
+    head: "$.arguments.head"
+    base: main
+```
+
+`path` supports `{var}` templating -- variables pull from arguments, then context, then workflow input. `query`, `headers`, and `body` all support path expressions. Status codes 408, 429, and 5xx are classified as retryable errors.
+
+### Human executor
+
+Stops the chain and queues for human approval.
+
+```yaml
+executor:
+  kind: human
+  queue: prod-deployments
+```
+
+Doesn't execute anything. Records a `human.approval.requested` audit event, returns a pending status, and waits. A human resolves it through your approval integration. The `queue` label tells your tooling where to route the request.
+
+### Noop executor
+
+Returns immediately with an empty result.
+
+```yaml
+executor:
+  kind: noop
+```
+
+Useful for testing, stubs, and transitions that just move state without doing work. When a `proxy.expose` entry has no executor, `noop` is the default.
+
+### Workflow executor
+
+Starts a sub-workflow and waits for it to complete.
+
+```yaml
+executor:
+  kind: workflow
+  definitionId: validation_pipeline
+  input:
+    artifact: "$.context.artifactId"
+  timeoutMs: 300000
+```
+
+The sub-workflow runs to completion, and its final context becomes the executor's output. This lets you compose workflows -- a deploy workflow can kick off a validation sub-workflow and use its results to decide what to do next.
+
+## Putting it together
+
+Here's a complete config that wires in three different backend types:
+
+```yaml
+version: "1.0.0"
+
+connections:
+  github:
+    kind: mcp
+    command: github-mcp-server
+
+  kubectl:
+    kind: cli
+    command: kubectl
+    env:
+      KUBECONFIG: /etc/kube/config
+
+  slack_api:
+    kind: rest
+    baseUrl: https://slack.com/api
+    headers:
+      Authorization: "Bearer ${SLACK_TOKEN}"
+
+audit:
+  sink: stdout
+
+proxy:
+  import:
+    - connection: github
+      prefix: github
+      include: [list_issues, create_issue]
+      tags: [github]
+
+  expose:
+    - name: deploy.staging
+      description: Deploy to the staging environment.
+      tags: [deploy, staging]
+      inputSchema:
+        type: object
+        required: [image]
+        properties:
+          image: { type: string }
+      executor:
+        kind: cli
+        connection: kubectl
+        args: [set, image, "deployment/app", "app=$.arguments.image"]
+      reliability:
+        timeoutMs: 60000
+        retry:
+          maxAttempts: 2
+          backoff: fixed
+          initialDelayMs: 3000
+          retryOn: [timeout, transient_error]
+
+    - name: notify.slack
+      description: Post a message to Slack.
+      tags: [notification, slack]
+      inputSchema:
+        type: object
+        required: [channel, text]
+        properties:
+          channel: { type: string }
+          text: { type: string }
+      executor:
+        kind: rest
+        connection: slack_api
+        method: POST
+        path: /chat.postMessage
+        body:
+          channel: "$.arguments.channel"
+          text: "$.arguments.text"
+```
+
+Three connection kinds, three executor kinds, all wired through the same seven tools. The model searches for "deploy" or "notify slack" through `gateway.search` and follows links from there.

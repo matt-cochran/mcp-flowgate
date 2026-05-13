@@ -1,0 +1,73 @@
+---
+title: "Stores"
+description: "Reference for workflow instance stores -- where your running workflows live."
+---
+
+Workflow instances need to live somewhere. The store holds every running workflow's state, context, and version number. You pick the store that matches your deployment.
+
+## Store kinds
+
+| Kind | Durability | Best for |
+|------|-----------|----------|
+| `memory` | None -- lost on restart | Development, testing |
+| `sqlite` | Disk | Single-process production |
+
+## memory
+
+The default. Instances live in process memory and disappear when the gateway stops.
+
+```yaml
+store:
+  kind: memory
+```
+
+Fast and zero-config. Good for development, testing, and short-lived processes where you don't need workflows to survive a restart.
+
+## sqlite
+
+Persists instances to a SQLite database file. Uses WAL mode for good concurrent-read performance.
+
+```yaml
+store:
+  kind: sqlite
+  path: ./data/workflows.db
+```
+
+The gateway creates the database file and parent directories automatically. The schema is one table:
+
+```sql
+CREATE TABLE workflows (
+    id       TEXT PRIMARY KEY,
+    version  INTEGER NOT NULL,
+    instance TEXT    NOT NULL  -- JSON-serialized workflow instance
+);
+```
+
+SQLite is a solid choice for single-process production deployments. No extra infrastructure, no network hops. The database file is just a file you can back up, inspect, and move.
+
+## Optimistic locking
+
+All stores enforce optimistic locking. When you call `workflow.submit`, you pass an `expectedVersion`. The store checks this against the current version before saving:
+
+1. Read the instance and its version.
+2. If `expectedVersion` doesn't match, reject with `STALE_WORKFLOW_VERSION`.
+3. If it matches, apply the transition and increment the version.
+
+For SQLite, this is implemented as:
+
+```sql
+UPDATE workflows SET version = ?, instance = ?
+WHERE id = ? AND version = ?
+```
+
+If zero rows are affected, the version was stale -- someone else got there first. The gateway returns an error with the current state so the caller can retry.
+
+This matters most when multiple actors (model + human, or multiple models) are working on the same workflow. The optimistic lock prevents lost updates without heavyweight locking.
+
+## Choosing a store
+
+**Development?** Use `memory`. No config needed, fast iteration.
+
+**Single server in production?** Use `sqlite`. Workflows survive restarts. Zero ops overhead -- it's just a file.
+
+You can switch stores without changing anything else in your config. The gateway's behavior is identical regardless of store; only durability and deployment topology change.

@@ -1,0 +1,51 @@
+---
+title: "Hot reload"
+description: "Reload your gateway config with SIGHUP -- no restart, no dropped workflows."
+---
+
+## Change config without restarting
+
+You've got workflows running. A model is mid-way through a deploy pipeline. You need to update a workflow definition, add a new connection, or tweak an executor. Restarting the process means killing those in-flight workflows.
+
+Instead, send SIGHUP:
+
+```bash
+kill -HUP $(pgrep mcp-flowgate)
+```
+
+The gateway re-reads your config file, rebuilds everything that changed, and swaps it in. In-flight workflows keep running without interruption.
+
+## What gets rebuilt
+
+When SIGHUP arrives, the gateway reloads and rebuilds:
+
+- **Workflow definitions** -- new workflows appear, updated definitions take effect for new instances, removed definitions stop being discoverable.
+- **Executors** -- new executor configurations, updated connection strings, changed CLI commands.
+- **Connections** -- new MCP server connections are established, removed ones are torn down.
+- **Discovery index** -- the search index rebuilds to reflect the new set of capabilities, workflow descriptions, goals, and guidance text.
+
+## What survives
+
+- **In-flight workflows** -- any workflow instance that's already started continues on its current definition. It doesn't get yanked mid-step. The model can still call `workflow.get` and `workflow.submit` on existing instances.
+- **The audit sink** -- audit events keep flowing without gaps. The reload itself emits a `config.reloaded` audit event so you have a record of when the config changed.
+
+## How the swap works
+
+The gateway wraps all reloadable components behind `RwLock`s. When the new config is parsed and validated, all new components swap in atomically -- definitions, executors, connections, and the discovery index all update together. There's no window where half the config is old and half is new.
+
+If the new config file has a parse error or validation failure, the swap doesn't happen. The gateway keeps running with the previous config and logs the error. You fix the file and send SIGHUP again.
+
+## Platform note
+
+SIGHUP is a Unix signal. It works on Linux and macOS. It doesn't exist on Windows. If you're running on Windows, you'll need to restart the process to pick up config changes.
+
+## Zero-downtime restart
+
+For changes that SIGHUP can't handle -- like upgrading the binary itself -- you can do a zero-downtime restart:
+
+1. Start a new mcp-flowgate instance on a different port with the new binary and config.
+2. Update your load balancer or reverse proxy to point to the new instance.
+3. Call `begin_drain` on the old instance (or let it drain naturally). It stops accepting new `workflow.start` calls but lets in-flight workflows finish.
+4. Once the old instance has no active workflows, shut it down.
+
+This gives you binary upgrades without dropping a single workflow.

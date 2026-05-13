@@ -1,0 +1,356 @@
+---
+title: "Executors"
+description: "Reference for all executor kinds -- the things that actually run when a transition fires."
+---
+
+Executors are what happen when a transition fires. You declare them in YAML. The gateway handles the wiring.
+
+## Executor kinds
+
+| Kind | Purpose |
+|------|---------|
+| `noop` | Returns immediately. Great for stubs and testing. |
+| `cli` | Runs a shell command, captures stdout. |
+| `rest` | Makes an HTTP request. |
+| `mcp` | Calls a tool on a connected MCP server. |
+| `human` | Queues for human action, emits an audit event. |
+| `workflow` | Starts a sub-workflow (internal). |
+
+You can also reference a named capability instead of declaring an executor inline:
+
+```yaml
+executor:
+  capability: github.list_issues
+```
+
+This resolves at config-load time to the named capability's executor and merges its guards and reliability into the calling context.
+
+---
+
+## noop
+
+Returns immediately with no side effects. The input is echoed back as output.
+
+```yaml
+executor:
+  kind: noop
+```
+
+Use it for:
+- Stubbing out capabilities while you build the workflow
+- Testing the gateway without real backends
+- Transitions that only need to move state (no external call)
+
+---
+
+## cli
+
+Runs a shell command through a CLI connection. Captures stdout as the executor's output.
+
+```yaml
+executor:
+  kind: cli
+  connection: dotnet
+  args:
+    - test
+    - "$.arguments.project"
+```
+
+The `connection` references a named CLI connection from your config. The `args` array supports path expressions that resolve against the workflow context, input, and arguments.
+
+### Inline command
+
+If you don't need a named connection, you can specify the command directly:
+
+```yaml
+executor:
+  kind: cli
+  command: lint-check
+  args: ["$.input.service"]
+```
+
+### Output
+
+The executor captures stdout as a string. If stdout is valid JSON, it's parsed and available at `$.output.json.*` in output mappings. If it's plain text, it's available at `$.output.text`.
+
+### Reliability
+
+CLI executors benefit most from reliability policies. Network-free commands can still hang or flake:
+
+```yaml
+executor:
+  kind: cli
+  connection: dotnet
+  args: [test]
+reliability:
+  timeoutMs: 120000
+  retry:
+    maxAttempts: 3
+    backoff: exponential
+    initialDelayMs: 1000
+    maxDelayMs: 10000
+    retryOn: [timeout, transient_error]
+  fallback:
+    strategy: first_success
+    executors:
+      - kind: cli
+        command: dotnet
+        args: [test, --no-build]
+```
+
+That config says: try the test command, retry up to 3 times with exponential backoff if it times out or fails transiently, and if all retries fail, try a fallback command.
+
+---
+
+## rest
+
+Makes an HTTP request through a REST connection.
+
+```yaml
+executor:
+  kind: rest
+  connection: payroll
+  method: POST
+  path: /reimbursements
+  body:
+    employee: "$.workflow.input.employee"
+    amount: "$.workflow.input.amount"
+    currency: "$.workflow.input.currency"
+```
+
+### Connection
+
+The `connection` references a named REST connection, which provides the base URL and default headers:
+
+```yaml
+connections:
+  payroll:
+    kind: rest
+    baseUrl: https://payroll.example.com
+    headers:
+      Authorization: "Bearer ${PAYROLL_TOKEN}"
+```
+
+### URL templating
+
+The `path` supports variable interpolation from workflow context:
+
+```yaml
+executor:
+  kind: rest
+  connection: docs
+  method: PUT
+  path: "/documents/{documentId}"
+  body:
+    content: "$.arguments.revisedDraft"
+```
+
+Path variables in `{braces}` are resolved from the workflow context.
+
+### Headers
+
+Per-request headers can be added alongside the connection's default headers:
+
+```yaml
+executor:
+  kind: rest
+  connection: api
+  method: POST
+  path: /submit
+  headers:
+    X-Request-Id: "$.context.correlationId"
+  body:
+    data: "$.arguments.payload"
+```
+
+### Body
+
+The `body` object supports path expressions. Each value is resolved at execution time:
+
+| Path prefix | Resolves to |
+|-------------|-------------|
+| `$.workflow.input.*` | The input passed when the workflow was started |
+| `$.context.*` | The workflow's accumulated context |
+| `$.arguments.*` | The arguments passed to the current transition |
+
+### Idempotency
+
+For retried requests, set `idempotencyKey` to prevent duplicate side effects:
+
+```yaml
+executor:
+  kind: rest
+  connection: payroll
+  method: POST
+  path: /reimbursements
+  body:
+    employee: "$.workflow.input.employee"
+    amount: "$.workflow.input.amount"
+  idempotencyKey: true
+reliability:
+  retry:
+    maxAttempts: 3
+    backoff: exponential
+    initialDelayMs: 1000
+    retryOn: [transient_error, timeout, rate_limited, connection_error]
+```
+
+When `idempotencyKey` is `true`, the gateway auto-derives a key from `workflowId + transition + correlationId`. Same key across retries, so your backend can deduplicate. You can also provide a custom template string:
+
+```yaml
+idempotencyKey: "{workflowId}-{transition}-{correlationId}"
+```
+
+---
+
+## mcp
+
+Calls a tool on a connected MCP server.
+
+```yaml
+executor:
+  kind: mcp
+  connection: github
+  tool: list_issues
+  map:
+    repo: "$.arguments.repo"
+```
+
+### Connection
+
+References a named MCP connection (stdio or SSE):
+
+```yaml
+connections:
+  github:
+    kind: mcp
+    command: github-mcp-server
+```
+
+### Tool and argument mapping
+
+The `tool` field is the tool name on the remote MCP server. The `map` object maps workflow data to the tool's expected arguments:
+
+```yaml
+executor:
+  kind: mcp
+  connection: planner
+  tool: normalize_plan
+  map:
+    goal: "$.workflow.input.goal"
+    plan: "$.arguments.plan"
+```
+
+Each key in `map` becomes an argument to the remote tool. Values are path expressions resolved at execution time.
+
+### Output
+
+The remote tool's response is available in output mappings at `$.output.*`:
+
+```yaml
+executor:
+  kind: mcp
+  connection: risk
+  tool: fmeca_analyze
+  map:
+    plan: "$.context.plan"
+output:
+  fmeca: "$.output"
+  maxRpn: "$.output.maxResidualRpn"
+```
+
+---
+
+## human
+
+Queues a transition for human action. The executor doesn't complete the transition -- it records an audit event and returns a "pending" status. A human watching the queue makes the actual decision.
+
+```yaml
+executor:
+  kind: human
+  queue: engineering-approvals
+```
+
+The `queue` is a logical name. It shows up in audit events so your approval system knows where to route the request.
+
+### How it works
+
+1. The model calls `workflow.submit` with a `human` executor transition.
+2. The gateway records a `human.approval.requested` audit event (or similar) with the queue name.
+3. The workflow stays in its current state, waiting.
+4. A human uses a separate interface (your approval tool, a dashboard, a Slack bot) to review and submit the actual transition.
+
+### Combining with actor gates
+
+The `human` executor stops the model from completing the action. The `actor: human` gate stops the model from even submitting it. Use both for belt-and-suspenders:
+
+```yaml
+transitions:
+  approve:
+    title: Approve the change
+    actor: human              # only humans can submit this
+    target: approved
+    guards:
+      - { kind: permission, permission: workflow.approve }
+    executor:
+      kind: human             # and the action itself waits for a human
+      queue: approvals
+```
+
+---
+
+## workflow
+
+Starts a sub-workflow. This is used internally when a transition needs to kick off a separate workflow definition.
+
+```yaml
+executor:
+  kind: workflow
+  definitionId: sub_process
+```
+
+The sub-workflow runs as its own instance with its own state and context. The parent transition waits for it to complete.
+
+---
+
+## Reliability policies
+
+Any executor can have a reliability policy attached. You define it alongside the executor in a transition or capability.
+
+```yaml
+reliability:
+  timeoutMs: 30000              # kill the executor if it takes longer than 30s
+  retry:
+    maxAttempts: 3              # try up to 3 times total
+    backoff: exponential        # none | fixed | exponential
+    initialDelayMs: 1000        # first retry after 1s
+    maxDelayMs: 8000            # cap delay at 8s
+    retryOn:                    # which failures trigger a retry
+      - timeout
+      - transient_error
+      - rate_limited
+      - connection_error
+  fallback:
+    strategy: first_success     # try fallback executors in order
+    executors:
+      - kind: cli
+        command: backup-command
+      - kind: noop              # last resort: return empty
+```
+
+### Retry conditions
+
+| Condition | When it applies |
+|-----------|----------------|
+| `timeout` | Executor exceeded its time limit |
+| `transient_error` | Temporary failure (e.g. HTTP 503) |
+| `rate_limited` | Backend returned a rate limit response |
+| `connection_error` | Couldn't reach the backend at all |
+
+### Fallback
+
+If all retry attempts fail, the gateway tries each fallback executor in order. The first one that succeeds wins. This lets you degrade gracefully -- try the primary, fall back to a simpler version, fall back to noop.
+
+### Idempotency across retries
+
+When `idempotencyKey` is set on an executor, the same key is used across retries **and** fallback candidates. Your backend can use this to deduplicate requests even if the gateway switches to a fallback executor.

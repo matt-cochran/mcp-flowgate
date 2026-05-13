@@ -1,0 +1,133 @@
+{
+  "$id": "https://mcp-flowgate.dev/schemas/workflow-response.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkflowResponse",
+  "type": "object",
+  "required": ["workflow", "result", "links"],
+  "additionalProperties": false,
+  "properties": {
+    "workflow": { "$ref": "#/$defs/workflowSnapshot" },
+    "result": { "$ref": "#/$defs/result" },
+    "context": { "type": "object" },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/link" }
+    },
+    "evidence": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence" },
+      "default": []
+    },
+    "error": { "$ref": "#/$defs/error" },
+    "chain": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/chainStep" },
+      "default": [],
+      "description": "When deterministic chaining occurred, records each intermediate state the workflow traversed automatically."
+    },
+    "guidance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "goal": { "type": "string" },
+        "instructions": { "type": "string" }
+      },
+      "description": "Phase-level guidance for the LLM: what to aim for and how to behave in the current workflow state."
+    }
+  },
+  "$defs": {
+    "workflowSnapshot": {
+      "type": "object",
+      "required": ["id", "definitionId", "state", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "definitionId": { "type": "string" },
+        "definitionVersion": { "type": "string" },
+        "state": { "type": "string" },
+        "version": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "started",
+            "waiting_for_action",
+            "executed",
+            "completed",
+            "rejected",
+            "failed",
+            "timed_out"
+          ]
+        },
+        "message": { "type": "string" }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["rel", "method", "args"],
+      "additionalProperties": false,
+      "properties": {
+        "rel": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "method": {
+          "type": "string",
+          "const": "workflow.submit"
+        },
+        "actor": {
+          "type": "string",
+          "enum": ["agent", "human", "system", "deterministic"]
+        },
+        "args": {
+          "type": "object",
+          "required": ["workflowId", "expectedVersion", "transition"],
+          "additionalProperties": false,
+          "properties": {
+            "workflowId": { "type": "string" },
+            "expectedVersion": { "type": "integer", "minimum": 0 },
+            "transition": { "type": "string" }
+          }
+        },
+        "inputSchema": { "type": "object" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string" },
+        "id": { "type": "string" },
+        "uri": { "type": "string" },
+        "summary": { "type": "string" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "attemptedTransition": { "type": "string" }
+      }
+    },
+    "chainStep": {
+      "type": "object",
+      "required": ["fromState", "transition", "toState", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "fromState": { "type": "string" },
+        "transition": { "type": "string" },
+        "toState": { "type": "string" },
+        "version": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

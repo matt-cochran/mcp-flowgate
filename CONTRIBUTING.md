@@ -1,0 +1,86 @@
+# Contributing to mcp-flowgate
+
+Thanks for your interest in helping. This project is small, opinionated,
+and moves deliberately — please read this page before opening a PR, so
+your time and ours land in the same place.
+
+## Quick links
+
+- **Code of Conduct:** [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- **Security disclosures:** [`SECURITY.md`](SECURITY.md) — **do not file
+  a public issue for security bugs**.
+- **Development setup, workspace layout, common commands:**
+  [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — the authoritative
+  reference; this page does not duplicate it.
+- **Stability / what we promise not to break:**
+  [`STABILITY.md`](STABILITY.md).
+- **Verification coverage (what's tested vs. what isn't):**
+  see the "Verification coverage" section in [`STABILITY.md`](STABILITY.md).
+
+## Before you open a PR
+
+1. **Open an issue first** for anything larger than a bug fix or doc
+   tweak. Coordination is cheaper than rework.
+2. **Run the same checks CI runs**, locally:
+   ```bash
+   cargo fmt --all -- --check
+   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace
+   ```
+3. **Test coverage.** All behavioural changes need atomic, declarative
+   tests — one observable property per test, named after the property.
+   See existing tests in `crates/*/tests/` for the patterns.
+4. **CHANGELOG.** Add a bullet under `## [Unreleased]` describing the
+   change. The release-guard CI step enforces this when a version
+   bumps; the project convention is to update CHANGELOG with the
+   change PR, not the release PR.
+
+## What we welcome
+
+- **Bug fixes**, with a regression test.
+- **New executor kinds** behind the existing `Executor` trait.
+- **New audit sinks** (OTLP, file rotation, SIEM-specific) behind the
+  existing `AuditSink` trait.
+- **New store backends** (Postgres, DynamoDB) behind the existing
+  `Store` trait.
+- **Documentation** — especially worked examples, troubleshooting,
+  and "I tried this and it didn't work" patterns.
+- **Stress tests.** See [`docs/STRESS-TESTS.md`](docs/STRESS-TESTS.md)
+  for the format and how to add one.
+
+## What we're cautious about
+
+- **Surface-area additions to the seven-tool MCP surface or YAML
+  top-level keys.** These are Tier 1 stable; changes need a strong
+  motivating example and usually involve a deprecation cycle.
+- **New configuration knobs** when an existing knob composes to the
+  same effect. We try to make the YAML small and orthogonal.
+- **Dependencies.** Each new transitive dep is an attack surface and a
+  maintenance cost. Prefer narrow, well-maintained crates.
+
+## Style
+
+- Rust 2021, formatted with `rustfmt` defaults.
+- Comments only where the *why* is non-obvious; don't restate what the
+  code says.
+- Public APIs are doc-commented; internal items usually aren't.
+- Tests state intent in their names: prefer
+  `fn workflow_submit_rejects_stale_version` over `fn test_submit_1`.
+
+## Sign-off
+
+By submitting a PR you certify that your contribution is your own work
+and that you have the right to license it under Apache-2.0. We use
+the [Developer Certificate of Origin](https://developercertificate.org/) —
+sign commits with `git commit -s`.
+
+## Maintainer expectations
+
+We aim for:
+
+- Acknowledgement of a PR within **5 business days**.
+- A review (accept / request changes / close with reason) within
+  **10 business days**.
+
+If you don't hear back, please ping the thread — it slipped, not
+ignored.

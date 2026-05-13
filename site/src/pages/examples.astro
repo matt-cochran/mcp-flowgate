@@ -1,0 +1,198 @@
+---
+import Landing from '../layouts/Landing.astro';
+---
+
+<Landing
+	title="Examples — mcp-flowgate"
+	description="Worked examples showing mcp-flowgate in action: content publishing, expense approval, TDD enforcement, deploy pipelines, and more."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-white text-sm font-medium">Examples</a>
+			<a href="/blog" class="text-slate-300 hover:text-white text-sm transition-colors">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<section class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-5xl mx-auto">
+		<h1 class="text-4xl font-bold text-slate-900 mb-4">Examples</h1>
+		<p class="text-lg text-slate-600 mb-12 max-w-2xl">
+			Each example is a complete, runnable config you can clone and modify.
+			They're ordered from simple to complex — start at the top if
+			you're new.
+		</p>
+
+		<div class="grid gap-8">
+
+			<!-- Content Publish -->
+			<div class="example-card">
+				<div class="flex items-start justify-between gap-4 mb-4">
+					<div>
+						<h2 class="text-xl font-semibold text-slate-900">Content publishing</h2>
+						<p class="text-sm text-slate-500 mt-1">
+							<code>examples/content-publish/</code>
+						</p>
+					</div>
+					<a href="https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/content-publish"
+						class="text-indigo-600 hover:text-indigo-500 text-sm font-medium whitespace-nowrap">
+						View source
+					</a>
+				</div>
+				<p class="text-slate-600 mb-4">
+					A governed content pipeline: draft → brand review → human approval → publish.
+					The LLM walks the workflow through links. When it reaches the approval
+					gate, governance stops it cold — only a human can approve.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">governance</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">human approval</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">HATEOAS</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">actor enforcement</span>
+				</div>
+			</div>
+
+			<!-- Expense Approval -->
+			<div class="example-card">
+				<div class="flex items-start justify-between gap-4 mb-4">
+					<div>
+						<h2 class="text-xl font-semibold text-slate-900">Expense approval</h2>
+						<p class="text-sm text-slate-500 mt-1">
+							<code>examples/expense-approval/</code>
+						</p>
+					</div>
+					<a href="https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/expense-approval"
+						class="text-indigo-600 hover:text-indigo-500 text-sm font-medium whitespace-nowrap">
+						View source
+					</a>
+				</div>
+				<p class="text-slate-600 mb-4">
+					Multi-tenant expense workflow with two-tier approval. Small expenses
+					need one manager. Large expenses need quorum evidence from multiple
+					approvers. Payment is idempotent — the executor won't double-pay.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">multi-tenant</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">quorum</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">evidence guards</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">expr guards</span>
+				</div>
+			</div>
+
+			<!-- Deploy Pipeline -->
+			<div class="example-card">
+				<div class="flex items-start justify-between gap-4 mb-4">
+					<div>
+						<h2 class="text-xl font-semibold text-slate-900">Deploy pipeline</h2>
+						<p class="text-sm text-slate-500 mt-1">
+							<code>examples/deploy-pipeline/</code>
+						</p>
+					</div>
+					<a href="https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/deploy-pipeline"
+						class="text-indigo-600 hover:text-indigo-500 text-sm font-medium whitespace-nowrap">
+						View source
+					</a>
+				</div>
+				<p class="text-slate-600 mb-4">
+					Deterministic chaining in action. Lint → test → build auto-execute
+					without LLM involvement. The model calls <code>workflow.start</code>
+					once and gets the result at the deploy decision — three executor calls,
+					zero LLM round trips.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">deterministic chaining</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">phase guidance</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">CLI executor</span>
+				</div>
+			</div>
+
+			<!-- TDD -->
+			<div class="example-card">
+				<div class="flex items-start justify-between gap-4 mb-4">
+					<div>
+						<h2 class="text-xl font-semibold text-slate-900">TDD enforcement</h2>
+						<p class="text-sm text-slate-500 mt-1">
+							<code>examples/tdd/</code>
+						</p>
+					</div>
+					<a href="https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/tdd"
+						class="text-indigo-600 hover:text-indigo-500 text-sm font-medium whitespace-nowrap">
+						View source
+					</a>
+				</div>
+				<p class="text-slate-600 mb-4">
+					Enforced red → green → refactor cycle. The LLM can't skip from
+					red to refactor — the workflow won't let it. Includes cheat detection:
+					if the model tries to write production code before a failing test,
+					the guard catches it. Dogfooded in CI with a mechanical driver script.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">workflow enforcement</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">cheat detection</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">CI dogfood</span>
+				</div>
+			</div>
+
+			<!-- Simple configs -->
+			<div class="example-card">
+				<div class="flex items-start justify-between gap-4 mb-4">
+					<div>
+						<h2 class="text-xl font-semibold text-slate-900">Starter configs</h2>
+						<p class="text-sm text-slate-500 mt-1">
+							<code>examples/</code>
+						</p>
+					</div>
+					<a href="https://github.com/matt-cochran/mcp-flowgate/tree/main/examples"
+						class="text-indigo-600 hover:text-indigo-500 text-sm font-medium whitespace-nowrap">
+						View source
+					</a>
+				</div>
+				<p class="text-slate-600 mb-4">
+					Small, focused configs for specific patterns: <code>simple-proxy.yaml</code>
+					(basic MCP passthrough), <code>governed-change.yaml</code> (approval gate),
+					<code>import-and-discovery.yaml</code> (importing tools from MCP servers).
+					Good starting points when you know the pattern you want.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">proxy</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">import</span>
+					<span class="px-2 py-1 bg-indigo-50 text-indigo-700 text-xs rounded-full font-medium">discovery</span>
+				</div>
+			</div>
+
+		</div>
+	</div>
+</section>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/examples" class="text-slate-500 hover:text-slate-300 text-sm">Examples</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate/issues" class="text-slate-500 hover:text-slate-300 text-sm">Issues</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

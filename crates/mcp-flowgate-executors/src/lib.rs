@@ -1,0 +1,87 @@
+//! Default executors for mcp-flowgate.
+
+pub mod cli;
+pub mod human;
+pub mod import;
+pub mod mcp;
+pub mod noop;
+pub mod registry;
+pub mod rest;
+pub mod workflow;
+
+pub use cli::{CliConnection, CliConnections, CliExecutor};
+pub use human::HumanExecutor;
+pub use import::import_capabilities;
+pub use mcp::{McpConnection, McpConnections, McpExecutor};
+pub use noop::NoopExecutor;
+pub use registry::HashMapExecutorRegistry;
+pub use rest::{RestConnection, RestConnections, RestExecutor};
+pub use workflow::WorkflowExecutor;
+
+use std::sync::Arc;
+
+use mcp_flowgate_core::ports::ExecutorRegistry;
+use mcp_flowgate_core::runtime::WorkflowRuntime;
+use serde_json::Value;
+
+/// Build a registry containing the default executor set wired up against the
+/// given config. Convenient one-shot entry point for the binary.
+pub fn default_registry(config: &Value) -> Arc<dyn ExecutorRegistry> {
+    let cli_conns = Arc::new(CliConnections::from_config(config));
+    let mcp_conns = McpConnections::from_config(config);
+    default_registry_with_mcp(
+        config,
+        Arc::new(McpExecutor::new(mcp_conns)),
+        cli_conns,
+        Arc::new(mcp_flowgate_core::audit::NullAuditSink),
+    )
+}
+
+/// Same as `default_registry` but lets the caller supply pre-built CLI and
+/// MCP executors and an audit sink. Useful when you want to share the MCP
+/// executor with the importer (so the connection cache is reused) and route
+/// human-approval audit events to the gateway's main audit stream — see the
+/// `mcp-flowgate` binary for the canonical wiring.
+pub fn default_registry_with_mcp(
+    config: &Value,
+    mcp_executor: Arc<McpExecutor>,
+    cli_connections: Arc<CliConnections>,
+    audit: Arc<dyn mcp_flowgate_core::audit::AuditSink>,
+) -> Arc<dyn ExecutorRegistry> {
+    let rest_connections = Arc::new(RestConnections::from_config(config));
+    let registry = HashMapExecutorRegistry::new()
+        .with("cli", Arc::new(CliExecutor::new(cli_connections)))
+        .with(
+            "mcp",
+            mcp_executor as Arc<dyn mcp_flowgate_core::ports::Executor>,
+        )
+        .with("rest", Arc::new(RestExecutor::new(rest_connections)))
+        .with("human", Arc::new(HumanExecutor::with_audit(audit)))
+        .with("noop", Arc::new(NoopExecutor));
+
+    Arc::new(registry)
+}
+
+/// Build a registry with the workflow executor. Requires a WorkflowRuntime
+/// for spawning sub-workflows.
+pub fn default_registry_with_workflow(
+    config: &Value,
+    mcp_executor: Arc<McpExecutor>,
+    cli_connections: Arc<CliConnections>,
+    audit: Arc<dyn mcp_flowgate_core::audit::AuditSink>,
+    runtime: WorkflowRuntime,
+) -> Arc<dyn ExecutorRegistry> {
+    let rest_connections = Arc::new(RestConnections::from_config(config));
+    let registry = HashMapExecutorRegistry::new()
+        .with("cli", Arc::new(CliExecutor::new(cli_connections)))
+        .with(
+            "mcp",
+            mcp_executor as Arc<dyn mcp_flowgate_core::ports::Executor>,
+        )
+        .with("rest", Arc::new(RestExecutor::new(rest_connections)))
+        .with("human", Arc::new(HumanExecutor::with_audit(audit.clone())))
+        .with("noop", Arc::new(NoopExecutor))
+        .with("workflow", Arc::new(WorkflowExecutor::new(runtime, audit)));
+
+    Arc::new(registry)
+}

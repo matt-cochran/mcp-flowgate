@@ -1,0 +1,140 @@
+---
+title: "Control architecture"
+description: "How mcp-flowgate structures control flow across discovery, action, and execution -- and how to compose gateways at scale."
+---
+
+mcp-flowgate follows a specific control architecture pattern: one gateway sits between your model and your backends, replacing a flat tool list with a layered system. This page explains what those layers are, how config composition works, and what it looks like when you scale to multiple gateways.
+
+## The three-layer model
+
+Everything flows through three layers. Discovery finds what's available. Action governs how it runs. Execution does the actual work.
+
+```
+┌─────────────────────────────────────────────┐
+│                   Model                     │
+└────────────────────┬────────────────────────┘
+                     │
+        ┌────────────▼────────────┐
+        │     Discovery Layer     │
+        │  gateway.home           │
+        │  gateway.search         │
+        │  gateway.describe       │
+        └────────────┬────────────┘
+                     │
+        ┌────────────▼────────────┐
+        │      Action Layer       │
+        │  workflow.start         │
+        │  workflow.get           │
+        │  workflow.submit        │
+        │  workflow.explain       │
+        └────────────┬────────────┘
+                     │
+        ┌────────────▼────────────┐
+        │    Execution Layer      │
+        │  MCP servers            │
+        │  CLI commands           │
+        │  REST APIs              │
+        │  Human queues           │
+        │  Noop / inline          │
+        └─────────────────────────┘
+```
+
+**Discovery** is how the model finds capabilities. `gateway.home` returns the top-level catalog. `gateway.search` matches keywords against names, descriptions, and tags. `gateway.describe` loads the full schema for a specific capability. The model pays tokens only for what it actually looks at.
+
+**Action** is how the model interacts with capabilities. Every capability runs as a workflow -- even single-step ones. `workflow.start` kicks it off, `workflow.get` checks status, `workflow.submit` provides input at decision points, and `workflow.explain` shows the full state machine. Guards, approval gates, and validation all live here.
+
+**Execution** is where the real work happens. The runtime dispatches to whatever executor you've configured -- an MCP server, a CLI command, an HTTP endpoint, a human approval queue. The model never talks to executors directly. The action layer mediates everything.
+
+## Config composition with `include:`
+
+A single YAML file works for small setups. As you grow, you'll want to split config into focused files. The top-level `include:` key does this:
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+include:
+  - ./capabilities/deploy.yaml
+  - ./capabilities/monitoring.yaml
+  - ./capabilities/database.yaml
+```
+
+Each included file is a valid gateway config on its own. They merge together: maps merge (later values win on key collisions), arrays concatenate. This means your deploy team can own `deploy.yaml` and your monitoring team can own `monitoring.yaml`, and they compose cleanly at the gateway level.
+
+## Capability wrapping with `wraps:`
+
+Sometimes you want to layer governance on top of an existing capability without duplicating its definition. That's what `wraps:` does:
+
+```yaml
+capabilities:
+  deploy.base:
+    title: Deploy to environment
+    executor: { kind: http, connection: deploy-api }
+
+  deploy.prod:
+    wraps: deploy.base
+    guards:
+      - kind: permission
+        permission: deploy.prod
+      - kind: evidence
+        requires: [test-results]
+    reliability:
+      timeoutMs: 30000
+      retries: { max: 2, backoffMs: 1000 }
+```
+
+`deploy.prod` inherits the executor from `deploy.base` but stacks on its own guards and reliability policy. The base capability stays clean. The production variant adds the rules that matter for prod.
+
+You can wrap a wrapped capability too. Each layer stacks its guards on top of the previous layer's.
+
+## Multi-gateway topologies
+
+One gateway handles most setups. But organizations with distinct teams or security boundaries might want separate gateways that feed into each other.
+
+The pattern looks like this:
+
+```
+┌──────────┐   ┌──────────┐   ┌──────────┐
+│ Frontend  │   │ Backend  │   │  Data    │
+│ Gateway   │   │ Gateway  │   │ Gateway  │
+└─────┬─────┘   └─────┬────┘   └────┬─────┘
+      │               │              │
+      └───────────────▼──────────────┘
+                      │
+              ┌───────▼───────┐
+              │  Org Gateway  │
+              └───────────────┘
+```
+
+Each department gateway owns its capabilities and governance rules. The org gateway connects to the department gateways as MCP backends and exposes a unified surface. A model connected to the org gateway discovers everything, but each department's guards still apply.
+
+This works because mcp-flowgate backends are just MCP connections. A gateway doesn't care whether it's talking to a raw MCP server or another mcp-flowgate instance. You configure it the same way:
+
+```yaml
+connections:
+  frontend-team:
+    kind: mcp
+    command: mcp-flowgate
+    args: ["serve", "--config", "frontend.yaml"]
+  backend-team:
+    kind: mcp
+    command: mcp-flowgate
+    args: ["serve", "--config", "backend.yaml"]
+
+proxy:
+  import:
+    - connection: frontend-team
+      prefix: frontend
+    - connection: backend-team
+      prefix: backend
+```
+
+## Editor support with the JSON schema
+
+The config schema lives at `schemas/gateway-config.schema.json` in the repository. Point your editor at it for autocomplete and validation:
+
+```yaml
+# yaml-language-server: $schema=./schemas/gateway-config.schema.json
+version: "1.0.0"
+```
+
+If you use VS Code with the YAML extension, this gives you inline docs, property completion, and error highlighting as you edit your gateway config.

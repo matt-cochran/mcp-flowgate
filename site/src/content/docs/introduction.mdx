@@ -1,0 +1,68 @@
+---
+title: "What is mcp-flowgate?"
+description: "Every MCP tool costs tokens. mcp-flowgate replaces your entire tool list with seven fixed tools, adds governance, and lets your model discover capabilities on demand."
+---
+
+## The problem you already have
+
+Every MCP tool you register lands in the model's system prompt. Each tool definition costs 50--150 tokens for its name, description, and schema. Ten tools? Fine. Fifty? You're spending 5,000+ tokens per call just to describe what's available -- before the model thinks a single thought.
+
+It gets worse. The model has to *reason* about every tool in the list to pick the right one. More tools means more output tokens spent choosing, more wrong choices, more retries, more cost. A model staring at 50 tools and picking the wrong one wastes a full round trip -- the failed call, the recovery, the retry.
+
+And none of this comes with audit trails, retries, approval gates, or any governance. You get a flat list and a prayer.
+
+## The fix: seven tools, any number of capabilities
+
+mcp-flowgate exposes exactly seven MCP tools to your model, no matter how many capabilities you wire in behind them:
+
+| Layer | Tools | What they do |
+|-------|-------|--------------|
+| **Discovery** | `gateway.home`, `gateway.search`, `gateway.describe` | Find capabilities by keyword, get schemas on demand |
+| **Action** | `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain` | Execute capabilities through governed workflows |
+
+Your 50 capabilities don't disappear -- they surface through search results and response links, loaded one at a time, only when relevant. The model's token cost for tool definitions stays fixed regardless of scale.
+
+This pattern has a name in API design: [HATEOAS](https://en.wikipedia.org/wiki/HATEOAS). The server tells the client what's legal next. Every response carries links to the actions the model can take from here. The model doesn't need out-of-band knowledge or a memorized tool catalog. It just follows the links.
+
+## What governance looks like
+
+You declare rules in YAML. No glue code, no per-tool wrappers.
+
+```yaml
+proxy:
+  expose:
+    - name: deploy.prod
+      executor: { kind: human, queue: prod-deployments }
+```
+
+That one line means `deploy.prod` doesn't actually deploy when the model calls it. It records an audit event, returns a "pending" status, and stops. A human watching the queue makes the call.
+
+The same declarative surface gives you:
+
+- **Schema validation** -- bad input never reaches your executor.
+- **Guards** -- permission checks, role requirements, expression-based rules, evidence requirements. All evaluated before execution.
+- **Approval gates** -- mark any action as `actor: "human"` and it waits for a person.
+- **Reliability** -- timeouts, retries with backoff, fallback executors. Declared, not coded.
+- **Audit** -- every step emits structured JSON events automatically. You don't add logging; it's already there.
+- **Deterministic chaining** -- tag steps the model doesn't need to decide (`actor: "deterministic"`) and the runtime chains through them in a single round trip.
+
+Every guardrail is YAML. Your tools stay in whatever language they already live in.
+
+## Who this is for
+
+You have multiple tools and you need any combination of:
+
+- **Fewer tokens** -- your tool list is growing and you're watching costs climb.
+- **Audit** -- you need to know what the model did, when, and with what inputs.
+- **Retries and reliability** -- you want automatic retry with backoff, timeouts, and fallback executors without writing that logic yourself.
+- **Approval gates** -- some actions shouldn't fire autonomously. A human should decide.
+- **Schema validation** -- you want bad input caught before it reaches your backend.
+- **Multi-step workflows** -- you need sequences of actions with state, transitions, and output mapping between steps.
+
+You wire in MCP servers, CLI commands, and REST APIs. mcp-flowgate handles discovery, governance, and execution. Configuration is all YAML.
+
+## Who should skip it
+
+If you have one MCP server with a handful of tools, no governance requirements, and token costs aren't a concern -- you don't need this. Direct MCP works fine at that scale.
+
+mcp-flowgate earns its keep when your tool count grows, when you need control over what the model can do, or when you need an audit trail of what it did. If none of those apply today, bookmark this and come back when they do.

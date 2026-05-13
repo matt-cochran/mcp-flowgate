@@ -1,0 +1,170 @@
+---
+title: "Deterministic chaining"
+description: "Tag transitions the LLM doesn't need to decide and the runtime chains through them in a single round trip."
+---
+
+## Not every step needs the LLM
+
+Think about a deploy pipeline. Lint the code. Run the tests. Build the artifact. None of these require judgment -- they're computable. The linter either passes or it doesn't. The tests either pass or they don't.
+
+Without chaining, the model reads the response from step one, picks the next transition, submits it, reads that response, picks again, submits again. Each step costs a full LLM round trip. For three deterministic steps, that's three round trips of wasted tokens and latency -- the model is just robotically clicking "next" because there's only one legal move.
+
+With deterministic chaining, you tag those transitions `actor: "deterministic"` and the runtime handles them automatically. One call, one response, all three steps done.
+
+## How it works
+
+When a state has **only** deterministic transitions, the runtime picks the viable one and executes it without waiting for the model. Then it checks the next state. If that one also has only deterministic transitions, it chains forward again. This continues until the runtime hits one of four stop conditions:
+
+1. **Decision point** -- the next state has a non-deterministic transition (like `actor: "agent"` or `actor: "human"`). The model needs to make a choice, so the chain stops and returns the response.
+2. **Terminal state** -- the workflow is done.
+3. **Depth limit** -- `maxChainDepth` (default 50) prevents infinite loops from misconfigured workflows that cycle through deterministic states forever.
+4. **Failure** -- an executor fails. The chain stops with partial progress and a recovery link.
+
+## The response
+
+When chaining happens, the response includes a `chain` array that traces every auto-executed step:
+
+```json
+{
+  "state": "ready_to_deploy",
+  "chain": [
+    { "fromState": "lint", "transition": "run_lint", "toState": "test" },
+    { "fromState": "test", "transition": "run_tests", "toState": "build" },
+    { "fromState": "build", "transition": "build_artifact", "toState": "ready_to_deploy" }
+  ],
+  "context": {
+    "lintPassed": true,
+    "testsPassed": true,
+    "testCount": 142,
+    "coverage": 87.3,
+    "artifactId": "svc-api-v1.4.2",
+    "imageTag": "registry.example.com/svc-api:v1.4.2"
+  },
+  "guidance": {
+    "goal": "Confirm deployment",
+    "instructions": "All automated checks passed. Review the lint report, test results, and build artifact before deciding to deploy."
+  },
+  "links": [
+    { "transition": "deploy", "title": "Deploy to environment" },
+    { "transition": "abort", "title": "Abort deployment" }
+  ]
+}
+```
+
+The model sees all the accumulated context from three steps, the guidance for the decision it actually needs to make, and the links for its two choices. Three steps of overhead collapsed into zero.
+
+## When a step fails
+
+If the build step fails, you don't lose progress. The response includes everything that succeeded plus the error:
+
+```json
+{
+  "state": "build",
+  "chain": [
+    { "fromState": "lint", "transition": "run_lint", "toState": "test" },
+    { "fromState": "test", "transition": "run_tests", "toState": "build" }
+  ],
+  "error": "build-artifact exited with code 1",
+  "links": [
+    { "transition": "build_artifact", "title": "Retry: Build artifact" }
+  ]
+}
+```
+
+The model (or a human) can inspect the error, fix the issue, and retry from exactly where it failed. The lint and test results are already in context -- no need to re-run them.
+
+## Example: deploy pipeline
+
+Here's a full workflow where lint, test, and build chain automatically, then the model decides whether to deploy:
+
+```yaml
+version: "1.0.0"
+
+workflows:
+  deploy_pipeline:
+    title: Deploy Pipeline
+    description: >
+      Lint, test, and build run automatically as deterministic steps.
+      The LLM only sees the deploy decision after all checks pass.
+    tags: [deploy, deterministic, pipeline]
+
+    inputSchema:
+      type: object
+      required: [service]
+      properties:
+        service:
+          type: string
+          description: Name of the service to deploy
+        environment:
+          type: string
+          enum: [staging, production]
+          default: staging
+      additionalProperties: false
+
+    initialState: lint
+    maxChainDepth: 10
+
+    states:
+      lint:
+        transitions:
+          run_lint:
+            target: test
+            actor: deterministic
+            executor:
+              kind: cli
+              command: lint-check
+              args: ["$.input.service"]
+
+      test:
+        transitions:
+          run_tests:
+            target: build
+            actor: deterministic
+            executor:
+              kind: cli
+              command: test-runner
+              args: ["$.input.service"]
+
+      build:
+        transitions:
+          build_artifact:
+            target: ready_to_deploy
+            actor: deterministic
+            executor:
+              kind: cli
+              command: build-artifact
+              args: ["$.input.service", "$.input.environment"]
+
+      ready_to_deploy:
+        goal: Confirm deployment
+        guidance: >
+          All checks passed. Review results before deploying.
+        transitions:
+          deploy:
+            target: deployed
+            actor: agent
+          abort:
+            target: aborted
+            actor: agent
+
+      deployed:
+        terminal: true
+
+      aborted:
+        terminal: true
+```
+
+When `workflow.start` fires with `{ "service": "payment-api" }`, the runtime:
+
+1. Enters `lint`, sees only a deterministic transition, executes `lint-check payment-api`
+2. Enters `test`, same deal, executes `test-runner payment-api`
+3. Enters `build`, executes `build-artifact payment-api staging`
+4. Enters `ready_to_deploy`, finds `actor: "agent"` -- stops and returns
+
+The model receives one response with all the context it needs to make exactly one decision: deploy or abort.
+
+## Token math
+
+Say each round trip costs ~500 tokens (reading the response, reasoning about transitions, submitting). Three deterministic steps without chaining: 1,500 tokens of overhead. With chaining: 0 tokens of overhead -- the runtime handled it internally.
+
+Over hundreds of workflow runs, that adds up fast. But the real win isn't tokens -- it's latency. Three round trips at 2-3 seconds each means 6-9 seconds of wall time. Chaining collapses that into the execution time of the steps themselves.

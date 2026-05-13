@@ -1,0 +1,75 @@
+# LLM Link-Following Fidelity Report
+
+**Status: open — experiment design ready, runs pending.**
+
+The architecture of mcp-flowgate assumes LLMs can reliably:
+
+1. Read a `links` array from a response
+2. Pick the correct link based on `rel` and context
+3. Submit it verbatim (including `workflowId`, `expectedVersion`,
+   `transition`, prefilled `arguments`)
+4. Handle rejection by reading the new `links` array and recovering
+5. Stop when `result.status` is `"completed"` or when only
+   `"actor": "human"` links remain
+
+The mechanical driver (`examples/tdd/dogfood-drive.py`) proves the
+gateway returns correct bytes. Whether live LLMs follow links
+reliably is a separate empirical question that this report exists
+to answer.
+
+## Experiment design
+
+**Models:** Claude 4 Opus, Claude 4 Sonnet, GPT-4o.
+
+**Workflows:**
+
+| Workflow | States | Special challenge |
+|----------|--------|-------------------|
+| `simple-proxy` | 1 | Baseline link-following |
+| `content-publish` | 7 | `linkFilter: byGuards`, human-gate stop |
+| `tdd` | 7 | Adversarial; count-based cheat detection |
+
+**Runs:** 10 × 3 models × 3 workflows = 90 runs.
+
+**Metrics per run:**
+
+- Success rate (completed without human intervention)
+- Turns to completion
+- Invalid transition attempts
+- Stale `expectedVersion` errors
+- Hallucinated transition names
+- Premature stop (gave up with legal links remaining)
+- Human-gate violations (tried to call `"actor": "human"` links)
+- Recovery from rejection
+
+## Harness
+
+A future harness directory will hold:
+
+- `driver.py` — spawns `mcp-flowgate serve` as a subprocess, speaks
+  JSON-RPC over stdio, exposes a thin HTTP API to the agent.
+- `agent.py` — drives a model directly via its API (not through an
+  MCP host) so we control the exact bytes the model sees and emits.
+- `workflows/*.yaml` — gateway configs (noop executors).
+
+Direct API calls (not Claude Desktop / Zed) isolate the model's
+link-following ability from host-specific tool-use formatting.
+
+## Cost estimate
+
+90 runs × ~10–20 turns each ≈ $50–$150 across the three providers.
+
+## Why this matters
+
+This is the single biggest gap between "interesting design" and
+"production-ready system." If all three models follow links reliably,
+the architecture is model-agnostic. If only the strongest reasoning
+model can, that's a documentable dependency. Either result is useful.
+
+## Next steps
+
+Run the experiment, fill in the results, replace the README's
+"we won't claim it for you" language with a link to this report.
+
+Until then, this document exists as a placeholder so the gap is
+visible rather than hidden.

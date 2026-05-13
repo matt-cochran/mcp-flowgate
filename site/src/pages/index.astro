@@ -1,0 +1,407 @@
+---
+import Landing from '../layouts/Landing.astro';
+
+const heroCode = `<span class="text-indigo-400">version</span>: <span class="text-green-400">"1.0.0"</span>
+<span class="text-indigo-400">connections</span>:
+  <span class="text-indigo-400">github</span>:
+    <span class="text-indigo-400">transport</span>: <span class="text-green-400">stdio</span>
+    <span class="text-indigo-400">command</span>: <span class="text-green-400">github-mcp-server</span>
+<span class="text-indigo-400">proxy</span>:
+  <span class="text-indigo-400">import</span>:
+    - <span class="text-indigo-400">connection</span>: <span class="text-green-400">github</span>     <span class="text-slate-600"># import all tools</span>
+  <span class="text-indigo-400">expose</span>:
+    - <span class="text-indigo-400">name</span>: <span class="text-green-400">deploy.prod</span>
+      <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">human</span> }  <span class="text-slate-600"># LLM can't fire this</span>`;
+
+const wireSearch = `<span class="text-slate-500">→</span> gateway.search { <span class="text-green-400">"query"</span>: <span class="text-green-400">"publish content"</span> }
+
+<span class="text-slate-500">←</span> { <span class="text-green-400">"items"</span>: [{
+    <span class="text-green-400">"id"</span>: <span class="text-green-400">"workflow:content_publish"</span>,
+    <span class="text-green-400">"title"</span>: <span class="text-green-400">"Governed content publishing"</span>
+  }] }`;
+
+const wireStart = `<span class="text-slate-500">→</span> workflow.start {
+    <span class="text-green-400">"definitionId"</span>: <span class="text-green-400">"content_publish"</span>,
+    <span class="text-green-400">"input"</span>: { <span class="text-green-400">"topic"</span>: <span class="text-green-400">"Q2 launch"</span> }
+  }
+
+<span class="text-slate-500">←</span> { <span class="text-green-400">"state"</span>: <span class="text-green-400">"idea"</span>,
+    <span class="text-green-400">"links"</span>: [{
+      <span class="text-green-400">"rel"</span>: <span class="text-green-400">"create_outline"</span>,
+      <span class="text-green-400">"method"</span>: <span class="text-green-400">"workflow.submit"</span>,
+      <span class="text-green-400">"args"</span>: { <span class="text-slate-500">/* prefilled */</span> }
+    }] }`;
+
+const wireGov = `<span class="text-slate-500">←</span> { <span class="text-green-400">"state"</span>: <span class="text-green-400">"awaiting_approval"</span>,
+    <span class="text-green-400">"links"</span>: [{
+      <span class="text-green-400">"rel"</span>: <span class="text-green-400">"approve"</span>,
+      <span class="text-green-400">"actor"</span>: <span class="text-green-400">"human"</span>
+    }] }`;
+
+const chainCode = `<span class="text-indigo-400">states</span>:
+  <span class="text-indigo-400">lint</span>:
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">run_lint</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">test</span>
+        <span class="text-indigo-400">actor</span>: <span class="text-green-400">deterministic</span>
+        <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">cli</span>, <span class="text-indigo-400">command</span>: <span class="text-green-400">lint-check</span> }
+  <span class="text-indigo-400">test</span>:
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">run_tests</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">build</span>
+        <span class="text-indigo-400">actor</span>: <span class="text-green-400">deterministic</span>
+  <span class="text-indigo-400">build</span>:
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">build_artifact</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">ready_to_deploy</span>
+        <span class="text-indigo-400">actor</span>: <span class="text-green-400">deterministic</span>
+  <span class="text-indigo-400">ready_to_deploy</span>:
+    <span class="text-indigo-400">goal</span>: <span class="text-green-400">Confirm deployment</span>
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">deploy</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">deployed</span>
+        <span class="text-indigo-400">actor</span>: <span class="text-green-400">agent</span>          <span class="text-slate-600"># chain stops here</span>`;
+---
+
+<Landing
+	title="mcp-flowgate — Seven tools. Any number of capabilities."
+	description="Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with seven. Wire in MCP servers, CLIs, and REST APIs. The model searches, follows links, and every action is governed. All YAML."
+>
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-slate-300 hover:text-white text-sm transition-colors">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<!-- Hero -->
+<section class="landing-hero pt-32 pb-20 px-6">
+	<div class="max-w-4xl mx-auto text-center">
+		<div class="flex items-center justify-center gap-3 mb-6">
+			<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-medium">
+				<svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
+				Open source &middot; Apache-2.0
+			</span>
+		</div>
+		<h1 class="text-4xl md:text-6xl font-extrabold text-white leading-tight mb-6">
+			Seven tools.<br/>Any number of capabilities.
+		</h1>
+		<p class="text-xl text-slate-300 max-w-2xl mx-auto mb-10 leading-relaxed">
+			Your LLM reads your entire tool list on every call. That's 50-150 tokens
+			per tool, <em>before</em> it thinks a single thought. mcp-flowgate replaces
+			the whole list with seven fixed tools — and adds governance you
+			declare in YAML.
+		</p>
+		<div class="flex flex-wrap gap-4 justify-center">
+			<a href="https://github.com/matt-cochran/mcp-flowgate"
+				class="inline-flex items-center gap-2 px-6 py-3 bg-white/10 hover:bg-white/15 border border-white/20 text-white font-semibold rounded-lg transition-colors">
+				<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+				Star on GitHub
+			</a>
+			<a href="/quick-start"
+				class="inline-flex items-center px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors">
+				Get started
+			</a>
+		</div>
+
+		<div class="mt-16 code-window text-left max-w-2xl mx-auto">
+			<div class="code-window-header">
+				<span class="code-window-dot bg-red-500"></span>
+				<span class="code-window-dot bg-yellow-500"></span>
+				<span class="code-window-dot bg-green-500"></span>
+				<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+			</div>
+			<pre class="text-sm"><code class="text-slate-300" set:html={heroCode} /></pre>
+		</div>
+	</div>
+</section>
+
+<!-- Problem -->
+<section class="py-20 px-6 bg-white" id="problem">
+	<div class="max-w-3xl mx-auto">
+		<h2 class="text-3xl font-bold text-slate-900 mb-8">The problem you already have</h2>
+		<p class="text-lg text-slate-600 mb-6 leading-relaxed">
+			Every MCP tool you register lands in the model's system prompt. Ten tools?
+			Fine. Fifty? You're spending 5,000+ tokens per call just to describe
+			what's available.
+		</p>
+		<p class="text-lg text-slate-600 mb-6 leading-relaxed">
+			It gets worse. The model has to <em>reason</em> about every tool to pick
+			the right one. More tools means more output tokens spent choosing, more
+			wrong choices, more retries. A model staring at 50 tools and picking
+			the wrong one wastes a full round trip.
+		</p>
+		<p class="text-lg text-slate-600 leading-relaxed">
+			And none of it comes with audit, retries, approval gates, or governance.
+			You get a flat list and a prayer.
+		</p>
+	</div>
+</section>
+
+<!-- Solution -->
+<section class="py-20 px-6 bg-slate-50" id="solution">
+	<div class="max-w-5xl mx-auto">
+		<h2 class="text-3xl font-bold text-slate-900 mb-4 text-center">The fix: seven tools, forever</h2>
+		<p class="text-lg text-slate-600 mb-12 text-center max-w-2xl mx-auto">
+			mcp-flowgate exposes exactly seven MCP tools regardless of how many
+			capabilities you wire in. The model's tool list never grows.
+		</p>
+
+		<div class="grid md:grid-cols-2 gap-8">
+			<div class="bg-white rounded-xl border border-slate-200 p-8">
+				<h3 class="font-semibold text-indigo-600 text-sm uppercase tracking-wide mb-4">Discovery layer</h3>
+				<div class="space-y-4">
+					<div class="flex items-start gap-3">
+						<code class="text-sm bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-mono whitespace-nowrap">gateway.home</code>
+						<span class="text-slate-600 text-sm">Browse the full catalog</span>
+					</div>
+					<div class="flex items-start gap-3">
+						<code class="text-sm bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-mono whitespace-nowrap">gateway.search</code>
+						<span class="text-slate-600 text-sm">Find capabilities by keyword</span>
+					</div>
+					<div class="flex items-start gap-3">
+						<code class="text-sm bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-mono whitespace-nowrap">gateway.describe</code>
+						<span class="text-slate-600 text-sm">Get full schema on demand</span>
+					</div>
+				</div>
+			</div>
+
+			<div class="bg-white rounded-xl border border-slate-200 p-8">
+				<h3 class="font-semibold text-indigo-600 text-sm uppercase tracking-wide mb-4">Action layer</h3>
+				<div class="space-y-4">
+					<div class="flex items-start gap-3">
+						<code class="text-sm bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-mono whitespace-nowrap">workflow.start</code>
+						<span class="text-slate-600 text-sm">Begin a governed workflow</span>
+					</div>
+					<div class="flex items-start gap-3">
+						<code class="text-sm bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-mono whitespace-nowrap">workflow.get</code>
+						<span class="text-slate-600 text-sm">Check current state</span>
+					</div>
+					<div class="flex items-start gap-3">
+						<code class="text-sm bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-mono whitespace-nowrap">workflow.submit</code>
+						<span class="text-slate-600 text-sm">Execute a transition</span>
+					</div>
+					<div class="flex items-start gap-3">
+						<code class="text-sm bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-mono whitespace-nowrap">workflow.explain</code>
+						<span class="text-slate-600 text-sm">Inspect guards and rules</span>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<p class="text-center text-slate-500 mt-8">
+			Your 50 capabilities surface through search results and response links — loaded
+			one at a time, only when relevant. This pattern has a name:
+			<a href="https://en.wikipedia.org/wiki/HATEOAS" class="text-indigo-600 hover:text-indigo-500 underline">HATEOAS</a>.
+		</p>
+	</div>
+</section>
+
+<!-- Features -->
+<section class="py-20 px-6 bg-white" id="features">
+	<div class="max-w-5xl mx-auto">
+		<h2 class="text-3xl font-bold text-slate-900 mb-4 text-center">Governance you declare, not code</h2>
+		<p class="text-lg text-slate-600 mb-12 text-center max-w-2xl mx-auto">
+			Every guardrail is YAML. No glue code, no per-tool wrappers,
+			no host-specific routing.
+		</p>
+
+		<div class="feature-grid">
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Schema validation</h3>
+				<p class="text-slate-600 text-sm">
+					Define <code>inputSchema</code> on any capability. Bad input
+					never reaches your executor.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Guard gates</h3>
+				<p class="text-slate-600 text-sm">
+					<code>permission</code>, <code>role</code>, <code>expr</code>,
+					<code>evidence</code> — compose them with <code>allOf</code>,
+					<code>anyOf</code>, <code>not</code>.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Actor enforcement</h3>
+				<p class="text-slate-600 text-sm">
+					Tag a transition <code>actor: "human"</code> and the runtime
+					rejects LLM attempts with <code>ACTOR_MISMATCH</code>. Not a hint — a hard gate.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Deterministic chaining</h3>
+				<p class="text-slate-600 text-sm">
+					Tag steps <code>actor: "deterministic"</code>. The runtime
+					chains through them automatically. Zero LLM round trips
+					for computable work.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Structured audit</h3>
+				<p class="text-slate-600 text-sm">
+					Every action emits a structured JSON event. Route to file,
+					stdout, or your observability stack.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Reliability</h3>
+				<p class="text-slate-600 text-sm">
+					Timeout, retry with exponential backoff, fallback executors.
+					Declare it in YAML, not code.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Any backend</h3>
+				<p class="text-slate-600 text-sm">
+					MCP servers, shell commands, REST APIs. Import existing tools
+					with <code>proxy.import</code> — no rewriting.
+				</p>
+			</div>
+
+			<div class="feature-card">
+				<h3 class="font-semibold text-slate-900 mb-2">Hot reload</h3>
+				<p class="text-slate-600 text-sm">
+					Send SIGHUP to reload config without restarting. In-flight
+					workflows continue uninterrupted.
+				</p>
+			</div>
+		</div>
+	</div>
+</section>
+
+<!-- Wire proof -->
+<section class="py-20 px-6 bg-slate-50" id="proof">
+	<div class="max-w-3xl mx-auto">
+		<h2 class="text-3xl font-bold text-slate-900 mb-4">What the model actually sees</h2>
+		<p class="text-lg text-slate-600 mb-10">
+			Claims deserve evidence. Here's the actual wire format from the
+			<code>content-publish</code> workflow.
+		</p>
+
+		<div class="wire-step">
+			<p class="font-semibold text-slate-900 mb-2">1. The model searches — not scans</p>
+			<div class="code-window mt-3">
+				<pre class="text-sm"><code class="text-slate-300" set:html={wireSearch} /></pre>
+			</div>
+			<p class="text-sm text-slate-500 mt-2">One hit. Not 50 tool definitions.</p>
+		</div>
+
+		<div class="wire-step">
+			<p class="font-semibold text-slate-900 mb-2">2. Start the workflow — get a prefilled link back</p>
+			<div class="code-window mt-3">
+				<pre class="text-sm"><code class="text-slate-300" set:html={wireStart} /></pre>
+			</div>
+			<p class="text-sm text-slate-500 mt-2">The model doesn't guess the next step. It follows the link.</p>
+		</div>
+
+		<div class="wire-step">
+			<p class="font-semibold text-slate-900 mb-2">3. Governance stops the model cold</p>
+			<div class="code-window mt-3">
+				<pre class="text-sm"><code class="text-slate-300" set:html={wireGov} /></pre>
+			</div>
+			<p class="text-sm text-slate-500 mt-2">
+				No agent link exists. If the model tries anyway: <code>ACTOR_MISMATCH</code>.
+				The only way forward is a human.
+			</p>
+		</div>
+	</div>
+</section>
+
+<!-- Chaining -->
+<section class="py-20 px-6 bg-white">
+	<div class="max-w-3xl mx-auto">
+		<h2 class="text-3xl font-bold text-slate-900 mb-4">Skip what the LLM doesn't need to decide</h2>
+		<p class="text-lg text-slate-600 mb-8">
+			Linting, testing, building artifacts — these are computable. Tag them
+			<code>actor: "deterministic"</code> and the runtime chains through
+			them automatically.
+		</p>
+
+		<div class="code-window mb-8">
+			<div class="code-window-header">
+				<span class="code-window-dot bg-red-500"></span>
+				<span class="code-window-dot bg-yellow-500"></span>
+				<span class="code-window-dot bg-green-500"></span>
+				<span class="text-slate-500 text-xs ml-2">deploy-pipeline.yaml</span>
+			</div>
+			<pre class="text-sm"><code class="text-slate-300" set:html={chainCode} /></pre>
+		</div>
+
+		<p class="text-slate-600 leading-relaxed">
+			The model calls <code>workflow.start</code>. The runtime chains
+			lint, test, build automatically. Three executor calls,
+			zero LLM round trips. The response arrives at
+			<code>ready_to_deploy</code> with a <code>chain</code> trace
+			and <code>guidance</code> for the decision ahead.
+		</p>
+	</div>
+</section>
+
+<!-- CTA -->
+<section class="py-20 px-6 bg-gradient-to-br from-slate-900 to-indigo-950">
+	<div class="max-w-3xl mx-auto text-center">
+		<h2 class="text-3xl font-bold text-white mb-4">Ready to try it?</h2>
+		<p class="text-lg text-slate-300 mb-8">
+			One YAML file. Seven tools. Full governance. Free and open source.
+		</p>
+		<div class="flex flex-wrap gap-4 justify-center">
+			<a href="https://github.com/matt-cochran/mcp-flowgate"
+				class="inline-flex items-center gap-2 px-6 py-3 bg-white/10 hover:bg-white/15 border border-white/20 text-white font-semibold rounded-lg transition-colors">
+				<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+				Star on GitHub
+			</a>
+			<a href="/quick-start"
+				class="inline-flex items-center px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors">
+				Get started in 30 seconds
+			</a>
+		</div>
+	</div>
+</section>
+
+<!-- Footer -->
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+			<p class="text-slate-500 text-sm mt-2">
+				Free and open source under
+				<a href="https://github.com/matt-cochran/mcp-flowgate/blob/main/LICENSE" class="text-slate-400 hover:text-slate-300">Apache-2.0</a>.
+			</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm transition-colors">Docs</a></li>
+					<li><a href="/examples" class="text-slate-500 hover:text-slate-300 text-sm transition-colors">Examples</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm transition-colors">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm transition-colors">GitHub</a></li>
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate/issues" class="text-slate-500 hover:text-slate-300 text-sm transition-colors">Issues</a></li>
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate/blob/main/CONTRIBUTING.md" class="text-slate-500 hover:text-slate-300 text-sm transition-colors">Contributing</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>
