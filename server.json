@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.matt-cochran/mcp-flowgate",
+  "title": "mcp-flowgate",
+  "description": "MCP gateway that fronts any number of tools, CLIs and APIs behind seven governed, audited tools.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/matt-cochran/mcp-flowgate",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/matt-cochran/mcp-flowgate:0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
