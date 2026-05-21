@@ -1,0 +1,410 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const humanCode = `<span class="text-indigo-400">proxy</span>:
+  <span class="text-indigo-400">expose</span>:
+    - <span class="text-indigo-400">name</span>: <span class="text-green-400">deploy.prod</span>
+      <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">human</span>, <span class="text-indigo-400">queue</span>: <span class="text-green-400">prod-deployments</span> }`;
+
+const guardCode = `<span class="text-indigo-400">- name</span>: <span class="text-green-400">deploy.prod</span>
+  <span class="text-indigo-400">inputSchema</span>:
+    <span class="text-indigo-400">type</span>: <span class="text-green-400">object</span>
+    <span class="text-indigo-400">required</span>: [<span class="text-green-400">environment</span>, <span class="text-green-400">version</span>]
+    <span class="text-indigo-400">properties</span>:
+      <span class="text-indigo-400">environment</span>: { <span class="text-indigo-400">type</span>: <span class="text-green-400">string</span>, <span class="text-indigo-400">enum</span>: [<span class="text-green-400">staging</span>, <span class="text-green-400">production</span>] }
+  <span class="text-indigo-400">guards</span>:
+    - { <span class="text-indigo-400">kind</span>: <span class="text-green-400">evidence</span>, <span class="text-indigo-400">requires</span>: [<span class="text-green-400">tests_passed</span>] }
+  <span class="text-indigo-400">reliability</span>:
+    <span class="text-indigo-400">timeoutMs</span>: <span class="text-green-400">30000</span>
+    <span class="text-indigo-400">retry</span>: { <span class="text-indigo-400">maxAttempts</span>: <span class="text-green-400">3</span>, <span class="text-indigo-400">backoff</span>: <span class="text-green-400">exponential</span> }
+  <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">cli</span>, <span class="text-indigo-400">connection</span>: <span class="text-green-400">kubectl</span> }`;
+
+const evidenceCode = `<span class="text-slate-500"># one approval is not enough — require two</span>
+<span class="text-indigo-400">guards</span>:
+  - { <span class="text-indigo-400">kind</span>: <span class="text-green-400">evidence</span>, <span class="text-indigo-400">requires</span>: [{ <span class="text-indigo-400">kind</span>: <span class="text-green-400">approval</span>, <span class="text-indigo-400">count</span>: <span class="text-green-400">2</span> }] }`;
+---
+
+<Landing
+	title="Stop writing approval gates in code — mcp-flowgate"
+	description="Approval gates, permission checks, and retries written as code inside each tool drift, can't be reviewed as a set, and are invisible. Declare them as data instead."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-04-23">April 23, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">Stop writing approval gates in code</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				You needed production deploys to require a human sign-off. So
+				you wrote it: an <code>if</code> in the deploy tool that checks
+				a flag, posts to Slack, and waits. It worked. Then the refund
+				tool needed the same gate. Then the delete-user tool. Now the
+				rule lives in three places, each a little different — and
+				nobody can tell you, in one sentence, what your approval policy
+				actually is.
+			</p>
+
+			<p>
+				That's the trouble with governance written as application code.
+				It feels like the natural place to put it. It's the wrong
+				place.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Three things go wrong when governance is code</h2>
+
+			<p>
+				<strong>It drifts.</strong> Three hand-written copies of
+				"require approval" do not stay identical. One forgets to write
+				an audit line. One has a 30-second timeout, another waits
+				forever. Six months in, the gates are cousins, not clones —
+				and the differences are all accidental.
+			</p>
+
+			<p>
+				<strong>It can't be reviewed as a whole.</strong> Ask "what in
+				this system needs human approval?" and there's no answer to
+				point at. There's only a grep. Your policy isn't a document or
+				a config — it's an emergent property of scattered
+				<code>if</code> statements, and emergent properties are exactly
+				what you don't want a security policy to be.
+			</p>
+
+			<p>
+				<strong>It's tangled with the real work.</strong> The gate
+				lives in the same function as the deploy. You can't test "the
+				approval policy" in isolation, because there is no such thing
+				— there's only the deploy function, with a gate knotted
+				through it. Auditors can't read it. New engineers don't see it
+				until they trip over it.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The same gate, declared</h2>
+
+			<p>
+				Here is that approval gate in mcp-flowgate. The whole thing:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={humanCode} /></pre>
+			</div>
+
+			<p>
+				With <code>kind: human</code>, <code>deploy.prod</code> stops
+				deploying when the model asks for it. The runtime records a
+				<code>human.approval.requested</code> event, returns a pending
+				status, and halts. The action does not run. A person resolves
+				the queue.
+			</p>
+
+			<p>
+				The rule isn't buried inside the deploy logic. It's a property
+				of the exposure, sitting in a config file, where anyone can
+				read it without reading code. "What needs approval?" is now a
+				question you answer by searching one file for
+				<code>kind: human</code>.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">It's a layer, not a flag</h2>
+
+			<p>
+				Here's the part that makes declared governance more than
+				cosmetic. That gate isn't one clever line — it's three
+				independent layers, and they compose.
+			</p>
+
+			<p>
+				First, a transition can be tagged <code>actor: human</code>.
+				The runtime checks the caller and rejects an agent or anonymous
+				submitter with <code>ACTOR_MISMATCH</code> — before the
+				executor runs at all.
+			</p>
+
+			<p>
+				Second, the <code>human</code> executor itself only ever
+				records an approval request and returns a queued status. It
+				physically does not advance the workflow. So even if a config
+				author forgets the <code>actor: human</code> tag, the executor
+				still won't fire the action.
+			</p>
+
+			<p>
+				Third, you can stack a <code>permission</code> guard on top for
+				role-based control over <em>who</em> may resolve it.
+			</p>
+
+			<p>
+				Three layers, each enough on its own, none depending on the
+				others being correct. That's defense in depth — and you get it
+				by declaring, not by remembering to write all three checks into
+				every tool by hand.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The rest of governance has the same shape</h2>
+
+			<p>
+				Approval gates aren't special. Every guardrail you'd otherwise
+				hand-code is declarable:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={guardCode} /></pre>
+			</div>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li><strong><code>inputSchema</code></strong> is JSON Schema. It
+					runs before the executor. Bad input is rejected with
+					<code>INPUT_SCHEMA_VIOLATION</code> and never reaches your
+					tool. You didn't write a validation function.</li>
+				<li><strong><code>guards</code></strong> are preconditions —
+					<code>permission</code>, <code>role</code>, a small
+					<code>expr</code> language, or <code>evidence</code> that
+					some named fact was recorded. You didn't write a
+					precondition check.</li>
+				<li><strong><code>reliability</code></strong> is timeout, retry
+					with backoff, and fallback executors. You didn't write a
+					retry loop — and you didn't write three subtly different
+					ones.</li>
+			</ul>
+
+			<p>
+				Each of these would otherwise be code, copied into every tool
+				that needs it, drifting on its own schedule. Declared, each
+				rule lives once, at the level where the rule actually belongs.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Put the rule where it's invariant</h2>
+
+			<p>
+				That last phrase — "the level where the rule belongs" — is
+				worth slowing down on, because it's how declared governance
+				stops drift from creeping back.
+			</p>
+
+			<p>
+				A guard can sit at three levels, and the levels mean different
+				things. On a <strong>capability</strong>, a guard says "this
+				action can <em>never</em> run without X" — and it travels with
+				the capability everywhere it's used. On a <strong>wrapper</strong>
+				— a capability that layers policy onto another — a guard says
+				"whenever this policy is applied, also require Y." On a
+				<strong>transition</strong>, a guard says "going from this
+				state to that one specifically needs Z."
+			</p>
+
+			<p>
+				This sounds like filing. It's actually the safeguard. Put
+				"requires tests passed" on the capability, and no workflow that
+				uses it can forget the rule — remembering isn't the workflow's
+				job, because the rule is invariant and lives at the invariant
+				level. Application code has no clean way to express "this is
+				true everywhere this thing is used." Config makes you name the
+				level, and naming it is what keeps the rule from being three
+				slightly different rules a year from now.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Gates that depend on facts, not flags</h2>
+
+			<p>
+				The most interesting guard kind is <code>evidence</code>, and
+				it's worth its own section because it changes what a gate
+				<em>is</em>.
+			</p>
+
+			<p>
+				A normal guard checks a value. An evidence guard checks that
+				something <em>happened</em>. When an executor succeeds, it can
+				record evidence — a named kind, like <code>tests_passed</code>.
+				An evidence guard on a later transition requires that named
+				evidence to exist for this workflow before the transition can
+				fire.
+			</p>
+
+			<p>
+				So "you can't deploy until the tests passed" stops being a
+				boolean somebody set. It becomes "a test run actually recorded
+				<code>tests_passed</code> evidence on this workflow." You can't
+				satisfy it by flipping a flag, and you can't satisfy it by
+				reordering calls — the evidence has to have been genuinely
+				produced by a step that ran.
+			</p>
+
+			<p>
+				Evidence also counts. The object form requires N records of a
+				kind — a real two-person rule, declared in two lines:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={evidenceCode} /></pre>
+			</div>
+
+			<p>
+				That's a quorum. The transition is illegal until two separate
+				approval records exist. Writing that correctly by hand —
+				counting distinct approvers, not double-counting one, not
+				racing — is exactly the kind of code that goes subtly wrong.
+				Declared, it's a guard with a <code>count</code>.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Retries that don't double-fire</h2>
+
+			<p>
+				One more piece of hand-rolled governance worth retiring: the
+				idempotency key. A guarded action with retries is great until
+				the action has side effects — a payment, a created PR. A retry
+				of a call that <em>timed out but actually succeeded</em> can
+				do the work twice.
+			</p>
+
+			<p>
+				Declare <code>idempotencyKey: true</code> and the runtime
+				computes one key per submit and reuses it across every retry
+				<em>and</em> every fallback executor. The REST executor sends
+				it as an <code>Idempotency-Key</code> header; the CLI executor
+				exposes it as an environment variable. You declared "retry
+				this safely." You didn't hand-thread a key through a retry loop
+				and hope you covered the fallback path too.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Why config — and where the line is drawn</h2>
+
+			<p>
+				There's a fair objection here: configuration languages have a
+				habit of growing into bad programming languages. Give config an
+				expression syntax and soon it has loops, and soon your "config"
+				is unreviewable code wearing a YAML costume.
+			</p>
+
+			<p>
+				mcp-flowgate draws that line on purpose, and the docs are blunt
+				about it. The expression syntax is deliberately tiny —
+				<code>$.scope.path</code> references, basic comparisons, a
+				handful of operator objects. No embedded scripting language.
+				The reasoning, straight from the project's own design notes:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li><strong>Declarative purity.</strong> A YAML map is data you
+					can diff and reason about. An embedded expression language
+					is code hiding in data.</li>
+				<li><strong>Static validation.</strong> A tiny syntax can be
+					checked at config-load time — without running anything.</li>
+				<li><strong>Audit clarity.</strong> Audit events carry the
+					literal expression. Two small guards document themselves;
+					one dense scripting line doesn't.</li>
+				<li><strong>No smuggling.</strong> Once expressions can do real
+					work, application logic creeps out of executors and into
+					config — exactly the mixing this whole approach exists to
+					prevent.</li>
+			</ul>
+
+			<p>
+				The point was never "config can do anything." It's that
+				governance — gates, guards, retries, schemas — is a different
+				kind of thing from application logic, and it earns the right to
+				live somewhere you can see all of it at once.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What declared governance gives you for free</h2>
+
+			<p>
+				Because the rules are data, two things fall out at no extra
+				cost.
+			</p>
+
+			<p>
+				Every guard evaluation emits a <code>guard.evaluated</code>
+				audit event. Every rejected transition emits
+				<code>transition.rejected</code>. The audit log isn't a thing
+				you remembered to add — it's the running record of your policy
+				being enforced, call by call.
+			</p>
+
+			<p>
+				And the config gets a linter. <code>mcp-flowgate check</code>
+				validates it in CI — catching dangling transition targets,
+				unreachable states, and dead-end non-terminal states before
+				they ship. Governance scattered through application code
+				doesn't get a linter. It gets an incident.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The test</h2>
+
+			<p>
+				Here's the one question worth asking of your own system. If an
+				auditor — or a new engineer, or you in a year — asked "what here
+				requires human approval, and what happens when a call fails?"
+				— could you answer by opening one file?
+			</p>
+
+			<p>
+				If the answer is "no, you'd have to read the code of every
+				tool," your governance is application code. Move it. Make it
+				something you can point at.
+			</p>
+
+			<p class="mt-8">
+				The <a href="/guides/governance" class="text-indigo-600 hover:text-indigo-500">governance guide</a>
+				walks through every guard kind, actor enforcement, and
+				reliability in full, with worked configs.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

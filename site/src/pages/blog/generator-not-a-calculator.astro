@@ -1,0 +1,349 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const actorCode = `<span class="text-indigo-400">states</span>:
+  <span class="text-indigo-400">test</span>:
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">run_tests</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">ready_to_ship</span>
+        <span class="text-indigo-400">actor</span>: <span class="text-green-400">deterministic</span>     <span class="text-slate-500"># computation — the runtime runs it</span>
+        <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">cli</span>, <span class="text-indigo-400">command</span>: <span class="text-green-400">test-runner</span> }
+  <span class="text-indigo-400">ready_to_ship</span>:
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">ship</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">shipped</span>
+        <span class="text-indigo-400">actor</span>: <span class="text-green-400">agent</span>             <span class="text-slate-500"># judgment — the LLM decides</span>`;
+---
+
+<Landing
+	title="Your LLM is a generator, not a calculator — mcp-flowgate"
+	description="An LLM does one kind of work: generation. It cannot compute — by design, not by immaturity. Match each job to the tool built for it, and both shine."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-05-19">May 19, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">Your LLM is a generator, not a calculator</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				You asked the model something simple. Total these few numbers.
+				Work out which of two dates is later. Check whether this value
+				is inside the limit. It answered instantly, with total
+				confidence — and it was wrong.
+			</p>
+
+			<p>
+				The instinct is to think the model isn't smart enough yet, and
+				wait for the next version. That instinct is the bug. A smarter
+				model will not fix this. You handed a generator a calculator's
+				job.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">An LLM does exactly one thing</h2>
+
+			<p>
+				An LLM generates. That is the whole tool. Every output it
+				produces — a sentence, a decision, a function, a yes-or-no — is
+				<em>generated</em>: assembled, plausibly, from patterns. It is
+				not computed. Ask the same question twice and you can get two
+				different answers, because generation is nondeterministic by
+				nature. That isn't a defect waiting on a patch. It is the
+				definition of the thing.
+			</p>
+
+			<p>
+				So "the LLM makes a decision" and "the LLM writes code" are not
+				two different talents. They're the same act — generation —
+				aimed at different outputs. There is one job inside an LLM, and
+				it is a generative one.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Which means it cannot compute</h2>
+
+			<p>
+				Here's the consequence people step right past. A generator
+				cannot do deterministic work. Not "does it poorly" —
+				<em>cannot</em>, the way a poet cannot be a calculator.
+			</p>
+
+			<p>
+				Addition has exactly one correct answer; an LLM produces a
+				<em>likely</em> one. Comparing two dates, reading a clock,
+				checking a number against a bound — every one of those is a
+				deterministic operation, and every one is something an LLM will
+				answer fluently and sometimes wrongly, because it is generating
+				a plausible response, not running the operation.
+			</p>
+
+			<p>
+				The trap is that plausible looks exactly like correct. The
+				model is right often enough that you ship it. Then one ordinary
+				day it isn't — and there was no error, no exception, no signal.
+				Just a confidently generated wrong number, moving downstream.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">When all you have is a hammer</h2>
+
+			<p>
+				None of this would matter if we didn't keep doing it. We do,
+				for a plain reason: the LLM is the most exciting tool most of
+				us have ever been handed, and a thrilling new tool makes every
+				job look like its job. When all you have is a hammer,
+				everything looks like a nail.
+			</p>
+
+			<p>
+				But you don't only have a hammer. You have the other tool —
+				deterministic code. Seventy years of it. It is exact, instant,
+				effectively free, and it returns the same answer every single
+				time. There are two kinds of work in any real system,
+				generative and deterministic. There are two tools. The entire
+				skill is matching them.
+			</p>
+
+			<p>
+				The inverse case shows how obvious that normally is. You
+				<em>could</em> produce English with a deterministic
+				random-character generator — run it long enough and it
+				eventually types a coherent sentence, and eventually the
+				complete works of Shakespeare. Nobody does that. It's absurd on
+				its face: a deterministic tool grinding away at a generative
+				job. We would never. Yet the mirror image — a generative tool
+				doing deterministic work — we ship every day and call it an AI
+				feature.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Just because it can</h2>
+
+			<p>
+				The reason we make the mistake is seductive. The LLM
+				<em>can</em> answer "what's 847 plus 2,933." It will often be
+				right. It can <em>probably</em> tell you whether the tests
+				passed by reading the log. It can <em>usually</em> remember the
+				rule you wrote into the prompt.
+			</p>
+
+			<p>
+				Every "can" in that paragraph is the trap. That the tool
+				<em>can</em> produce an answer doesn't mean it should be the
+				thing producing it. You could ask a poet to total your invoice
+				line items. They might even get it right. There is a calculator
+				three inches away. Using an LLM for deterministic work isn't
+				reaching for power — it's choosing a nondeterministic process
+				for a question that already had a correct, instant, free answer
+				waiting in the other tool.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The deterministic job we hand over without noticing</h2>
+
+			<p>
+				Arithmetic is the obvious case. Here is the pervasive one.
+			</p>
+
+			<p>
+				Look at a real agent's system prompt, past the persona and the
+				task. It is a rulebook. "Always check the ticket exists before
+				deploying. Never refund above the limit without approval. Retry
+				a failed step twice, then stop."
+			</p>
+
+			<p>
+				Enforcing a rule is deterministic work. A rule is a
+				<em>guarantee</em> — it holds every time, or it was never a
+				rule. Writing it into a prompt hands that guarantee to a
+				nondeterministic generator, and a generator cannot deliver a
+				guarantee. It can only generate behavior that <em>probably</em>
+				matches the rule. A guardrail that holds "probably" is not a
+				guardrail. It's a hope with good formatting.
+			</p>
+
+			<p>
+				That is the same category error as the arithmetic — a
+				deterministic job given to a generator — scaled up to the part
+				of the system whose entire purpose was to keep you safe.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Give each job to its tool</h2>
+
+			<p>
+				The fix is not a better model. It's assigning each piece of
+				work to the tool built for it — and mcp-flowgate makes that
+				assignment explicit, one step at a time.
+			</p>
+
+			<p>
+				Every transition in a workflow is tagged with an
+				<code>actor</code>. <code>actor: deterministic</code> means
+				this step is computation: the runtime performs it, no model
+				involved. <code>actor: agent</code> means this step is
+				generative — a real judgment, handed to the LLM. The tag forces
+				the question to be answered out loud, for every step in the
+				system: is this work generative, or deterministic?
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">ship.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={actorCode} /></pre>
+			</div>
+
+			<p>
+				And the deterministic machinery runs everywhere else the model
+				would otherwise be quietly drafted in:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li>A <strong>guard</strong> checks a precondition — an
+					<code>expr</code> comparison, or <code>evidence</code> that
+					a step happened — by computing it. You never ask the model
+					"do you think the tests passed?" A guard checks that the
+					<code>tests_passed</code> evidence exists.</li>
+				<li><strong><code>branches</code></strong> route on a real
+					outcome. The CLI executor captures an exit code as data
+					(<code>treatNonZeroAsFailure: false</code>) and the runtime
+					picks the path — the model doesn't read a log and form an
+					opinion.</li>
+				<li><strong><code>inputSchema</code></strong> validates input.
+					Deterministically. The model is never asked whether the
+					arguments look acceptable.</li>
+				<li>The <strong>state machine</strong> tracks where the workflow
+					is, with a version counter. The model doesn't
+					<em>remember</em> its place — the runtime <em>knows</em> it.</li>
+			</ul>
+
+			<p>
+				Every one of those is deterministic work, done by code,
+				returning the same answer every time. What's left for the LLM
+				is the generative work: which capability to reach for, what to
+				write, and — given results it can now actually trust — whether
+				to proceed.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Then both shine</h2>
+
+			<p>
+				Match the tools to the work and each does what it is great at.
+				The code is exact. The LLM is extraordinary. The system is
+				reliable because the parts that are supposed to be reliable
+				actually are.
+			</p>
+
+			<p>
+				Mismatch them and you get the worst of both. Hand the LLM
+				deterministic work and it looks unreliable — so you blame the
+				model, and wait for a smarter one, and the smarter one is still
+				a generator and still gets it wrong. The model was never the
+				problem. The job assignment was.
+			</p>
+
+			<p>
+				A deploy workflow makes the split concrete. Running the tests
+				is deterministic — a <code>cli</code> executor, the exit code
+				captured as data. Deciding whether to ship, given a clean run
+				and a diff that looks riskier than usual, is generative — a
+				genuine judgment, <code>actor: agent</code>, the LLM's actual
+				job. And "tests must pass before deploy" is enforced by the
+				shape of the workflow itself: the deploy transition simply
+				isn't reachable until the test state has been cleared. It is
+				not a sentence in a prompt the model has to remember to honor.
+			</p>
+
+			<p>
+				Contrast the version we reach for by default: "run the tests,
+				tell me if they passed, and deploy if so." One model turn,
+				asked to execute a deterministic operation, evaluate a
+				deterministic result, honor a deterministic rule, and make one
+				generative decision — all at once, all by the single tool
+				that's only good at the last of the four.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The line isn't always clean</h2>
+
+			<p>
+				Real work doesn't always sort itself into two tidy bins. A task
+				usually has a generative core wrapped in deterministic
+				structure: deciding <em>what</em> to deploy is generative;
+				checking the tests passed <em>first</em> is deterministic; and
+				they live inside the same story. The skill isn't sorting whole
+				tasks. It's decomposing a task into its pieces and routing each
+				piece to its tool — rather than handing the whole blob to
+				whatever tool you happened to pick up first.
+			</p>
+
+			<p>
+				And yes, there's a cost. Today, it is faster to write one more
+				sentence in the prompt than to model a step properly. But the
+				sentence was never enforcing anything. You were borrowing
+				reliability you did not actually have.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Let the calculator calculate</h2>
+
+			<p>
+				When your agent flubs something deterministic, don't file a
+				ticket for a smarter model. A smarter generator is still a
+				generator, and it will still, eventually, generate the wrong
+				number with total confidence.
+			</p>
+
+			<p>
+				Reach for the other tool — the boring, exact one you've had all
+				along — and give the LLM only the work it is, genuinely, the
+				best tool in the world for. Let the calculator calculate. Let
+				the generator generate.
+			</p>
+
+			<p class="mt-8">
+				For the mechanism that runs the deterministic steps without
+				ever waking the model, read
+				<a href="/blog/deterministic-chaining" class="text-indigo-600 hover:text-indigo-500">Deterministic chaining</a>;
+				the <a href="/guides/workflows" class="text-indigo-600 hover:text-indigo-500">workflows guide</a>
+				shows how the <code>actor</code> split is wired in practice.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

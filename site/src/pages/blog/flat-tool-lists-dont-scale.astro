@@ -1,0 +1,383 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const wrapCode = `<span class="text-indigo-400">capabilities</span>:
+  <span class="text-indigo-400">raw.create_pr</span>:
+    <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">mcp</span>, <span class="text-indigo-400">connection</span>: <span class="text-green-400">github</span>, <span class="text-indigo-400">tool</span>: <span class="text-green-400">create_pull_request</span> }
+
+  <span class="text-indigo-400">safe.create_pr</span>:
+    <span class="text-indigo-400">wraps</span>: <span class="text-green-400">raw.create_pr</span>
+    <span class="text-indigo-400">guards</span>: [{ <span class="text-indigo-400">kind</span>: <span class="text-green-400">evidence</span>, <span class="text-indigo-400">requires</span>: [<span class="text-green-400">tests_passed</span>] }]
+
+  <span class="text-indigo-400">audited.create_pr</span>:
+    <span class="text-indigo-400">wraps</span>: <span class="text-green-400">safe.create_pr</span>
+    <span class="text-indigo-400">guards</span>: [{ <span class="text-indigo-400">kind</span>: <span class="text-green-400">permission</span>, <span class="text-indigo-400">permission</span>: <span class="text-green-400">github.write</span> }]`;
+
+const teamCode = `<span class="text-indigo-400">connections</span>:
+  <span class="text-indigo-400">project</span>:
+    <span class="text-indigo-400">kind</span>: <span class="text-green-400">mcp</span>
+    <span class="text-indigo-400">url</span>: <span class="text-green-400">http://project-gateway.svc:8000/mcp</span>
+
+<span class="text-indigo-400">proxy</span>:
+  <span class="text-indigo-400">import</span>:
+    - { <span class="text-indigo-400">connection</span>: <span class="text-green-400">project</span>, <span class="text-indigo-400">prefix</span>: <span class="text-green-400">project</span> }
+
+<span class="text-indigo-400">capabilities</span>:
+  <span class="text-indigo-400">team.create_pr</span>:
+    <span class="text-indigo-400">wraps</span>: <span class="text-green-400">project.github.create_pr</span>
+    <span class="text-indigo-400">guards</span>: [{ <span class="text-indigo-400">kind</span>: <span class="text-green-400">evidence</span>, <span class="text-indigo-400">requires</span>: [<span class="text-green-400">security_scanned</span>] }]
+
+<span class="text-indigo-400">audit</span>:
+  <span class="text-indigo-400">sink</span>: <span class="text-green-400">file</span>
+  <span class="text-indigo-400">path</span>: <span class="text-green-400">/var/log/team-gateway/audit.jsonl</span>`;
+---
+
+<Landing
+	title="Flat tool lists don't scale — and agents are about to find out — mcp-flowgate"
+	description="A flat tool list is fine at 12 tools and quietly breaks at 200. The failure isn't only tokens — it's that the model has no structure to navigate."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-04-30">April 30, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">Flat tool lists don't scale — and agents are about to find out</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				Your agent has 12 tools and it's fine. So you've never thought
+				of the tool list as a design problem. It's just a list. Lists
+				are free. You need a new capability, you append it.
+			</p>
+
+			<p>
+				That instinct is about to cost you. Not because the list gets
+				expensive — a separate
+				<a href="/blog/hidden-cost-of-mcp-tools" class="text-indigo-600 hover:text-indigo-500">post</a>
+				covers the token bill — but because a flat list stops being a
+				usable structure long before you notice it has.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">A flat list has no idea what's legal</h2>
+
+			<p>
+				Start with the deepest problem, the one that has nothing to do
+				with size. A flat tool list is stateless. Every tool in it is
+				always "available." Always callable. Right now.
+			</p>
+
+			<p>
+				But your actual system has order. You can't issue the refund
+				before the charge settles. You don't deploy before the tests
+				pass. The PR gets created after the branch exists, not before.
+				A list can't express any of that. It has no slot for "this
+				comes after that" or "this isn't legal yet."
+			</p>
+
+			<p>
+				So that knowledge has to live somewhere else — and "somewhere
+				else" is your system prompt, or the model's guesses. At 12
+				tools you paper over it: a few lines of prompt instructions,
+				"always check X before Y," and it mostly holds. At 200 tools,
+				across a dozen subsystems, there is no prompt long enough. The
+				model is improvising your state machine, and you've given it
+				no way to know when it's wrong.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">A flat list has no notion of relevance</h2>
+
+			<p>
+				The second problem is navigation. The model needs one tool out
+				of 200. The list offers exactly one way to find it: consider
+				all 200.
+			</p>
+
+			<p>
+				There's no "search the tools." There's only "scan the tools."
+				And the scan gets harder as the list grows in the most natural
+				way — you've wired in three issue trackers, so now there are
+				three <code>create_issue</code> variants with near-identical
+				descriptions, and the model has to disambiguate lookalikes on
+				every call.
+			</p>
+
+			<p>
+				A list doesn't rank. It doesn't cluster. It doesn't surface
+				what matters now. It just grows, and every entry you add makes
+				every other entry slightly harder to find.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Why this becomes everyone's problem</h2>
+
+			<p>
+				You might be thinking 200 tools is someone else's stress test.
+				Look at the direction of travel.
+			</p>
+
+			<p>
+				Every serious SaaS vendor is shipping an MCP server. An
+				enterprise agent doesn't connect to one of them — it connects
+				to the issue tracker, the cloud console, the data warehouse,
+				the CRM, the deploy system, the docs, the internal tools team's
+				six servers. Each one brings ten to fifty tools. You don't
+				<em>decide</em> to have 200 tools. You wire in the ninth useful
+				integration and you're there. 200 tools isn't a stress test;
+				it's a Tuesday in any reasonably ambitious deployment.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The fix is structure, not a bigger list</h2>
+
+			<p>
+				mcp-flowgate replaces the flat list with two things a list
+				never had: <em>search</em> and <em>state</em>.
+			</p>
+
+			<p>
+				<strong>Search.</strong> Instead of the model scanning,
+				<code>gateway.search</code> scores capabilities against their
+				title, description, and tags and returns the hits. The 200
+				capabilities still exist — they're just discovered on demand
+				instead of crowding the model's context. (It's lexical scoring,
+				so good titles and tags matter; more on that limit below.)
+			</p>
+
+			<p>
+				<strong>State.</strong> In mcp-flowgate every capability is a
+				transition in a state machine. A flat set of tools is just the
+				trivial case — it compiles to a single workflow called
+				<code>proxy_default</code>, one state, every tool looping back
+				to it. The moment you want ordering, you wrap the relevant
+				tools in a real workflow with real states. Now "what's legal
+				now" isn't a prompt instruction the model might forget — it's
+				computed by the engine and returned as links on every response.
+			</p>
+
+			<p>
+				And you don't rewrite what you already have.
+				<code>proxy.import</code> points at an existing MCP server,
+				lists its tools, and folds them into the registry — discoverable
+				through search, with no hand-copied definitions, and each
+				imported tool logged with a <code>capability.discovered</code>
+				audit event so you can see exactly what joined. The tools are
+				there. They're just not in the model's face.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Three concepts a flat list collapses into one</h2>
+
+			<p>
+				Here's the root of why a list breaks: it collapses three
+				different questions into one undifferentiated thing. Every
+				entry in a flat list is, all at once, "a thing that exists,"
+				"a thing that's offered to the caller," and "a thing that's
+				callable right now." mcp-flowgate keeps those three separate —
+				and the separation is exactly where structure becomes possible.
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li>A <strong>capability</strong> is what the gateway can do —
+					defined once, reusable.</li>
+				<li>An <strong>exposure</strong> is what it publishes to
+					callers — which capabilities are discoverable, and under
+					what name.</li>
+				<li>A <strong>workflow</strong> is when a capability may run —
+					the states, the order, the guards.</li>
+			</ul>
+
+			<p>
+				Pull them apart and each can carry its own structure. You can
+				define a capability once and expose it under three names. You
+				can have a capability that exists but is only reachable from
+				inside a particular workflow, never directly. A flat list can't
+				make any of those distinctions — it has one axis, and one axis
+				doesn't scale.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">One action, many policies — without duplicate entries</h2>
+
+			<p>
+				Watch how a flat list grows in practice. You have
+				<code>create_pr</code>. Then one team needs a version that
+				requires tests first, so you add <code>create_pr_safe</code>.
+				Then an admin path with fewer checks —
+				<code>create_pr_admin</code>. Three list entries, one real
+				action, differing only in policy. The list grew by cloning.
+			</p>
+
+			<p>
+				The trichotomy handles this with <em>wrappers</em>: one base
+				capability, with thin layers that add policy on top.
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={wrapCode} /></pre>
+			</div>
+
+			<p>
+				<code>raw.create_pr</code> is the one real implementation.
+				<code>safe.create_pr</code> inherits it and adds a guard;
+				<code>audited.create_pr</code> adds another. Different teams get
+				exposed different wrapper levels of the <em>same</em> underlying
+				action — and when the action itself changes, you change it in
+				one place. The list didn't grow by three lookalikes. The
+				capability graph grew by intent, and every layer says exactly
+				what policy it adds.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The pattern that actually scales: gateways stack</h2>
+
+			<p>
+				Here's the structural move that makes this hold up. A gateway
+				exposes seven MCP tools — and a gateway is itself an MCP
+				server. Which means a gateway can sit in front of another
+				gateway.
+			</p>
+
+			<p>
+				That turns one big flat list into a layered system, each layer
+				owning exactly one concern and passing the rest through:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li><strong>Enterprise gateway</strong> — identity, global
+					audit export, org-wide limits.</li>
+				<li><strong>Team gateway</strong> — team roles, team audit,
+					approval queues.</li>
+				<li><strong>Project gateway</strong> — project workflows,
+					resource locks, scoped capabilities.</li>
+				<li><strong>Local-dev gateway</strong> — the actual MCP
+					servers and CLIs.</li>
+			</ul>
+
+			<p>
+				Each layer's config stays small because it only does its own
+				job — the layer below already enforces everything below it.
+				Here's a team gateway that imports the project gateway beneath
+				it and adds one wrapper plus team-wide audit:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">team-gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={teamCode} /></pre>
+			</div>
+
+			<p>
+				That's a handful of meaningful lines. Everything else — the
+				capabilities, the project workflows, the local tools — came
+				from the gateway below. And because every layer exposes the
+				same seven tools, the layers above don't care how deep the
+				stack runs. The model at the top still sees seven tools,
+				whether there are 20 capabilities underneath or 2,000.
+			</p>
+
+			<p>
+				Within a single layer, the same instinct applies to the file
+				itself: an <code>include:</code> list composes a config from
+				responsibility-shaped slices — one file per workflow, one per
+				bounded context. The config scales the way the system does, by
+				splitting along concerns, not by growing one file forever.
+			</p>
+
+			<p>
+				That's the difference between a list and a system. A list
+				scales by getting longer. A system scales by getting layered.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The honest limits</h2>
+
+			<p>
+				This is structure, and structure has costs. Search is lexical,
+				not semantic — it leans on you writing clear titles and tags;
+				vague metadata gives vague results. A workflow is more to
+				author than a one-line list entry. The seven-tool surface adds
+				a search-then-start hop before the real work.
+			</p>
+
+			<p>
+				And a flat list is genuinely the right answer when you have a
+				handful of tools and no ordering to enforce. Don't build a
+				four-layer gateway stack for eight tools — that's structure for
+				its own sake, and the docs say as much: if one MCP server with
+				no governance needs is all you have, point your host straight
+				at it.
+			</p>
+
+			<p>
+				The argument isn't "always add structure." It's that a flat
+				list is a <em>default</em>, not a <em>plan</em> — and somewhere
+				on the way to 200 tools you need a plan.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The failure is quiet</h2>
+
+			<p>
+				A flat tool list works right up until it doesn't, and the
+				breakdown never announces itself. There's no error, no alert.
+				Just an agent that's gradually worse at picking the right tool,
+				slower to get there, and you can't point at the day it
+				changed.
+			</p>
+
+			<p>
+				The teams that handle the scaling curve well are the ones who
+				treated the tool list as a design surface <em>before</em> it
+				forced them to. The tool count where that decision is cheap is
+				the one you're at right now.
+			</p>
+
+			<p class="mt-8">
+				The full composition model — capabilities, exposures,
+				workflows, and the hierarchical gateway pattern — is in
+				<a href="https://github.com/matt-cochran/mcp-flowgate/blob/main/docs/MCP-CONTROL-ARCHITECTURE.md" class="text-indigo-600 hover:text-indigo-500">the MCP control architecture guide</a>.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

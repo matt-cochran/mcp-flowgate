@@ -1,0 +1,361 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const helloCode = `<span class="text-indigo-400">proxy</span>:
+  <span class="text-indigo-400">expose</span>:
+    - <span class="text-indigo-400">name</span>: <span class="text-green-400">hello.echo</span>
+      <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">noop</span> }`;
+
+const humanCode = `<span class="text-indigo-400">proxy</span>:
+  <span class="text-indigo-400">expose</span>:
+    - <span class="text-indigo-400">name</span>: <span class="text-green-400">deploy.prod</span>
+      <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">human</span>, <span class="text-indigo-400">queue</span>: <span class="text-green-400">prod-deployments</span> }`;
+
+const serveCode = `<span class="text-slate-500"># build it</span>
+cargo build --release
+
+<span class="text-slate-500"># run the gateway over stdio</span>
+./target/release/mcp-flowgate serve --config hello.yaml`;
+---
+
+<Landing
+	title="The bet behind mcp-flowgate — mcp-flowgate"
+	description="Your model reads every tool you register on every call, and none of it comes with governance. mcp-flowgate makes one bet about how to fix both."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-04-02">April 2, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">The bet behind mcp-flowgate</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				You wired five MCP tools into your agent and it worked
+				beautifully. So you added more. Twenty. Forty. Somewhere in
+				there it got slower, it started reaching for the wrong tool,
+				and the bill crept up — and you couldn't point at the line
+				that caused it.
+			</p>
+
+			<p>
+				That's not a prompt you can fix. It's a structural cost, and
+				it's the reason this project exists.
+			</p>
+
+			<p>
+				This is the first post on the mcp-flowgate blog. Before the
+				deep-dives start, it's worth saying plainly what this thing is,
+				what bet it makes, and — just as honestly — what it doesn't do
+				yet.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Two problems hiding in plain sight</h2>
+
+			<p>
+				Every MCP tool you register does two things you never asked
+				for.
+			</p>
+
+			<p>
+				First, its definition — the name, the description, the JSON
+				schema — gets loaded into the model's context on <em>every
+				single call</em>. Five tools is nothing. Fifty is thousands of
+				tokens spent before the model has a single thought. You pay
+				that on every turn, every retry, for the whole conversation.
+			</p>
+
+			<p>
+				Second, none of it comes with governance. MCP hands the model
+				a flat list of tools and trusts it to behave. No audit trail.
+				No approval gate. No retry policy. No record of what ran, in
+				what order, and why. A flat list and a prayer.
+			</p>
+
+			<p>
+				Here's the part that stings: both problems get <em>worse</em>
+				the more useful your agent becomes. The teams hitting them
+				hardest are the ones doing the most ambitious work — the ones
+				wiring in the issue tracker and the cloud console and the data
+				warehouse and the deploy system, because that's where the real
+				value is.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The bet</h2>
+
+			<p>
+				mcp-flowgate makes one bet: the model should never see your
+				tool list.
+			</p>
+
+			<p>
+				No matter how many capabilities you wire in — five, fifty,
+				five hundred — the model sees exactly seven tools. Three for
+				discovery, four for action:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li><strong>Discovery:</strong> <code>gateway.home</code>,
+					<code>gateway.search</code>, <code>gateway.describe</code></li>
+				<li><strong>Action:</strong> <code>workflow.start</code>,
+					<code>workflow.get</code>, <code>workflow.submit</code>,
+					<code>workflow.explain</code></li>
+			</ul>
+
+			<p>
+				Your capabilities still exist. They just don't sit in the
+				model's context taking up room. The model calls
+				<code>gateway.search</code> to find what it needs, and every
+				response hands back the legal next moves as links. It follows
+				links instead of scanning a menu.
+			</p>
+
+			<p>
+				The second half of the bet: governance should be something you
+				<em>declare</em>, not something you code.
+			</p>
+
+			<p>
+				Here's a tool with no governance — one line of real config:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={helloCode} /></pre>
+			</div>
+
+			<p>
+				And here's that same shape turned into an approval gate:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={humanCode} /></pre>
+			</div>
+
+			<p>
+				That's the whole change. With <code>kind: human</code>,
+				<code>deploy.prod</code> no longer deploys when the model asks
+				for it. It records a <code>human.approval.requested</code>
+				event, returns a "pending" status, and stops. A person resolves
+				the queue. The model has no path around the gate — not because
+				you wrote a defensive check inside the tool, but because you
+				declared a rule the runtime enforces.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">How the model finds anything</h2>
+
+			<p>
+				If the model only ever sees seven tools, a fair question is:
+				how does it actually <em>use</em> the fifty capabilities behind
+				them?
+			</p>
+
+			<p>
+				It searches. When the model needs to do something, it calls
+				<code>gateway.search</code> with a plain-language query and
+				gets back the matching capabilities — each as a hit with a
+				title and a link to start it. If it needs the exact argument
+				schema for one of them, <code>gateway.describe</code> returns
+				that, for that one capability, on demand. The model never holds
+				the whole catalogue. It asks a question and gets a small,
+				specific answer.
+			</p>
+
+			<p>
+				From there it's links all the way down. The model calls
+				<code>workflow.start</code>, and the response carries the legal
+				next moves. It submits one, and the next response carries the
+				moves legal from the <em>new</em> state. The model holds one
+				current response and follows what it offers. That interaction
+				model is identical whether there are five capabilities behind
+				the gateway or five hundred — which is the whole point.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Start flat, add governance later</h2>
+
+			<p>
+				You don't have to design a state machine on day one. A flat
+				list of tools — "proxy mode" — is just the trivial case: one
+				state, every tool looping back to it. Internally it even
+				compiles to a workflow, one called <code>proxy_default</code>.
+				A flat tool and a fifty-state governed workflow run on the same
+				engine.
+			</p>
+
+			<p>
+				So you start ungoverned. When one tool — the deploy, the
+				refund, the user-delete — needs rules, you wrap <em>that one</em>
+				in a workflow with real states and guards. Nothing else
+				changes. The other tools keep working untouched, and the
+				model's surface stays at seven tools. Governance is something
+				you add where you need it, not a framework you commit to up
+				front.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What's actually built today</h2>
+
+			<p>
+				This is a pre-1.0 project, so let me be precise about what
+				exists rather than what's on a roadmap.
+			</p>
+
+			<p>
+				What works now: the seven-tool surface; capabilities wired to
+				MCP servers, CLI commands, and REST APIs; guards that gate on
+				permission, role, a small expression language, or recorded
+				evidence; JSON Schema validation that runs before any executor;
+				retries with backoff, fallback executors, and idempotency keys;
+				deterministic chaining for steps that don't need a decision; a
+				structured audit event for every meaningful step; and
+				persistent stores — SQLite or Postgres — for state that
+				survives a restart.
+			</p>
+
+			<p>
+				What I won't claim: there are no published case studies yet.
+				Throughput under real production load hasn't been measured —
+				only microbenchmarks of the gateway's own overhead, which sits
+				comfortably under a millisecond per call on the reference
+				machine. <code>permission</code> and <code>role</code> guards
+				assume a multi-tenant deployment with real identity wiring; the
+				bundled binary treats every caller as anonymous, which is the
+				right default for one developer on a laptop but is not a
+				security boundary. The docs say all of this plainly. So will
+				this blog.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Who this is for</h2>
+
+			<p>
+				Honesty cuts both ways, so here's when <em>not</em> to reach
+				for this. If you have a single MCP server and no governance
+				needs — no audit, no approvals, no retries, no multi-step
+				workflows — point your host straight at it. A gateway in the
+				middle would be machinery you don't need.
+			</p>
+
+			<p>
+				mcp-flowgate earns its place when you have several capabilities
+				<em>and</em> you care about at least one of: fewer tokens in
+				the model's context, an audit trail, retries and fallbacks,
+				approval gates, schema validation, or ordered multi-step
+				workflows. The more of those you need, the more the gateway is
+				doing for you.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What this blog is for</h2>
+
+			<p>
+				Nine deep-dives are coming, each about one specific piece of how
+				this works — and why it works that way:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li><strong>What a deploy pipeline and an expense report have
+					in common</strong> — why this isn't a coding tool.</li>
+				<li><strong>The hidden cost of 50 MCP tools</strong> — the
+					token math, measured.</li>
+				<li><strong>Why your AI agent needs a state machine</strong> —
+					the boring pattern that makes agents governable.</li>
+				<li><strong>HATEOAS for AI</strong> — why REST's oldest idea is
+					the right pattern for agents.</li>
+				<li><strong>Stop writing approval gates in code</strong> — why
+					governance belongs in config, not application logic.</li>
+				<li><strong>Flat tool lists don't scale</strong> — what quietly
+					breaks when an agent has 200 tools.</li>
+				<li><strong>Where MCP security actually lives</strong> — and,
+					honestly, where it doesn't yet.</li>
+				<li><strong>Your LLM is a generator, not a calculator</strong> —
+					using the right tool for each kind of work.</li>
+				<li><strong>Deterministic chaining</strong> — letting the
+					runtime handle the steps that aren't decisions.</li>
+			</ul>
+
+			<p>
+				Every post is grounded in the actual tool — real config, real
+				output on the wire, real numbers. If a claim isn't traceable to
+				something you can run, it doesn't go in.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Start here</h2>
+
+			<p>
+				The quick start takes about 30 seconds. Write a one-tool config
+				like the <code>hello.echo</code> example above, then build and
+				run the gateway:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">terminal</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={serveCode} /></pre>
+			</div>
+
+			<p>
+				Point your MCP host at it — Claude Desktop, an IDE, an agent
+				runner — and seven tools appear in the model's list. Then add a
+				second capability to the config, and watch the count stay at
+				seven.
+			</p>
+
+			<p>
+				That's the bet. The rest of this blog is the evidence — start
+				with <a href="/blog/hidden-cost-of-mcp-tools" class="text-indigo-600 hover:text-indigo-500">the token math</a>,
+				or jump straight to the <a href="/quick-start" class="text-indigo-600 hover:text-indigo-500">quick start</a>.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

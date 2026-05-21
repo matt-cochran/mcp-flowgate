@@ -26,32 +26,152 @@ import Landing from '../../layouts/Landing.astro';
 			Project updates, technical deep dives, and things we learned building mcp-flowgate.
 		</p>
 
-		<!-- Post 1 -->
+		<!-- Welcome -->
 		<article class="blog-card mb-8">
-			<a href="/blog/why-seven-tools" class="block">
-				<time class="text-sm text-slate-400" datetime="2026-05-21">May 21, 2026</time>
+			<a href="/blog/welcome" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-04-02">April 2, 2026</time>
 				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
-					Why seven tools is the right number
+					The bet behind mcp-flowgate
 				</h2>
 				<p class="text-slate-600">
-					Every MCP tool you register costs tokens. We measured the math,
-					built the fix, and watched models get better at tool selection
-					when given less to choose from.
+					Your model reads every tool you register on every call, and
+					none of it comes with governance. Here's the one bet
+					mcp-flowgate makes to fix both — and an honest account of
+					what's built so far.
 				</p>
 			</a>
 		</article>
 
-		<!-- Post 2 -->
+		<!-- Not just for coding -->
 		<article class="blog-card mb-8">
-			<a href="/blog/deterministic-chaining-explained" class="block">
-				<time class="text-sm text-slate-400" datetime="2026-05-21">May 21, 2026</time>
+			<a href="/blog/not-just-for-coding" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-04-09">April 9, 2026</time>
 				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
-					Deterministic chaining: skip what the LLM doesn't need to decide
+					What do a deploy pipeline and an expense report have in common?
 				</h2>
 				<p class="text-slate-600">
-					Not every step in a pipeline needs judgment. We built a chaining
-					mechanism that auto-executes computable steps and hands back
-					control at decision points.
+					mcp-flowgate is not an agentic coding tool. Coding is one
+					use case among many — and new regulation is fast making the
+					audit trail it produces a requirement.
+				</p>
+			</a>
+		</article>
+
+		<!-- Hidden cost -->
+		<article class="blog-card mb-8">
+			<a href="/blog/hidden-cost-of-mcp-tools" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-04-14">April 14, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					The hidden cost of 50 MCP tools
+				</h2>
+				<p class="text-slate-600">
+					Every tool you register is a recurring tax: input tokens for
+					its definition, output tokens for the reasoning to choose
+					it. Here's the math, measured.
+				</p>
+			</a>
+		</article>
+
+		<!-- State machines -->
+		<article class="blog-card mb-8">
+			<a href="/blog/why-agents-need-state-machines" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-04-16">April 16, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Why your AI agent needs a state machine
+				</h2>
+				<p class="text-slate-600">
+					When an agent acts out of order, the fix isn't a longer
+					prompt. It's the oldest, most boring pattern in computing —
+					and agent governance is exactly the problem it was built for.
+				</p>
+			</a>
+		</article>
+
+		<!-- HATEOAS -->
+		<article class="blog-card mb-8">
+			<a href="/blog/hateoas-for-ai" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-04-21">April 21, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					HATEOAS for AI: REST's oldest idea is the right pattern for agents
+				</h2>
+				<p class="text-slate-600">
+					An LLM is a client that's bad at remembering rules. So stop
+					making it. Let every response carry the legal next moves.
+				</p>
+			</a>
+		</article>
+
+		<!-- Governance -->
+		<article class="blog-card mb-8">
+			<a href="/blog/governance-is-not-application-code" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-04-23">April 23, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Stop writing approval gates in code
+				</h2>
+				<p class="text-slate-600">
+					Approval gates and permission checks written inside each
+					tool drift, can't be reviewed as a set, and are invisible.
+					Declare them as data instead.
+				</p>
+			</a>
+		</article>
+
+		<!-- Flat tool lists -->
+		<article class="blog-card mb-8">
+			<a href="/blog/flat-tool-lists-dont-scale" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-04-30">April 30, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Flat tool lists don't scale — and agents are about to find out
+				</h2>
+				<p class="text-slate-600">
+					A flat tool list is fine at 12 tools and quietly breaks at
+					200. The failure isn't only tokens — it's that the model has
+					no structure to navigate.
+				</p>
+			</a>
+		</article>
+
+		<!-- MCP security -->
+		<article class="blog-card mb-8">
+			<a href="/blog/mcp-security-gateway-layer" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-05-07">May 7, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Where MCP security actually lives — and where it doesn't yet
+				</h2>
+				<p class="text-slate-600">
+					The security controls that don't fit in a tool definition
+					need a layer of their own. Here's what a gateway enforces —
+					and an honest account of what it doesn't.
+				</p>
+			</a>
+		</article>
+
+		<!-- Generator not a calculator -->
+		<article class="blog-card mb-8">
+			<a href="/blog/generator-not-a-calculator" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-05-19">May 19, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Your LLM is a generator, not a calculator
+				</h2>
+				<p class="text-slate-600">
+					An LLM does one kind of work: generation. It can't compute —
+					by design, not by immaturity. Match each job to the tool
+					built for it, and both shine.
+				</p>
+			</a>
+		</article>
+
+		<!-- Deterministic chaining -->
+		<article class="blog-card mb-8">
+			<a href="/blog/deterministic-chaining" class="block">
+				<time class="text-sm text-slate-400" datetime="2026-05-21">May 21, 2026</time>
+				<h2 class="text-xl font-semibold text-slate-900 mt-1 mb-2 hover:text-indigo-600 transition-colors">
+					Deterministic chaining: when you don't need the LLM to decide
+				</h2>
+				<p class="text-slate-600">
+					Not every pipeline step is a decision. Tag the computable
+					ones and the runtime runs them itself — the model only wakes
+					for the choices that matter.
 				</p>
 			</a>
 		</article>
