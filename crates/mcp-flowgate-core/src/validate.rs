@@ -137,6 +137,35 @@ fn validate_one_workflow(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
         }
     }
 
+    // Blackboard slot check: if blackboard is declared, warn on any output: key not in the set.
+    if let Some(blackboard) = def.get("blackboard") {
+        let declared: HashSet<&str> = match blackboard {
+            Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect(),
+            Value::Object(obj) => obj.keys().map(String::as_str).collect(),
+            _ => HashSet::new(),
+        };
+
+        for (state_name, state_def) in states {
+            if let Some(ts) = state_def.get("transitions").and_then(Value::as_object) {
+                for (t_name, t_def) in ts {
+                    if let Some(output) = t_def.get("output").and_then(Value::as_object) {
+                        for key in output.keys() {
+                            if !declared.contains(key.as_str()) {
+                                out.push(Diagnostic::Warning(format!(
+                                    "workflow '{id}': transition '{t_name}' in state '{state_name}' \
+                                     writes output key '{key}' which is not declared in the blackboard"
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Reachability: BFS from initialState
     if state_names.contains(initial_state) {
         let mut reachable = HashSet::new();
