@@ -231,7 +231,7 @@ fn resolve_operand(s: &str, context: &Value, arguments: &Value, input: &Value) -
 
 /// Convert a dot-notation path (e.g. `items[0].name` or `items.0.name`)
 /// into a JSON Pointer string (e.g. `/items/0/name`).
-fn path_to_pointer(path: &str) -> String {
+pub(crate) fn path_to_pointer(path: &str) -> String {
     let mut result = String::with_capacity(path.len() + 1);
     result.push('/');
     let mut i = 0;
