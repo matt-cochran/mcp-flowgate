@@ -1,27 +1,33 @@
 //! Tests for `FileAuditSink` date rotation and category splitting.
 //!
-//! Clock injection lets us control time deterministically — no sleeps.
+//! All tests use `InMemoryFilesystem` — no `TempDir`, no real I/O. Each test
+//! creates its own filesystem instance so they are fully independent and
+//! parallel-safe by construction.
+
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeZone, Utc};
 use mcp_flowgate_core::audit::{AuditEvent, AuditSink, FileAuditSink, RotationInterval};
-use std::sync::{Arc, Mutex};
-use tempfile::TempDir;
+use mcp_flowgate_core::fs::InMemoryFilesystem;
 
 /// Build a deterministic `FileAuditSink` whose clock is backed by a shared
-/// `Arc<Mutex<DateTime<Utc>>>` so tests can advance it without sleeping.
-fn make_sink_with_clock(
-    dir: &TempDir,
+/// `Arc<Mutex<DateTime<Utc>>>` and whose I/O is entirely in-memory.
+fn make_sink(
+    dir: impl Into<PathBuf>,
     interval: RotationInterval,
     initial: DateTime<Utc>,
-) -> (FileAuditSink, Arc<Mutex<DateTime<Utc>>>) {
+) -> (FileAuditSink, Arc<Mutex<DateTime<Utc>>>, InMemoryFilesystem) {
     let clock_state = Arc::new(Mutex::new(initial));
     let clock_for_sink = clock_state.clone();
-    let sink = FileAuditSink::with_clock(
-        dir.path(),
+    let mem_fs = InMemoryFilesystem::new();
+    let sink = FileAuditSink::with_clock_and_fs(
+        dir,
         interval,
         Box::new(move || *clock_for_sink.lock().unwrap()),
+        Arc::new(mem_fs.clone()),
     );
-    (sink, clock_state)
+    (sink, clock_state, mem_fs)
 }
 
 // ---------------------------------------------------------------------------
@@ -30,11 +36,11 @@ fn make_sink_with_clock(
 
 #[tokio::test]
 async fn file_sink_rotates_on_interval() {
-    let dir = TempDir::new().unwrap();
+    let dir = PathBuf::from("/audit");
 
     // Pin clock to 2026-01-15 12:00 UTC (daily rotation)
     let t1: DateTime<Utc> = Utc.with_ymd_and_hms(2026, 1, 15, 12, 0, 0).unwrap();
-    let (sink, clock) = make_sink_with_clock(&dir, RotationInterval::Daily, t1);
+    let (sink, clock, mem_fs) = make_sink(dir, RotationInterval::Daily, t1);
 
     // Record first event at 2026-01-15
     let event1 = AuditEvent::new("workflow.started");
@@ -48,11 +54,11 @@ async fn file_sink_rotates_on_interval() {
     let event2 = AuditEvent::new("workflow.started");
     sink.record(event2).await.expect("second record");
 
-    // Expect two separate audit log files
-    let mut files: Vec<_> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
+    // Collect all -audit.log files from the in-memory filesystem.
+    let mut files: Vec<String> = mem_fs
+        .files()
+        .into_iter()
+        .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
         .filter(|n| n.ends_with("-audit.log"))
         .collect();
     files.sort();
@@ -81,37 +87,44 @@ async fn file_sink_rotates_on_interval() {
 
 #[tokio::test]
 async fn transition_and_audit_streams_split_by_name() {
-    let dir = TempDir::new().unwrap();
-
-    // Fix clock so the stamp never changes within this test
+    let dir = PathBuf::from("/audit");
     let fixed: DateTime<Utc> = Utc.with_ymd_and_hms(2026, 3, 10, 9, 0, 0).unwrap();
-    let (sink, _clock) = make_sink_with_clock(&dir, RotationInterval::Daily, fixed);
+    let (sink, _clock, mem_fs) = make_sink(dir, RotationInterval::Daily, fixed);
     let stamp = "2026-03-10";
 
     // Record a workflow.transition event (goes to transitions log)
-    let transition_event = AuditEvent::new("workflow.transition");
-    sink.record(transition_event).await.expect("transition record");
+    sink.record(AuditEvent::new("workflow.transition"))
+        .await
+        .expect("transition record");
 
     // Record an unrelated event (goes to audit log)
-    let audit_event = AuditEvent::new("workflow.started");
-    sink.record(audit_event).await.expect("audit record");
+    sink.record(AuditEvent::new("workflow.started"))
+        .await
+        .expect("audit record");
 
-    let transitions_file = dir.path().join(format!("{stamp}-transitions.log"));
-    let audit_file = dir.path().join(format!("{stamp}-audit.log"));
+    let transitions_path = PathBuf::from(format!("/audit/{stamp}-transitions.log"));
+    let audit_path = PathBuf::from(format!("/audit/{stamp}-audit.log"));
+
+    let files = mem_fs.files();
+    let paths: Vec<&PathBuf> = files.iter().map(|(p, _)| p).collect();
 
     assert!(
-        transitions_file.exists(),
-        "transitions log should exist at {:?}",
-        transitions_file
+        paths.contains(&&transitions_path),
+        "transitions log should exist, got paths: {:?}",
+        paths
     );
     assert!(
-        audit_file.exists(),
-        "audit log should exist at {:?}",
-        audit_file
+        paths.contains(&&audit_path),
+        "audit log should exist, got paths: {:?}",
+        paths
     );
 
-    // Verify content: transitions log has exactly one line (the transition event)
-    let trans_content = std::fs::read_to_string(&transitions_file).unwrap();
+    // Verify content: transitions log has exactly one line
+    let trans_content = files
+        .iter()
+        .find(|(p, _)| p == &transitions_path)
+        .map(|(_, c)| c.clone())
+        .unwrap();
     let trans_lines: Vec<&str> = trans_content
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -128,8 +141,12 @@ async fn transition_and_audit_streams_split_by_name() {
         "transitions log should contain the transition event"
     );
 
-    // Verify content: audit log has exactly one line (the non-transition event)
-    let audit_content = std::fs::read_to_string(&audit_file).unwrap();
+    // Verify content: audit log has exactly one line
+    let audit_content = files
+        .iter()
+        .find(|(p, _)| p == &audit_path)
+        .map(|(_, c)| c.clone())
+        .unwrap();
     let audit_lines: Vec<&str> = audit_content
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -153,10 +170,9 @@ async fn transition_and_audit_streams_split_by_name() {
 
 #[tokio::test]
 async fn hourly_rotation_uses_hour_stamp() {
-    let dir = TempDir::new().unwrap();
-
+    let dir = PathBuf::from("/audit");
     let t1: DateTime<Utc> = Utc.with_ymd_and_hms(2026, 6, 1, 14, 30, 0).unwrap();
-    let (sink, clock) = make_sink_with_clock(&dir, RotationInterval::Hourly, t1);
+    let (sink, clock, mem_fs) = make_sink(dir, RotationInterval::Hourly, t1);
 
     sink.record(AuditEvent::new("workflow.started"))
         .await
@@ -170,10 +186,10 @@ async fn hourly_rotation_uses_hour_stamp() {
         .await
         .unwrap();
 
-    let mut files: Vec<_> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
+    let mut files: Vec<String> = mem_fs
+        .files()
+        .into_iter()
+        .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
         .filter(|n| n.ends_with("-audit.log"))
         .collect();
     files.sort();
@@ -202,10 +218,9 @@ async fn hourly_rotation_uses_hour_stamp() {
 
 #[tokio::test]
 async fn weekly_rotation_uses_iso_week_stamp() {
-    let dir = TempDir::new().unwrap();
-
+    let dir = PathBuf::from("/audit");
     let t1: DateTime<Utc> = Utc.with_ymd_and_hms(2026, 1, 12, 10, 0, 0).unwrap();
-    let (sink, clock) = make_sink_with_clock(&dir, RotationInterval::Weekly, t1);
+    let (sink, clock, mem_fs) = make_sink(dir, RotationInterval::Weekly, t1);
 
     sink.record(AuditEvent::new("workflow.started"))
         .await
@@ -219,10 +234,10 @@ async fn weekly_rotation_uses_iso_week_stamp() {
         .await
         .unwrap();
 
-    let mut files: Vec<_> = std::fs::read_dir(dir.path())
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
+    let mut files: Vec<String> = mem_fs
+        .files()
+        .into_iter()
+        .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
         .filter(|n| n.ends_with("-audit.log"))
         .collect();
     files.sort();

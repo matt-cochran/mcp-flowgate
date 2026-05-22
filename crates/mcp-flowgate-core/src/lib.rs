@@ -10,6 +10,7 @@ pub mod config;
 pub mod discovery;
 pub mod discovery_indexer;
 pub mod error;
+pub mod fs;
 pub mod guards;
 pub mod hot_reload;
 pub mod mapping;
@@ -34,6 +35,7 @@ pub use discovery::{
     SearchRequest,
 };
 pub use error::{ErrorClass, ExecutorError, RuntimeError};
+pub use fs::{Filesystem, InMemoryFilesystem, RealFilesystem};
 pub use guards::DefaultGuardEvaluator;
 pub use mapping::{merge_output, read_in_scopes};
 pub use model::*;

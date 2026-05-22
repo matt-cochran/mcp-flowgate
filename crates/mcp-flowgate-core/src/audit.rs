@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::fs::{Filesystem, RealFilesystem};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub id: String,
@@ -186,31 +188,36 @@ pub struct FileAuditSink {
     dir: PathBuf,
     rotation: RotationInterval,
     clock: ClockFn,
+    fs: Arc<dyn Filesystem>,
     lock: tokio::sync::Mutex<()>,
 }
 
 impl FileAuditSink {
     /// Create a sink that writes into `dir` with daily rotation and the system
-    /// clock.
+    /// clock. Uses [`RealFilesystem`] for production I/O.
     pub fn new(dir: impl Into<PathBuf>, rotation: RotationInterval) -> Self {
         Self {
             dir: dir.into(),
             rotation,
             clock: Box::new(Utc::now),
+            fs: Arc::new(RealFilesystem),
             lock: tokio::sync::Mutex::new(()),
         }
     }
 
-    /// Create a sink with a custom clock. Intended for deterministic testing.
-    pub fn with_clock(
+    /// Create a sink with a custom clock **and** a custom filesystem. Intended
+    /// for unit tests that want deterministic time and no real I/O.
+    pub fn with_clock_and_fs(
         dir: impl Into<PathBuf>,
         rotation: RotationInterval,
         clock: ClockFn,
+        fs: Arc<dyn Filesystem>,
     ) -> Self {
         Self {
             dir: dir.into(),
             rotation,
             clock,
+            fs,
             lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -230,47 +237,37 @@ impl FileAuditSink {
 #[async_trait]
 impl AuditSink for FileAuditSink {
     async fn record(&self, event: AuditEvent) -> anyhow::Result<()> {
-        use tokio::io::AsyncWriteExt;
         let _guard = self.lock.lock().await;
         // Ensure the directory exists (create on first write rather than in
         // the constructor so tests that never record don't create empty dirs).
-        tokio::fs::create_dir_all(&self.dir).await?;
+        self.fs.create_dir_all(&self.dir).await?;
         let path = self.log_path(&event);
-        let mut file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await?;
         let mut line = serde_json::to_vec(&event)?;
         line.push(b'\n');
-        file.write_all(&line).await?;
-        file.flush().await?;
+        // `Filesystem::append` flushes before returning Ok — durability is
+        // preserved even though we no longer call tokio::fs directly.
+        self.fs.append(&path, &line).await?;
         Ok(())
     }
 
     /// Read all events from every rotated file in the directory and return them
     /// ordered chronologically by each event's `timestamp` field. Returns
-    /// `None` if the directory doesn't exist.
+    /// `None` if the directory doesn't exist or yields no entries.
     async fn list_events(&self) -> Option<Vec<AuditEvent>> {
-        let mut read_dir = tokio::fs::read_dir(&self.dir).await.ok()?;
-        let mut paths: Vec<PathBuf> = Vec::new();
-        loop {
-            match read_dir.next_entry().await {
-                Ok(Some(entry)) => {
-                    let p = entry.path();
-                    if p.extension().and_then(|e| e.to_str()) == Some("log") {
-                        paths.push(p);
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => continue,
-            }
-        }
+        let all_paths = self.fs.read_dir(&self.dir).await.ok()?;
+        let mut paths: Vec<PathBuf> = all_paths
+            .into_iter()
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("log"))
+            .collect();
         paths.sort();
+
+        if paths.is_empty() {
+            return None;
+        }
 
         let mut events: Vec<AuditEvent> = Vec::new();
         for path in paths {
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+            if let Ok(content) = self.fs.read_to_string(&path).await {
                 for line in content.lines() {
                     if line.trim().is_empty() {
                         continue;
