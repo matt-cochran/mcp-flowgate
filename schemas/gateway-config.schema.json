@@ -283,6 +283,14 @@
           "description": "How transition links are filtered for this workflow's responses. `byGuards` runs each transition's guards silently against the current state and only returns links for those that would pass. `all` returns every legal-by-state transition."
         },
         "inputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "blackboard": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object" }
+          ],
+          "default": [],
+          "description": "Declared context slots — either a list of slot names, or a map of slot name to a JSON-schema fragment. Optional; absent means no declared slots."
+        },
         "states": {
           "type": "object",
           "minProperties": 1,
