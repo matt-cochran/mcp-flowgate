@@ -1,0 +1,428 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const linksCode = `<span class="text-indigo-400">&larr;</span> { "workflow": { "id": "wf_8f3a", "version": 0, "state": "idea" },
+    "result":   { "status": "started" },
+    "links": [
+      { "rel":    "create_outline",
+        "method": "workflow.submit",
+        "args": {
+          "workflowId":      "wf_8f3a",
+          "expectedVersion": 0,
+          "transition":      "create_outline",
+          "arguments":       {} } } ] }`;
+
+const rejectCode = `{
+  "result": { "status": "rejected" },
+  "error": {
+    "code":    "GUARD_REJECTED",
+    "message": "One or more guards rejected the transition.",
+    "attemptedTransition": "approve"
+  },
+  "links": [
+    { "rel": "request_changes", "method": "workflow.submit", "args": { ... } }
+  ]
+}`;
+
+const prefillCode = `<span class="text-indigo-400">transitions</span>:
+  <span class="text-indigo-400">create_pr</span>:
+    <span class="text-indigo-400">target</span>: <span class="text-green-400">review</span>
+    <span class="text-indigo-400">prefill</span>:
+      <span class="text-indigo-400">repo</span>: <span class="text-green-400">"$.workflow.input.repo"</span>
+      <span class="text-indigo-400">base</span>: <span class="text-green-400">"main"</span>
+      <span class="text-indigo-400">head</span>: <span class="text-green-400">"$.context.branch_name"</span>
+    <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">mcp</span>, <span class="text-indigo-400">connection</span>: <span class="text-green-400">github</span>, <span class="text-indigo-400">tool</span>: <span class="text-green-400">create_pull_request</span> }`;
+---
+
+<Landing
+	title="HATEOAS for AI: REST's oldest idea is the right pattern for agents — mcp-flowgate"
+	description="An LLM is a client that's bad at remembering rules. So stop making it remember them. Let every response carry the legal next moves."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-04-21">April 21, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">HATEOAS for AI: REST's oldest idea is the right pattern for agents</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				You gave a model a set of tools, and it called one at the wrong
+				time — out of order, on a workflow step that had already moved
+				on. So you wrote the rules into the system prompt. "First do
+				this, then that, never the other thing." And you hoped.
+			</p>
+
+			<p>
+				That hope is the bug. The model is holding your entire
+				state machine in its head, from a paragraph of prose, with no
+				feedback about where it actually is. Of course it drifts.
+			</p>
+
+			<p>
+				There's a 25-year-old idea from web API design that fixes
+				exactly this. Almost nobody used it for REST. It turns out to
+				be the right pattern for AI agents.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The most-ignored idea in REST</h2>
+
+			<p>
+				It's called HATEOAS — Hypermedia As The Engine Of Application
+				State. It comes from Roy Fielding's 2000 dissertation, the
+				document that defined REST in the first place.
+			</p>
+
+			<p>
+				The idea is simple. The server's response shouldn't just hand
+				back data. It should hand back the <em>links</em> — the actions
+				you can legally take next, from right here, in this state. The
+				client never needs out-of-band knowledge of the workflow.
+				It reads a response and follows a link.
+			</p>
+
+			<p>
+				Most APIs that call themselves RESTful skip this entirely. You
+				read documentation, you memorize the endpoint sequence, you
+				hard-code the order of calls. The server returns data; the
+				<em>workflow</em> lives in your head and in a wiki. HATEOAS
+				says: that's backwards. The workflow should live in the
+				responses.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Why it fits agents — exactly</h2>
+
+			<p>
+				Think about what a language model is good at and bad at, as a
+				client.
+			</p>
+
+			<p>
+				It is <em>bad</em> at out-of-band knowledge. Ask it to carry a
+				multi-step set of rules across a 20-turn conversation and
+				apply them consistently, and it will lose the thread. Not
+				because it's careless — because that's a memory-and-consistency
+				job, and that's not its strength.
+			</p>
+
+			<p>
+				It is <em>excellent</em> at reading what's in front of it and
+				doing the obvious next thing. Give it a response that says
+				"here are your three legal moves," and picking one is easy.
+			</p>
+
+			<p>
+				So don't make the model remember the state machine. Make every
+				response carry the legal next moves. That's the whole pattern.
+				mcp-flowgate is built on it.
+			</p>
+
+			<p>
+				One honest note before the details: this is
+				HATEOAS-<em>inspired</em>, not HATEOAS by the book. The
+				protocol underneath is JSON-RPC over MCP, not REST with
+				hypermedia media types. What carries over is the principle
+				that matters here — server-driven navigation through links.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Two layers of links</h2>
+
+			<p>
+				The model works through two link layers, and they answer two
+				different questions.
+			</p>
+
+			<p>
+				<strong>Discovery — "what can I do?"</strong> Three tools.
+				<code>gateway.home</code> is the entry point — it hands back
+				the ways in: a search link, and a list of what's available.
+				<code>gateway.search</code> takes a query and returns
+				capability hits, each carrying a link to start it.
+				<code>gateway.describe</code> returns the detail for one item,
+				including its input schema. The model arrives knowing nothing
+				and navigates in.
+			</p>
+
+			<p>
+				<strong>Action — "what's the next legal step here?"</strong>
+				Four tools. <code>workflow.start</code> opens a workflow and
+				returns the first moves. <code>workflow.submit</code> takes a
+				move and returns the moves legal from the new state.
+				<code>workflow.get</code> re-fetches the current snapshot and
+				its links. <code>workflow.explain</code> — more on that one
+				shortly — answers questions about legality.
+			</p>
+
+			<p>
+				The model's whole loop is: search, start, then submit, submit,
+				submit — following the links each response hands back. It never
+				carries the map. It carries one current response.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What it looks like on the wire</h2>
+
+			<p>
+				Here's a real <code>workflow.start</code> response from the
+				<code>content-publish</code> example:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">workflow.start response</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={linksCode} /></pre>
+			</div>
+
+			<p>
+				Look at the <code>links</code> array. It carries exactly one
+				legal next move — <code>create_outline</code> — and the
+				<code>args</code> are already shaped: the workflow ID, the
+				version to expect, the transition name. The model doesn't guess
+				the transition. It doesn't skip a step. It doesn't invent a
+				tool name. It follows the link.
+			</p>
+
+			<p>
+				Notice <code>expectedVersion</code> in there. Every workflow
+				carries a version that increments on each transition, and a
+				submit must name the version it expects. If two callers race,
+				or the model works from a stale snapshot, the runtime catches
+				it with <code>STALE_WORKFLOW_VERSION</code> instead of
+				silently applying a move to the wrong state. The link doesn't
+				just say "you may do this" — it says "you may do this, from
+				exactly this version."
+			</p>
+
+			<p>
+				Submit that, and the next response carries the next link:
+				<code>write_draft</code>. Submit that, and you get
+				<code>run_brand_review</code>. The model walks the workflow
+				forward one server-handed link at a time, and the engine —
+				not the prompt — decides what "forward" means.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The part that matters most: being wrong</h2>
+
+			<p>
+				The happy path is the easy part. The real test of this pattern
+				is what happens when the client gets it wrong — because a model
+				will.
+			</p>
+
+			<p>
+				Say the model tries a transition whose guards don't pass.
+				Here's what comes back:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">a rejected call</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={rejectCode} /></pre>
+			</div>
+
+			<p>
+				The call was rejected — and the response <em>still</em> carries
+				a <code>links</code> array. The model made a bad move and got
+				back, in the very same response, the moves that <em>are</em>
+				legal right now. It recovers without restarting the workflow
+				and without re-reading a system prompt.
+			</p>
+
+			<p>
+				Walk the recovery through. The model attempted
+				<code>approve</code>; the response says rejected, code
+				<code>GUARD_REJECTED</code>, and offers <code>request_changes</code>
+				as a legal move. The model reads that, understands approval
+				isn't available from here, and either follows the offered link
+				or asks why — but it is never stuck, never guessing into the
+				dark. The path forward arrived attached to the error.
+			</p>
+
+			<p>
+				That holds across every rejection the runtime produces —
+				<code>STALE_WORKFLOW_VERSION</code>,
+				<code>INVALID_TRANSITION</code>,
+				<code>INPUT_SCHEMA_VIOLATION</code>,
+				<code>GUARD_REJECTED</code>, <code>EXECUTOR_FAILED</code>,
+				<code>CHAIN_FAILED</code>. A wrong call is never a dead end.
+				It's a response with an error code and a way forward.
+			</p>
+
+			<p>
+				This is the difference between an agent that recovers and an
+				agent that spirals. A spiral starts when a model gets an error
+				with no path attached, guesses, gets another error, guesses
+				again. Hand it the legal links every time and the spiral has
+				nowhere to begin.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Asking whether a move is legal</h2>
+
+			<p>
+				There's a fourth action tool, and it's the one that makes this
+				a genuine conversation rather than trial and error:
+				<code>workflow.explain</code>.
+			</p>
+
+			<p>
+				Instead of <em>attempting</em> a transition to find out whether
+				it's allowed, the model — or a developer debugging a config —
+				can ask. <code>workflow.explain</code> answers "is this
+				transition allowed right now, and if not, what's blocking it?"
+				without side effects. A HATEOAS client that can also
+				interrogate the state machine before committing to a move
+				spends fewer round trips on doomed attempts, and a human
+				reading the explanation gets a straight answer about why the
+				workflow is parked where it is.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The server can hand back only what will work</h2>
+
+			<p>
+				Plain HATEOAS returns every transition the state defines and
+				lets the client discover, by trying, which ones currently pass
+				their guards. mcp-flowgate can go one step further.
+			</p>
+
+			<p>
+				Turn on <code>linkFilter: byGuards</code> — on a whole workflow
+				or a single state — and the runtime evaluates each transition's
+				guards silently before it builds the response, returning only
+				the links that would actually succeed right now. The
+				<code>links</code> array stops meaning "moves that exist" and
+				starts meaning "moves that will work." For a model, that's the
+				difference between a menu with greyed-out items and a menu where
+				everything on it is orderable. Fewer wrong attempts, fewer round
+				trips spent learning what it couldn't have done anyway.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Links can come pre-filled</h2>
+
+			<p>
+				A link doesn't have to be a bare "you may do X." It can arrive
+				with the parts of X the server already knows. A transition's
+				<code>prefill</code> block does that:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">gateway.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={prefillCode} /></pre>
+			</div>
+
+			<p>
+				When the runtime generates the link for <code>create_pr</code>,
+				it resolves those expressions and fills <code>repo</code>,
+				<code>base</code>, and <code>head</code> into the link's
+				arguments. The model only has to generate the genuinely unknown
+				fields — the PR title and body. The server says, in effect,
+				"you may do this, and here's what I already know about it."
+				Fewer fields for the model to invent means fewer fields for it
+				to get wrong.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Where the pattern stops</h2>
+
+			<p>
+				Be clear about the boundary. Links guide the model; they don't
+				bind it. Nothing stops a model from ignoring a link and
+				submitting some other transition. What stops <em>that</em> is a
+				separate layer — guards and actor checks that the runtime
+				enforces regardless of what the model tried.
+			</p>
+
+			<p>
+				HATEOAS-style links are the ergonomics layer: they make the
+				right move the obvious move. The enforcement layer is what
+				makes the wrong move impossible. They're complementary, and
+				they're not the same thing — worth remembering when you read
+				the <a href="/blog/mcp-security-gateway-layer" class="text-indigo-600 hover:text-indigo-500">post on MCP security</a>.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The oldest idea, the newest client</h2>
+
+			<p>
+				REST's most-skipped principle asked a lot of human-written
+				clients: give up your hard-coded call sequence, trust the
+				server's links. Most teams didn't want to.
+			</p>
+
+			<p>
+				An AI agent has the opposite preference. It doesn't <em>want</em>
+				to hold your state machine. It would much rather read one
+				response and follow a link. The pattern nobody adopted for REST
+				is the pattern that fits agents best.
+			</p>
+
+			<p class="mt-8">
+				The mental model is laid out in
+				<a href="/introduction" class="text-indigo-600 hover:text-indigo-500">the docs</a>;
+				the <a href="/guides/discovery" class="text-indigo-600 hover:text-indigo-500">discovery guide</a>
+				covers the search-and-link loop in full.
+			</p>
+
+			<hr class="my-10 border-slate-200" />
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">References</h2>
+
+			<ol class="my-6 space-y-2 text-slate-600 text-base list-decimal pl-6">
+				<li>Fielding, R. T. "Architectural Styles and the Design of
+					Network-based Software Architectures." Doctoral
+					dissertation, University of California, Irvine, 2000 —
+					Chapter 5, REST.
+					<a href="https://ics.uci.edu/~fielding/pubs/dissertation/top.htm" class="text-indigo-600 hover:text-indigo-500">ics.uci.edu/~fielding/pubs/dissertation</a></li>
+				<li>"HATEOAS." Wikipedia.
+					<a href="https://en.wikipedia.org/wiki/HATEOAS" class="text-indigo-600 hover:text-indigo-500">en.wikipedia.org/wiki/HATEOAS</a></li>
+			</ol>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

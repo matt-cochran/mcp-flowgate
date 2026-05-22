@@ -1,0 +1,387 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const auditCode = `{
+  "id":            "evt_e0b9...",
+  "timestamp":     "2026-05-10T18:42:01Z",
+  "workflowId":    "wf_3f8b...",
+  "correlationId": "cor_9c12...",
+  "actor":         "tester",
+  "eventType":     "transition.rejected",
+  "payload": { "transition": "approve", "code": "ACTOR_MISMATCH" }
+}`;
+---
+
+<Landing
+	title="Where MCP security actually lives — and where it doesn't yet — mcp-flowgate"
+	description="MCP hands a model a list of tools and trusts it. The security controls that don't fit in a tool definition need a layer of their own — here's what a gateway enforces, and an honest account of what it doesn't."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-05-07">May 7, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">Where MCP security actually lives — and where it doesn't yet</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				MCP hands a model a list of tools and trusts it to behave. Most
+				of the security conversation around MCP is about the protocol —
+				token scopes, server authentication, who can connect. All
+				worth having. But there's a layer the protocol has no opinion
+				about, and it's where the controls you actually need either
+				live or simply don't exist.
+			</p>
+
+			<p>
+				This post is about that layer. What a gateway can enforce — and,
+				just as important, an honest account of what it can't enforce
+				for you yet.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The controls that don't fit in a tool definition</h2>
+
+			<p>
+				A tool definition can describe a tool: here's the name, here
+				are the arguments, here's the schema. It cannot say any of the
+				things you actually want said about a dangerous action:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li>only after the tests have passed</li>
+				<li>never without a human in the loop</li>
+				<li>at most three times, then stop</li>
+				<li>and write down every attempt, including the refused ones</li>
+			</ul>
+
+			<p>
+				Those aren't properties of a tool. They're policy. And policy
+				needs somewhere to live that every call has to pass through.
+				That's the gateway: a single checkpoint between the model and
+				the tools, where the rules are enforced instead of hoped for.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What the gateway enforces before the executor runs</h2>
+
+			<p>
+				Three checks happen between a call arriving and a tool actually
+				running. Each one can stop the call cold.
+			</p>
+
+			<p>
+				<strong>Schema validation.</strong> A transition's
+				<code>inputSchema</code> is JSON Schema, and it runs before the
+				executor. Malformed input, a missing required field, a value
+				outside an allowed enum — rejected with
+				<code>INPUT_SCHEMA_VIOLATION</code>, and the tool never sees
+				it. That's a real boundary: bad input stops at the gate, not
+				inside your code.
+			</p>
+
+			<p>
+				<strong>Guards.</strong> Preconditions evaluated before the
+				executor — <code>permission</code>, <code>role</code>,
+				<code>expr</code>, <code>evidence</code>. If a guard fails the
+				call is rejected with <code>GUARD_REJECTED</code> and the
+				executor never runs.
+			</p>
+
+			<p>
+				<strong>Actor enforcement.</strong> A transition tagged
+				<code>actor: human</code> requires a human principal. An agent
+				or anonymous caller is rejected with <code>ACTOR_MISMATCH</code>
+				before anything executes. The model cannot walk itself through
+				a human-only step — there is no "agree to my own approval"
+				path.
+			</p>
+
+			<p>
+				Every one of these is deny-at-a-checkpoint, not
+				hope-the-model-behaves. The call has to get past the gate, and
+				the gate runs whether or not the model expected it to.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Gates anchored to what actually happened</h2>
+
+			<p>
+				The <code>evidence</code> guard deserves a closer look,
+				because it's a different kind of control. Most checks test a
+				value. An evidence guard tests that something <em>occurred</em>.
+			</p>
+
+			<p>
+				When an executor succeeds, it can record evidence — a named
+				kind. A guard on a later transition can require that evidence
+				to exist before the transition is legal. So "this deploy can't
+				run until a security scan recorded a clean result" isn't a flag
+				the model could set on its way past. It's a requirement that a
+				scan step actually ran and actually produced that record on
+				this workflow. And in its counting form, an evidence guard can
+				demand two independent approval records — a real two-person
+				rule. Controls anchored to events, not to mutable state, are
+				the ones a clever caller can't talk its way around.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Approvals the model can't resolve itself</h2>
+
+			<p>
+				Actor enforcement stops the model from <em>taking</em> a
+				human-only step. The natural next question: who takes it, and
+				how — and can the model reach that path?
+			</p>
+
+			<p>
+				It can't, by construction. The <code>human</code> executor
+				records a <code>human.approval.requested</code> event to a
+				named queue and stops. Resolution happens out of band, on a
+				channel the model isn't on: the built-in
+				<code>mcp-flowgate approvals</code> command lists and resolves
+				pending approvals from a terminal, and because every approval
+				request is an audit event, you can just as easily tail the
+				audit stream into Slack or a Linear issue so approvals land
+				where people already work.
+			</p>
+
+			<p>
+				The security property is the separation. The model emits a
+				request and halts. A human, on a different channel, resolves
+				it. There is no API call in the model's seven tools that
+				approves its own pending action — the request path and the
+				resolution path are not the same path.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Retries that can't double-charge</h2>
+
+			<p>
+				Here's a safety property that's easy to miss. The gateway
+				retries failed calls and falls back to alternates — necessary,
+				because networks fail. But a retried side-effecting call is
+				dangerous on its own: a payment that timed out but actually
+				went through, retried, charges the customer twice.
+			</p>
+
+			<p>
+				Declaring an idempotency key closes that gap. The runtime
+				computes one key per submit and reuses it across every retry
+				<em>and</em> every fallback executor — surfaced to a REST tool
+				as an <code>Idempotency-Key</code> header, to a CLI tool as an
+				environment variable. The <code>expense-approval</code> example
+				uses exactly this for its payment step. "Retry safely" becomes
+				a line of config, and a double-execution becomes structurally
+				hard instead of something you hope the downstream API
+				deduplicates for you.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What the gateway records</h2>
+
+			<p>
+				The most underrated security feature is the one that doesn't
+				block anything: the audit trail.
+			</p>
+
+			<p>
+				Every meaningful step emits a structured audit event — around
+				eighteen event types, covering workflow starts, transitions,
+				guard evaluations, executor attempts, approval requests, and
+				rejections. Crucially, that includes the calls that
+				<em>failed</em>. A <code>transition.rejected</code> event is
+				written even when the model hit a wall and quietly recovered:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">audit event</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={auditCode} /></pre>
+			</div>
+
+			<p>
+				Each event carries a <code>correlationId</code> that ties
+				together everything from a single call, so you can reconstruct
+				exactly what happened and in what order. This is the difference
+				between "we think the agent didn't do that" and "here is every
+				call it made, every gate it hit, and every refusal." Incident
+				response needs the second answer. An audit trail you didn't
+				have to build yourself is worth more than it looks.
+			</p>
+
+			<p>
+				One honest caveat: the default audit sink is <code>stdout</code>,
+				and a <code>none</code> sink exists that drops everything. For
+				any deployment where the trail matters, use the
+				<code>file</code> sink and set up rotation. Audit is only ground
+				truth if you keep it.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Now the honest part: what isn't enforced out of the box</h2>
+
+			<p>
+				Here's where most tools would stop, having listed their
+				features. This is the section that matters most.
+			</p>
+
+			<p>
+				The bundled <code>FlowgateServer</code> — the binary you run
+				from the quick start — treats every caller as an anonymous
+				principal. Read that carefully, because it has a sharp
+				consequence: the <code>permission</code> and <code>role</code>
+				guards, the identity-based ones, cannot tell one caller from
+				another. An anonymous principal holds no permissions and no
+				roles, so on the bundled binary those guards can't express
+				"Alice may deploy, Bob may not." There is no Alice and no Bob —
+				there's one anonymous caller.
+			</p>
+
+			<p>
+				For a single developer on a laptop, that's the correct default,
+				not a flaw — the OS user is the principal, and the guards you
+				actually want there work without identity:
+				<code>inputSchema</code>, <code>evidence</code>,
+				<code>expr</code>, and <code>actor: human</code> all enforce
+				perfectly well with no identity wiring at all.
+			</p>
+
+			<p>
+				But it does mean this: if you deploy the bundled server to a
+				setting where different humans share it, and you lean on
+				<code>permission</code> or <code>role</code> guards for "who
+				can do what," those guards are not doing the job you think they
+				are. Making them real requires wiring identity yourself — a
+				custom <code>ServerHandler</code> that sources a verified
+				<code>Principal</code> from the transport: a checked JWT, an
+				mTLS subject, a mutually authenticated session. The project
+				documents four concrete patterns for this. It's a known seam,
+				not a hidden one — but it is a seam, and it's on you to wire it.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Wiring identity once, not everywhere</h2>
+
+			<p>
+				"Wire identity yourself" sounds like a chore you'd repeat at
+				every layer. It isn't — and the recommended shape is worth
+				knowing, because it's also the cleaner design.
+			</p>
+
+			<p>
+				Identity terminates at <em>one</em> layer. In a stacked
+				deployment that's the enterprise gateway: it does the SSO, it
+				verifies or mints the token, it establishes who the caller is.
+				Every layer below it — team, project, local — receives the
+				already-verified principal through a standard header and simply
+				trusts it, because the layer above did the work. The lower
+				layers stay identity-agnostic. You do the hard part once, at
+				the boundary, and propagate the result inward.
+			</p>
+
+			<p>
+				And for deployments that cross a trust boundary — different
+				organizations, callers you don't control — the guidance is
+				explicit: put an identity proxy, something like Envoy or
+				OAuth2-proxy, in front. Same-trust-boundary, single-user use is
+				production-ready today. High availability is supported through
+				the Postgres store behind a load balancer. Throughput under
+				real production load, though, hasn't been measured yet — only
+				the gateway's own per-call overhead, in microbenchmarks. This
+				is a pre-1.0 project, and that list of "measured" versus "not
+				yet" is part of the honest picture.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The trap: identity the model asserts</h2>
+
+			<p>
+				When you do wire identity, there's one shortcut to refuse
+				outright: never let the caller tell you who it is. A field in
+				the request where the model says "I'm acting as the admin" is
+				not authentication — it's a suggestion, and a model can be
+				talked into making any suggestion.
+			</p>
+
+			<p>
+				Identity has to come from the transport and be verified before
+				it ever reaches the runtime — a signature you checked, a
+				certificate subject, a session you established. The model is
+				the thing being governed. It does not get to name its own
+				principal. The project's embedding guide calls this out
+				specifically, because it's the easy mistake.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">So where does MCP security actually live?</h2>
+
+			<p>
+				It lives in a layer the protocol doesn't define — the gateway.
+				mcp-flowgate gives you that layer with real teeth for the
+				controls that don't need identity: schema validation, evidence
+				and expression guards, actor enforcement, idempotent retries,
+				and a complete audit trail. For the controls that <em>do</em>
+				need identity, it gives you a documented seam — a verified
+				<code>Principal</code> wired through a custom server — and it
+				does not pretend the anonymous-by-default binary is a
+				multi-tenant security boundary.
+			</p>
+
+			<p>
+				That last part is the point. A gate that claims to check
+				identity but doesn't is worse than no gate, because you'll
+				trust it. The most useful thing a security layer can do is be
+				exact about its own edges: here is what is enforced today, here
+				is precisely what you wire to enforce the rest, and here is the
+				audit trail that proves what happened either way.
+			</p>
+
+			<p>
+				This is a pre-1.0 project, and that honesty is the feature.
+				Read it, wire the seam your deployment needs, and keep the
+				trail.
+			</p>
+
+			<p class="mt-8">
+				The security policy and reporting process are in
+				<a href="https://github.com/matt-cochran/mcp-flowgate/blob/main/SECURITY.md" class="text-indigo-600 hover:text-indigo-500">SECURITY.md</a>;
+				identity wiring for multi-tenant deployments is covered in the
+				<a href="https://github.com/matt-cochran/mcp-flowgate/blob/main/docs/MCP-CONTROL-ARCHITECTURE.md" class="text-indigo-600 hover:text-indigo-500">MCP control architecture guide</a>
+				and <a href="https://github.com/matt-cochran/mcp-flowgate/blob/main/docs/EMBEDDING.md" class="text-indigo-600 hover:text-indigo-500">the embedding guide</a>.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

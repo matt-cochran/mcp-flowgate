@@ -1,0 +1,310 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const flowCode = `<span class="text-indigo-400">workflows</span>:
+  <span class="text-indigo-400">content_publish</span>:
+    <span class="text-indigo-400">initialState</span>: <span class="text-green-400">idea</span>
+    <span class="text-indigo-400">states</span>:
+      <span class="text-indigo-400">idea</span>:
+        <span class="text-indigo-400">transitions</span>:
+          <span class="text-indigo-400">create_outline</span>: { <span class="text-indigo-400">target</span>: <span class="text-green-400">outlined</span> }
+      <span class="text-indigo-400">outlined</span>:
+        <span class="text-indigo-400">transitions</span>:
+          <span class="text-indigo-400">write_draft</span>: { <span class="text-indigo-400">target</span>: <span class="text-green-400">drafted</span> }
+      <span class="text-indigo-400">drafted</span>:
+        <span class="text-indigo-400">transitions</span>:
+          <span class="text-indigo-400">run_brand_review</span>: { <span class="text-indigo-400">target</span>: <span class="text-green-400">brand_reviewed</span> }
+      <span class="text-indigo-400">brand_reviewed</span>:
+        <span class="text-indigo-400">transitions</span>:
+          <span class="text-indigo-400">request_approval</span>: { <span class="text-indigo-400">target</span>: <span class="text-green-400">awaiting_approval</span> }
+      <span class="text-indigo-400">awaiting_approval</span>:
+        <span class="text-indigo-400">transitions</span>:
+          <span class="text-indigo-400">approve</span>: { <span class="text-indigo-400">target</span>: <span class="text-green-400">published</span>, <span class="text-indigo-400">actor</span>: <span class="text-green-400">human</span> }
+      <span class="text-indigo-400">published</span>:
+        <span class="text-indigo-400">terminal</span>: <span class="text-green-400">true</span>`;
+---
+
+<Landing
+	title="Why your AI agent needs a state machine — mcp-flowgate"
+	description="When an agent acts out of order, the fix isn't a longer prompt. It's the oldest, most boring pattern in computing — and agent governance is exactly the problem it was built for."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-04-16">April 16, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">Why your AI agent needs a state machine</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				Your agent approved something before it was reviewed. So you
+				tightened the prompt — "always review first." A week later it
+				deployed before the tests ran. You added another sentence. Then
+				it happened a third time, in a way your sentences hadn't
+				predicted.
+			</p>
+
+			<p>
+				At some point you have to stop blaming the prompt. The prompt
+				isn't the problem. The problem is that your agent has no idea
+				where it is.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">An agent with no sense of place</h2>
+
+			<p>
+				A model call doesn't have a location. The agent's only sense of
+				"where things stand" is a growing pile of conversation — and
+				nothing in that pile authoritatively answers the two questions
+				that actually matter: <em>what step are we on?</em> and
+				<em>what is allowed right now?</em>
+			</p>
+
+			<p>
+				So the agent infers. It reads back over the transcript, forms
+				an impression of how far along it is, and decides what to do
+				next from that impression. Inference like that works most of
+				the time, which is the trap — it works often enough that you
+				ship it, and drifts often enough that it hurts. An agent
+				guessing its own position will eventually guess wrong, and a
+				wrong guess about "what's allowed now" is the bug you keep
+				patching with prose.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The unglamorous fix</h2>
+
+			<p>
+				There's a pattern built for exactly this, and it is not
+				exciting. A state machine: a finite set of named states, and
+				transitions between them, where each transition is legal only
+				from certain states. You drew one in your first computing
+				course. The idea is roughly 70 years old. It is the opposite of
+				cutting-edge.
+			</p>
+
+			<p>
+				That's not a strike against it. That's the reason to use it.
+			</p>
+
+			<p>
+				A state machine is something you can draw on a whiteboard, read
+				top to bottom, diff in a pull request, and check for mistakes
+				before it ever runs. It holds no surprises. And when the thing
+				you're trying to govern is a probabilistic model that
+				<em>will</em> surprise you, the one place you want zero
+				surprises is the structure doing the governing. An exciting
+				abstraction you can't fully reason about is worse than a boring
+				one you can.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Every tool is a transition</h2>
+
+			<p>
+				This is the move mcp-flowgate makes. A workflow is a state
+				machine, and every tool call is a transition between states.
+			</p>
+
+			<p>
+				The simplest possible workflow has one state: call any tool,
+				end up back where you started. That shape is just a flat list
+				of tools — and it's the degenerate case of the same idea.
+				Internally it even compiles to a one-state machine, named
+				<code>proxy_default</code>. So you're never choosing "state
+				machine or not." You're choosing how many states. Zero extra
+				states gives you a plain tool list. Add states when the process
+				has an order worth enforcing. It's the same engine and the same
+				seven tools facing the model either way — you've just told the
+				engine more about the shape of the work.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Four things a state machine gives an agent — that a prompt can't</h2>
+
+			<p>
+				<strong>1. A definition of "now."</strong> The workflow has a
+				current state, and it's a fact, not an impression. The agent
+				doesn't reconstruct where it is from conversation history — it
+				asks, and the answer is authoritative. "Now" becomes data.
+			</p>
+
+			<p>
+				<strong>2. A definition of "legal."</strong> A transition is
+				legal only from the states that declare it. The
+				<code>approve</code> action isn't something the agent is
+				<em>discouraged</em> from taking early — it does not
+				<em>exist</em> as a move until the workflow is in the state
+				that offers it. The set of things the agent can do collapses,
+				at every step, to the set of things that are correct to do.
+			</p>
+
+			<p>
+				<strong>3. A recorded path.</strong> Every transition advances
+				the state and bumps a version counter. How the workflow reached
+				where it is isn't something you reconstruct from logs after an
+				incident — it <em>is</em> the state history, recorded as it
+				happened, with an audit event for every step. The path is a
+				first-class artifact, not forensic guesswork.
+			</p>
+
+			<p>
+				<strong>4. A split between who authors the machine and who
+				runs it.</strong> This is the keystone. The person who designs
+				the state machine is not the agent that walks it. The agent
+				submits transitions; it cannot add one. It cannot redraw the
+				map. Whoever wrote the workflow decided the shape of what's
+				possible, and the agent only moves inside that shape. A prompt
+				can never give you this — a prompt is a suggestion handed to the
+				same entity that's free to reinterpret it.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What that looks like</h2>
+
+			<p>
+				Here's a governed content-publishing workflow — trimmed to its
+				skeleton:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">content-publish.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={flowCode} /></pre>
+			</div>
+
+			<p>
+				Look at what the agent <em>can't</em> do here. From
+				<code>drafted</code>, the only transition is
+				<code>run_brand_review</code>. There is no <code>approve</code>
+				reachable from <code>drafted</code>, and no <code>publish</code>
+				transition anywhere except as the move <em>into</em>
+				<code>published</code> — which is only declared out of
+				<code>awaiting_approval</code>, and is tagged
+				<code>actor: human</code>.
+			</p>
+
+			<p>
+				So an agent holding a finished draft cannot publish it. Not
+				"shouldn't" — <em>cannot</em>. To get content live it has to
+				walk every state, and one of those states hands control to a
+				person. The structure makes the wrong thing
+				<em>unreachable</em>, not merely discouraged.
+			</p>
+
+			<p>
+				Compare that to a flat tool list, where <code>publish</code> is
+				just a tool — always callable, always one decision away — and
+				"don't publish before review" is a sentence in a prompt the
+				model is free to misread on a long, tired afternoon. Same
+				model, same task. One setup makes the mistake impossible; the
+				other makes it improbable. Improbable things happen.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Powerful for the right problem</h2>
+
+			<p>
+				Now the honest part, because a state machine is not a universal
+				good. It is genuinely the wrong tool for plenty of work.
+			</p>
+
+			<p>
+				A pure transform — take some JSON, return some JSON — has no
+				states; modeling it as a one-state machine is ceremony with no
+				payoff. A stateless lookup doesn't need a version counter or a
+				transition graph. If you wrap something that has no order, no
+				rules about legality, and no need for a history, you've added
+				structure that earns nothing back. mcp-flowgate's own docs say
+				it plainly: if you have one tool and no governance needs, don't
+				put a gateway in front of it.
+			</p>
+
+			<p>
+				The pattern earns its keep only when the problem has four
+				properties: there's an <em>order</em> to things; some actions
+				are <em>legal only at certain points</em>; you need to know
+				<em>how you arrived</em>; and the <em>rules are set by someone
+				other than the actor</em>.
+			</p>
+
+			<p>
+				And there's the whole argument, because look at that list
+				again. An AI agent doing real work moves through a process. Only
+				some actions are safe at each point. You need the trail when
+				something goes wrong. And the agent must not be the one
+				deciding what it's allowed to do. Agent governance doesn't just
+				<em>happen to fit</em> a state machine — it has all four
+				properties, exactly. It isn't a problem a state machine
+				<em>can</em> model. It's the problem a state machine
+				<em>is for</em>.
+			</p>
+
+			<p>
+				The pattern is 70 years old and the problem is brand new, and
+				they fit because the shape was the same all along. We just
+				hadn't met this version of the problem yet.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Reach for the boring tool</h2>
+
+			<p>
+				The exciting part of an AI agent is the model. The part that
+				makes it something you'd let near production is the least
+				exciting pattern in the textbook — finite states, explicit
+				transitions, a current position you can name.
+			</p>
+
+			<p>
+				So the next time your agent does something out of order, don't
+				reach for a longer prompt. You've tried that; prompts don't
+				give an agent a sense of place. Reach for the boring tool. This
+				is the problem it was waiting for.
+			</p>
+
+			<p class="mt-8">
+				The mental model — "every tool is a transition" — is laid out
+				in <a href="/introduction" class="text-indigo-600 hover:text-indigo-500">the docs</a>,
+				and the <a href="/guides/workflows" class="text-indigo-600 hover:text-indigo-500">workflows guide</a>
+				walks through building one state by state.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

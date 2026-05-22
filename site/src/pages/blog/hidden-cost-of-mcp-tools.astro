@@ -1,0 +1,338 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const searchCode = `<span class="text-green-400">&rarr;</span> gateway.search { "query": "publish content" }
+
+<span class="text-indigo-400">&larr;</span> { "items": [
+      { "id":    "workflow:content_publish",
+        "title": "Governed content publishing workflow",
+        "tags":  ["content", "governed", "publishing"] } ] }`;
+
+const startCode = `<span class="text-green-400">&rarr;</span> workflow.start {
+    "definitionId": "content_publish",
+    "input": { "topic": "Q2 launch", "audience": "enterprise" } }
+
+<span class="text-indigo-400">&larr;</span> { "workflow": { "id": "wf_8f3a", "state": "idea" },
+    "links": [
+      { "rel":    "create_outline",
+        "method": "workflow.submit",
+        "args":   { "transition": "create_outline", ... } } ] }`;
+---
+
+<Landing
+	title="The hidden cost of 50 MCP tools — mcp-flowgate"
+	description="Every MCP tool you register is a recurring tax — input tokens for its definition and output tokens for the reasoning to choose it. Here's the math, measured."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-04-14">April 14, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">The hidden cost of 50 MCP tools</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				Your agent has 40 MCP tools wired in. It works. But every call
+				feels a little slower than it should, the model reaches for the
+				wrong tool more often than you'd like, and the bill keeps
+				creeping up. You're paying a tax — and it never shows up as a
+				line item.
+			</p>
+
+			<p>
+				The good news: it's not mysterious. It's arithmetic. Once you
+				can see the math, you can decide whether you want to keep
+				paying it.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The tax you can see</h2>
+
+			<p>
+				When you register an MCP tool, its definition goes into the
+				model's context: the name, the description, and the full JSON
+				schema for its arguments. The model can't call a tool it can't
+				see, so all of it has to be there.
+			</p>
+
+			<p>
+				A single tool definition runs roughly 50–150 tokens. That's a
+				range, not a constant — a tool with two string arguments costs
+				less than one with a nested object schema and a paragraph of
+				description. But the range is good enough to reason with.
+			</p>
+
+			<p>
+				Ten tools is about 1,000 tokens. Fine. Fifty tools is 5,000 or
+				more — and that's the part worth sitting with. Those tokens are
+				in the model's context on <em>every call</em>. Every turn of
+				the conversation. Every retry after a failure. They are not a
+				one-time setup cost. They are rent.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Put real numbers on it</h2>
+
+			<p>
+				Take a realistic mid-size agent — not a stress test, just a
+				useful one. It connects to six MCP servers: a source-control
+				server, a cloud console, a database server, a chat integration,
+				a docs server, and your team's internal-tools server. Each one
+				contributes eight to ten tools. Call it 50 tools, at an average
+				of 100 tokens each — 5,000 tokens of definitions.
+			</p>
+
+			<p>
+				Now run one real task to completion. A genuine piece of work —
+				investigate something, make a change, verify it — is rarely one
+				turn. Say it takes 20. That 5,000-token catalogue rides along
+				on all 20:
+			</p>
+
+			<ul class="my-6 space-y-2 text-slate-600">
+				<li>5,000 tokens of tool definitions</li>
+				<li>&times; 20 turns</li>
+				<li>= <strong>100,000 input tokens</strong> spent describing
+					tools</li>
+			</ul>
+
+			<p>
+				Here's the uncomfortable part. Across that whole task, the
+				model probably <em>called</em> six or seven of those 50 tools.
+				The other forty-odd were described, in full, twenty times over
+				— and never used. The overwhelming majority of that 100,000
+				tokens bought nothing. It's not a benchmark; it's a shape, and
+				it's the shape of almost every multi-integration agent running
+				today.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The tax you can't see — and it's the bigger one</h2>
+
+			<p>
+				The definition tokens are the obvious cost. They're not the
+				expensive one.
+			</p>
+
+			<p>
+				Before the model can call a tool, it has to <em>choose</em>
+				one. That means weighing the whole list and reasoning about
+				which option fits — and reasoning is output tokens, which cost
+				roughly 3–5&times; what input tokens cost. The more tools in
+				the list, the more of that weighing happens, on every decision.
+			</p>
+
+			<p>
+				Then there's the failure mode nobody budgets for. Show a model
+				50 tools, several with overlapping descriptions — three
+				different "create issue" variants across three trackers — and
+				it will sometimes pick the wrong one. A wrong pick isn't a
+				small mistake. It's a full wasted round trip: the bad call, the
+				error coming back, the model reading the error, the recovery,
+				the retry. Every one of those steps re-sends the 5,000-token
+				catalogue and burns more reasoning.
+			</p>
+
+			<p>
+				You don't need a study to believe this — you can watch it in
+				your own traces. More choices, more wrong choices. And the cost
+				of a mistake is never just the mistake; it's everything you
+				spend cleaning up after it.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Why the two taxes multiply</h2>
+
+			<p>
+				Here's where it compounds. A bigger tool list makes every call
+				more expensive <em>and</em> makes wrong picks more likely.
+				Wrong picks cause extra calls. Each extra call re-pays the
+				definition tax in full. The two costs don't add — they feed
+				each other.
+			</p>
+
+			<p>
+				So the question isn't "can I afford 50 tool definitions in my
+				context?" It's "can I afford 50 tool definitions, times every
+				call, times the extra calls that 50 tools cause?"
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The fix: make the list stop growing</h2>
+
+			<p>
+				mcp-flowgate exposes exactly seven tools to the model — three
+				for discovery, four for action — no matter how many
+				capabilities you wire in behind it. Five capabilities or five
+				hundred, the model's tool list is seven entries.
+			</p>
+
+			<p>
+				It works because the model stops <em>scanning</em> and starts
+				<em>searching</em>. When it needs to do something, it doesn't
+				read 50 definitions looking for a match. It calls
+				<code>gateway.search</code>:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">wire trace — turn 1</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={searchCode} /></pre>
+			</div>
+
+			<p>
+				One query. One result with a title and tags — not 50 tool
+				definitions. The model didn't carry the catalogue; it asked a
+				question and got an answer back.
+			</p>
+
+			<p>
+				Then it starts the work, and the response hands it the next
+				move:
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">wire trace — turn 2</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={startCode} /></pre>
+			</div>
+
+			<p>
+				The response carries a <code>links</code> array — the legal
+				next moves, already shaped. The model doesn't reason about
+				which of 50 tools comes next. It follows the one link the
+				server handed back. (That pattern has a name, and it gets its
+				own post — <a href="/blog/hateoas-for-ai" class="text-indigo-600 hover:text-indigo-500">HATEOAS for AI</a>.)
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Schemas on demand, not up front</h2>
+
+			<p>
+				There's a subtler win hiding in that flow, and it's about the
+				most expensive part of a tool definition: the JSON schema.
+				Descriptions are short. A schema for a tool with a nested
+				argument object — enums, required fields, descriptions per
+				property — is often the bulk of those 100 tokens.
+			</p>
+
+			<p>
+				In a flat tool list, you pay every schema, for every tool, on
+				every call. With the seven-tool surface, the model pulls a
+				schema with <code>gateway.describe</code> only when it's about
+				to use that capability — one schema, for one tool, at the
+				moment it's needed. The 49 schemas it isn't using right now
+				cost nothing. You've moved the schema from a standing cost in
+				the model's context to an on-demand lookup.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Before and after</h2>
+
+			<p>
+				<strong>Before:</strong> 50 tool definitions — call it 5,000+
+				tokens — sitting in context on every call, plus the reasoning
+				to choose among 50 options, plus the wrong picks that 50
+				lookalike options produce.
+			</p>
+
+			<p>
+				<strong>After:</strong> seven tool definitions, a fixed and
+				small cost. One search result when the model needs one. One
+				schema fetched on demand. One prefilled link to follow. Wire in
+				your 200th integration and it costs the first 199 calls
+				nothing.
+			</p>
+
+			<p>
+				The real shift is that your capability count stops being a
+				context-budget decision. You add the tool because the work
+				needs it — not after weighing it against your token bill.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Where this honestly doesn't pay off</h2>
+
+			<p>
+				A search call plus a start call is two round trips before the
+				real action. If your agent has five tools and always knows
+				exactly which one it wants, that indirection is overhead, not
+				savings. The seven-tool surface earns its keep when you have
+				<em>many</em> capabilities, or when you want governance around
+				them — not when you have three tools and no rules to enforce.
+				The docs say it plainly: if one MCP server with no governance
+				needs is all you have, point your host straight at it.
+			</p>
+
+			<p>
+				One more honest caveat: <code>gateway.search</code> is lexical,
+				not semantic. It scores against titles, descriptions, and tags.
+				Vague metadata produces vague search results. The seven-tool
+				surface moves the cost of discoverability from the model's
+				context to your config — which is a much better place for it,
+				but it isn't free.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Look at your own number</h2>
+
+			<p>
+				You don't have to take any of this on faith. Open a recent
+				agent trace. Count the tool definitions in the system prompt.
+				Multiply by 100 tokens. Multiply by the number of turns. Then
+				count how many of those tools the model actually called. The
+				gap between those two numbers is what you're spending to
+				describe tools that never got used.
+			</p>
+
+			<p>
+				The tax is real whether or not you've measured it. The only
+				question is whether you've looked.
+			</p>
+
+			<p class="mt-8">
+				The <a href="/quick-start" class="text-indigo-600 hover:text-indigo-500">quick start</a>
+				wires in one tool in about 30 seconds. For what happens to a
+				flat tool list as agents scale past 200 capabilities, read
+				<a href="/blog/flat-tool-lists-dont-scale" class="text-indigo-600 hover:text-indigo-500">Flat tool lists don't scale</a>.
+			</p>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>

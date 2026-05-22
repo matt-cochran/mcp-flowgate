@@ -1,0 +1,342 @@
+---
+import Landing from '../../layouts/Landing.astro';
+
+const approvalCode = `<span class="text-indigo-400">states</span>:
+  <span class="text-indigo-400">awaiting_approval</span>:
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">approve</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">approved</span>
+        <span class="text-indigo-400">actor</span>: <span class="text-green-400">human</span>            <span class="text-slate-500"># the LLM cannot take this step</span>
+  <span class="text-indigo-400">approved</span>:
+    <span class="text-indigo-400">transitions</span>:
+      <span class="text-indigo-400">publish</span>:
+        <span class="text-indigo-400">target</span>: <span class="text-green-400">published</span>
+        <span class="text-indigo-400">guards</span>:
+          - { <span class="text-indigo-400">kind</span>: <span class="text-green-400">evidence</span>, <span class="text-indigo-400">requires</span>: [<span class="text-green-400">human_request</span>] }   <span class="text-slate-500"># only after a logged approval</span>
+        <span class="text-indigo-400">executor</span>: { <span class="text-indigo-400">kind</span>: <span class="text-green-400">rest</span>, <span class="text-indigo-400">connection</span>: <span class="text-green-400">cms</span>, <span class="text-indigo-400">idempotencyKey</span>: <span class="text-green-400">true</span> }`;
+---
+
+<Landing
+	title="What do a deploy pipeline and an expense report have in common? — mcp-flowgate"
+	description="mcp-flowgate is not an agentic coding tool. Coding is one use case among many — and regulation is fast making the audit trail it produces a requirement."
+>
+
+<nav class="fixed top-0 w-full z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
+	<div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+		<a href="/" class="text-white font-semibold text-lg">mcp-flowgate</a>
+		<div class="flex items-center gap-8">
+			<a href="/introduction" class="text-slate-300 hover:text-white text-sm transition-colors">Docs</a>
+			<a href="/examples" class="text-slate-300 hover:text-white text-sm transition-colors">Examples</a>
+			<a href="/blog" class="text-white text-sm font-medium">Blog</a>
+			<a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-300 hover:text-white text-sm transition-colors">GitHub</a>
+		</div>
+	</div>
+</nav>
+
+<article class="pt-32 pb-20 px-6 bg-white min-h-screen">
+	<div class="max-w-3xl mx-auto">
+		<a href="/blog" class="text-indigo-600 hover:text-indigo-500 text-sm mb-6 inline-block">&larr; Back to blog</a>
+		<time class="text-sm text-slate-400 block mb-2" datetime="2026-04-09">April 9, 2026</time>
+		<h1 class="text-4xl font-bold text-slate-900 mb-8 leading-tight">What do a deploy pipeline and an expense report have in common?</h1>
+
+		<div class="blog-body max-w-none text-lg text-slate-700 leading-relaxed [&_p]:mb-6" style="font-family: 'Inter', sans-serif;">
+			<p class="text-xl text-slate-600 leading-relaxed">
+				If you've read the other posts on this blog, you've watched the
+				same example go past again and again — a deploy pipeline. Run
+				the tests, build the artifact, ship it. It's a fine example.
+				It's also quietly training you to misunderstand what this tool
+				is.
+			</p>
+
+			<p>
+				So let's be direct. mcp-flowgate is not an agentic coding tool.
+				Coding is one thing you can do with it. It is nowhere near the
+				most important.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Why everyone reads it as a coding tool</h2>
+
+			<p>
+				The misread is understandable. MCP itself grew up inside coding
+				assistants — the first place anyone wired a model to real tools
+				was the IDE. The loudest agent demos are coding agents. And yes,
+				two of this project's own examples — a TDD enforcer, a deploy
+				pipeline — are code-shaped, because engineers built it and
+				engineers reach for engineering examples.
+			</p>
+
+			<p>
+				So the pattern-match arrives on its own: a model, plus tools,
+				plus governance, must be "a coding-agent thing." Natural. And
+				wrong.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">The actual primitive</h2>
+
+			<p>
+				Strip it back to what the tool really does. mcp-flowgate
+				governs a process in which an LLM takes consequential actions.
+				The process has steps. Some steps are legal only at certain
+				points. Some need a human. Every step should leave a record.
+			</p>
+
+			<p>
+				Read that sentence again and notice what isn't in it: code.
+				Nothing about it is specific to software. It describes a
+				content review. An expense approval. A customer refund. A
+				patient intake. An engineering change. A procurement sign-off.
+				Coding is one instance of the primitive — a loud one, not a
+				special one.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Look at the examples — most of them aren't code</h2>
+
+			<p>
+				The repository ships a set of examples, and they give the game
+				away. Four of them have nothing to do with software.
+			</p>
+
+			<p>
+				<strong>Content publishing.</strong> The
+				<code>content-publish</code> example's README opens, in its
+				first line, "A non-coding example." An LLM helps draft a piece,
+				runs it through brand review, routes it to a human for
+				approval, and publishes it — and cannot skip a step. It's
+				marketing operations. The README even nominates it as the
+				example to show non-engineers. The mistakes it catches — skip
+				the review, approve your own piece, publish after a rejection —
+				are not coding problems. They're every-review-process problems.
+			</p>
+
+			<p>
+				<strong>Expense reimbursement.</strong> The
+				<code>expense-approval</code> example is finance. An employee
+				submits an expense; an LLM assistant classifies it against
+				policy; a manager approves; finance signs off above a
+				threshold; very-high-value claims need <em>two</em> finance
+				approvers; payroll issues the payment idempotently, so a
+				retried call never double-pays. Manager and finance are
+				different people with different authority — real role-based
+				access control, in a finance process, with not one line of
+				application code in the workflow.
+			</p>
+
+			<p>
+				<strong>Multi-tenant data.</strong> The <code>multi-tenant</code>
+				example is a SaaS data-governance shape: separate tenants,
+				separate databases, reads and writes gated by role.
+			</p>
+
+			<p>
+				<strong>Engineering change.</strong> The
+				<code>governed-change</code> example is hardware-quality
+				territory. An engineering change runs through a risk review —
+				modeled on FMECA, the failure-mode analysis discipline used in
+				automotive, aerospace, and manufacturing — loops on remediation
+				until the residual risk score is acceptable, and only then goes
+				to a human for sign-off. That is about as far from "agentic
+				coding" as a workflow gets.
+			</p>
+
+			<p>
+				And then, yes — the TDD enforcer and the deploy pipeline.
+				Coding. Two examples out of the set, built from the identical
+				primitives as the other four. Coding didn't get a special
+				engine. It got the same one everything else got.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Why this suddenly matters — a large part of the answer</h2>
+
+			<p>
+				There's a pattern in that list worth stopping on. Content,
+				finance, role-gated data, engineering change — those aren't
+				just "more use cases." They're the <em>regulated</em> ones.
+			</p>
+
+			<p>
+				And regulators have, over the last stretch, converged on a
+				single demand: if an AI system takes a consequential action,
+				you must be able to show what it did, why, and who was watching
+				— and you must keep that record.
+			</p>
+
+			<p>
+				The EU AI Act is the sharpest version. For high-risk AI
+				systems it requires the automatic recording of events — logs —
+				across the system's lifetime; that's Article 12,
+				"Record-keeping." It requires deployers to retain those logs
+				for at least six months. And it requires that high-risk systems
+				be built for, and operated with, effective human oversight by
+				people with the competence and authority to exercise it. Those
+				high-risk obligations become enforceable on 2 August 2026.
+			</p>
+
+			<p>
+				The United States has no single federal AI law, but a 2026 wave
+				of state statutes moved in the same direction — Colorado's AI
+				Act, and transparency and AI-governance laws in California and
+				Texas — while rules in cities and states such as New York layer
+				recordkeeping, notice, and human-review duties specifically
+				onto automated decision-making tools.
+			</p>
+
+			<p>
+				Two honest caveats, because this is a section about the law.
+				First: nothing here is legal advice, and no tool "makes you
+				compliant" — compliance is an organizational and legal question
+				far larger than any gateway. Second: the EU AI Act's logging
+				duty is specifically for high-risk systems, not every chatbot.
+				But the direction of travel is not ambiguous. Across exactly the
+				domains in that example list, "what did the AI do, and why?" is
+				turning from a question you would like to answer into one you
+				are required to.
+			</p>
+
+			<p>
+				That is a large part of why the audit trail stopped being a
+				nice-to-have. Not the whole reason you'd put a gateway in front
+				of an LLM — the rest of this blog is the rest of the reasons —
+				but a large part of it.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Now you can actually answer the question</h2>
+
+			<p>
+				Here's what changed. Until recently, answering "what did the
+				model do, and why" was genuinely hard. An LLM's actions were
+				scattered — some in chat logs, some in tool-call traces, some
+				merely implied by a prompt — and none of it was a coherent
+				record of decisions. After an incident you could reconstruct a
+				story, with effort. You could not hand someone the record,
+				because there wasn't one.
+			</p>
+
+			<p>
+				mcp-flowgate produces that record as a byproduct of how it
+				runs. It isn't a compliance feature bolted on the side. Every
+				meaningful step emits a structured audit event — the workflow
+				starting, each transition, each guard evaluation and its
+				result, each executor attempt, each approval request, each
+				rejection. A correlation ID threads every event from a single
+				decision together. The recorded state path is, literally, the
+				history of what the AI did and in what order.
+			</p>
+
+			<p>
+				The "why" is in there too, because the decision rules are
+				declared, not improvised — a guard that blocked a transition
+				logged the guard that blocked it. And "who was watching" isn't
+				a promise: an <code>actor: human</code> step is one the model
+				physically cannot take, a person resolves it, and both the
+				request and the resolution land in the trail.
+			</p>
+
+			<div class="code-window my-8">
+				<div class="code-window-header">
+					<span class="code-window-dot bg-red-500"></span>
+					<span class="code-window-dot bg-yellow-500"></span>
+					<span class="code-window-dot bg-green-500"></span>
+					<span class="text-slate-500 text-xs ml-2">content-publish.yaml</span>
+				</div>
+				<pre class="text-sm"><code class="text-slate-300" set:html={approvalCode} /></pre>
+			</div>
+
+			<p>
+				That fragment is from the content-publishing example. There is
+				no code in it. It's a marketing approval gate — and it produces,
+				on its own, the logged, human-overseen record that the EU AI
+				Act describes. Point an auditor, a brand director, or a
+				regulator at the audit log, and the answer to "what happened
+				here, and who signed off" is already written.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">What it's for — and what it isn't</h2>
+
+			<p>
+				So, plainly: mcp-flowgate is a governance-and-audit layer for
+				any process in which an LLM takes consequential, multi-step
+				action and someone needs to know what it did and why. That
+				someone might be a brand manager, a finance lead, an internal
+				auditor — or, increasingly, a regulator.
+			</p>
+
+			<p>
+				It is not for an LLM that only answers questions and touches
+				nothing. No actions means no governance needed and no gateway
+				needed — the <a href="/blog/welcome" class="text-indigo-600 hover:text-indigo-500">welcome post</a>
+				said as much. The breadth here is real, but it isn't infinite:
+				it's exactly the set of processes where an AI <em>acts</em>, and
+				the acting has consequences.
+			</p>
+
+			<p>
+				Coding is in that set. It is just neither the largest part of
+				it, nor — soon — the part with the most at stake.
+			</p>
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">Picture the other rooms</h2>
+
+			<p>
+				You've been reading this blog imagining a coding agent, because
+				that's the example that kept showing up. Picture the other
+				rooms now. The draft moving through brand review. The expense
+				climbing two tiers of approval. The engineering change clearing
+				its risk gate before anyone signs.
+			</p>
+
+			<p>
+				Same seven tools. Same state machine. Same audit trail. And in
+				those rooms, when someone asks what the AI did and why — and
+				more of them, every quarter, are now required to ask — there is
+				finally a file that answers.
+			</p>
+
+			<p class="mt-8">
+				Start with the <a href="/examples" class="text-indigo-600 hover:text-indigo-500">examples</a>
+				— the non-coding ones first — or the
+				<a href="/quick-start" class="text-indigo-600 hover:text-indigo-500">quick start</a>.
+			</p>
+
+			<hr class="my-10 border-slate-200" />
+
+			<h2 class="text-2xl font-bold text-slate-900 mt-12 mb-4">References</h2>
+
+			<ol class="my-6 space-y-2 text-slate-600 text-base list-decimal pl-6">
+				<li>EU Artificial Intelligence Act, Article 12 — Record-keeping.
+					<a href="https://artificialintelligenceact.eu/article/12/" class="text-indigo-600 hover:text-indigo-500">artificialintelligenceact.eu/article/12</a></li>
+				<li>European Commission — Regulatory framework on Artificial
+					Intelligence.
+					<a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai" class="text-indigo-600 hover:text-indigo-500">digital-strategy.ec.europa.eu</a></li>
+				<li>White &amp; Case — "AI Watch: Global regulatory tracker —
+					United States."
+					<a href="https://www.whitecase.com/insight-our-thinking/ai-watch-global-regulatory-tracker-united-states" class="text-indigo-600 hover:text-indigo-500">whitecase.com</a></li>
+			</ol>
+		</div>
+	</div>
+</article>
+
+<footer class="py-12 px-6 bg-slate-950 border-t border-slate-800">
+	<div class="max-w-5xl mx-auto flex flex-wrap justify-between items-start gap-8">
+		<div>
+			<p class="text-white font-semibold mb-2">mcp-flowgate</p>
+			<p class="text-slate-400 text-sm">Composable MCP control layer.</p>
+		</div>
+		<div class="flex gap-12">
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Resources</p>
+				<ul class="space-y-1">
+					<li><a href="/introduction" class="text-slate-500 hover:text-slate-300 text-sm">Docs</a></li>
+					<li><a href="/blog" class="text-slate-500 hover:text-slate-300 text-sm">Blog</a></li>
+				</ul>
+			</div>
+			<div>
+				<p class="text-slate-400 font-medium text-sm mb-2">Community</p>
+				<ul class="space-y-1">
+					<li><a href="https://github.com/matt-cochran/mcp-flowgate" class="text-slate-500 hover:text-slate-300 text-sm">GitHub</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+</footer>
+
+</Landing>
