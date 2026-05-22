@@ -32,7 +32,7 @@ pub use discovery::{
     DiscoveryIndex, DiscoveryItem, DiscoveryKind, DiscoveryLink, InMemoryDiscoveryIndex, SearchHit,
     SearchRequest,
 };
-pub use error::{ErrorClass, ExecutorError};
+pub use error::{ErrorClass, ExecutorError, RuntimeError};
 pub use guards::DefaultGuardEvaluator;
 pub use mapping::{merge_output, read_in_scopes};
 pub use model::*;

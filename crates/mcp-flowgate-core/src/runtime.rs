@@ -9,7 +9,7 @@ use uuid::Uuid;
 use serde::Serialize;
 
 use crate::audit::{AuditEvent, AuditSink};
-use crate::error::ExecutorError;
+use crate::error::{ExecutorError, RuntimeError};
 use crate::mapping::merge_output;
 use crate::model::*;
 use crate::ports::*;
@@ -501,6 +501,7 @@ impl WorkflowRuntime {
         // `target`, but `branches: [{ when, target }]` can override based on
         // the executor's result and the post-output context. First branch
         // whose `when` guard passes wins; otherwise the declared target.
+        let from_state = next.state.clone();
         let target = self
             .resolve_target(
                 &transition,
@@ -512,6 +513,33 @@ impl WorkflowRuntime {
             .await?;
         next.state = target;
         next.version += 1;
+
+        // Record-first: emit the transition record BEFORE committing the
+        // snapshot. The transition's declared `actor` (default `agent`) is the
+        // record's actor; `deterministic`/`system` actors carry a null
+        // principal, others carry the submitter's subject. If the record write
+        // fails we abort here and never call `save_if_version`, so the
+        // instance version stays unchanged.
+        let actor = transition
+            .get("actor")
+            .and_then(Value::as_str)
+            .unwrap_or("agent");
+        let principal = if actor == "deterministic" || actor == "system" {
+            None
+        } else {
+            Some(request.principal.subject.as_str())
+        };
+        self.emit_transition_record(
+            &next,
+            &from_state,
+            &request.transition,
+            &transition,
+            actor,
+            principal,
+            &arguments,
+            &correlation_id,
+        )
+        .await?;
 
         let next = self
             .store
@@ -685,6 +713,88 @@ impl WorkflowRuntime {
         }))
     }
 
+    /// Emit the transition record for one applied transition, **record-first**:
+    /// this writes the `workflow.transition` audit event and MUST be called
+    /// *before* `save_if_version` commits the resulting snapshot.
+    ///
+    /// `seq` is the resulting `WorkflowInstance.version` (post-increment). The
+    /// caller passes the to-be-committed instance so every required field can be
+    /// sourced exactly.
+    ///
+    /// On `Err`, the caller MUST abort the transition and NOT commit the
+    /// snapshot — propagating the [`RuntimeError::RecordWriteFailed`] is the
+    /// whole point of the record-first ordering. The `Result` must never be
+    /// swallowed.
+    #[allow(clippy::too_many_arguments)]
+    async fn emit_transition_record(
+        &self,
+        instance: &WorkflowInstance,
+        from_state: &str,
+        transition_name: &str,
+        transition_def: &Value,
+        actor: &str,
+        principal: Option<&str>,
+        arguments: &Value,
+        correlation_id: &str,
+    ) -> Result<(), RuntimeError> {
+        let seq = instance.version;
+
+        // Executor descriptor: best-effort. We can cleanly name the executor
+        // `kind` from the transition definition at the commit point. The
+        // `ok`/`durationMs` fields are not retained structurally here, so they
+        // are omitted (the schema makes them optional).
+        let executor = transition_def
+            .get("executor")
+            .and_then(|e| e.get("kind"))
+            .and_then(Value::as_str)
+            .map(|kind| json!({ "kind": kind }));
+
+        // Best-effort fields that cannot be cleanly sourced at the commit point
+        // are given empty/null values per the schema defaults:
+        //  - `guards`: the runtime evaluates guards but does not retain a
+        //    structured per-guard {kind,result} list at the commit point.
+        //  - `blackboardDelta`: context mutation is merged in place; the delta
+        //    is not computed separately.
+        //  - `childWorkflowId`: no child-workflow spawn exists in this runtime.
+        let mut record = json!({
+            "workflowId": instance.id,
+            "definitionId": instance.definition_id,
+            "definitionVersion": instance.definition_version,
+            "seq": seq,
+            "timestamp": Utc::now().to_rfc3339(),
+            "fromState": from_state,
+            "toState": instance.state,
+            "transition": transition_name,
+            "actor": actor,
+            "principal": principal,
+            "guards": [],
+            "arguments": arguments,
+            "blackboardDelta": {},
+            "childWorkflowId": Value::Null,
+            "correlationId": correlation_id,
+        });
+        if let Some(executor) = executor {
+            record["executor"] = executor;
+        }
+
+        let mut event = AuditEvent::new("workflow.transition")
+            .with_workflow(&instance.id)
+            .with_correlation(correlation_id)
+            .with_payload(record);
+        if let Some(principal) = principal {
+            event = event.with_actor(principal);
+        }
+
+        self.audit
+            .record(event)
+            .await
+            .map_err(|source| RuntimeError::RecordWriteFailed {
+                workflow_id: instance.id.clone(),
+                seq,
+                source,
+            })
+    }
+
     /// Resolve the destination state for a successful transition. If
     /// `branches: [{when, target}]` is declared, evaluate each `when`
     /// guard against the post-execute state and return the first match's
@@ -792,6 +902,40 @@ impl WorkflowRuntime {
         let expected_version = instance.version;
         instance.state = target.clone();
         instance.version += 1;
+
+        // Record-first: emit the `workflow.transition` record BEFORE committing
+        // the timeout state change. If the record write fails, leave the workflow
+        // unchanged so the next timeout check retries it.
+        let correlation_id = format!("cor_{}", Uuid::new_v4().simple());
+        let transition_name = definition
+            .pointer("/onTimeout/transition")
+            .and_then(Value::as_str)
+            .unwrap_or("onTimeout");
+        let on_timeout_def = definition
+            .pointer("/onTimeout")
+            .cloned()
+            .unwrap_or(Value::Null);
+        if let Err(e) = self
+            .emit_transition_record(
+                &instance,
+                &from_state,
+                transition_name,
+                &on_timeout_def,
+                "system",
+                None,
+                &json!({}),
+                &correlation_id,
+            )
+            .await
+        {
+            tracing::warn!(
+                workflow = %instance.id,
+                error = %e,
+                "timeout transition record failed — skipping state commit to allow retry"
+            );
+            return Ok(None);
+        }
+
         let saved = self
             .store
             .save_if_version(instance, expected_version)
@@ -802,6 +946,7 @@ impl WorkflowRuntime {
             .record(
                 AuditEvent::new("workflow.timed_out")
                     .with_workflow(&saved.id)
+                    .with_correlation(&correlation_id)
                     .with_actor(&principal.subject)
                     .with_payload(json!({
                         "elapsedMs": elapsed,
@@ -1051,6 +1196,22 @@ impl WorkflowRuntime {
             let expected_version = instance.version;
             instance.state = target.clone();
             instance.version += 1;
+
+            // Record-first: emit the transition record for this chain hop
+            // BEFORE committing the snapshot. Deterministic transitions carry a
+            // null principal. A record-write failure aborts the whole chain
+            // before `save_if_version`, so the instance version stays unchanged.
+            self.emit_transition_record(
+                &instance,
+                &from_state,
+                &transition_name,
+                &transition_def,
+                "deterministic",
+                None,
+                &json!({}),
+                correlation_id,
+            )
+            .await?;
 
             instance = self
                 .store

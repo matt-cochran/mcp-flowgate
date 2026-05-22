@@ -1,5 +1,37 @@
 use thiserror::Error;
 
+/// Errors raised by the workflow runtime when applying a transition.
+///
+/// Distinct from [`ExecutorError`]: those classify *executor* failures so
+/// reliability policies can retry. A `RuntimeError` is a hard stop in the
+/// commit path that must abort the transition and propagate to the caller.
+#[derive(Debug, Error)]
+pub enum RuntimeError {
+    /// The transition record (a `workflow.transition` audit event) could not be
+    /// written. Because records are emitted *record-first* — before the
+    /// authoritative state snapshot is committed — a record-write failure means
+    /// the transition must fail fast and the snapshot must NOT be committed.
+    /// The message names the workflow id and the `seq` (resulting version) so
+    /// operators can pinpoint exactly which transition was aborted.
+    #[error("RECORD_WRITE_FAILED: failed to write transition record for workflow '{workflow_id}' at seq {seq}: {source}")]
+    RecordWriteFailed {
+        workflow_id: String,
+        seq: u64,
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl RuntimeError {
+    /// Stable error code token, mirroring the `code` strings used elsewhere in
+    /// the runtime (e.g. `ACTOR_MISMATCH`, `STALE_WORKFLOW_VERSION`).
+    pub fn code(&self) -> &'static str {
+        match self {
+            RuntimeError::RecordWriteFailed { .. } => "RECORD_WRITE_FAILED",
+        }
+    }
+}
+
 /// Classified executor errors. Reliability policies retry / fall back based on
 /// the variant, so executors should classify failures here rather than wrapping
 /// everything as `Other`.
