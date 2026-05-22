@@ -19,6 +19,7 @@ async fn human_executor_emits_approval_requested() {
             id: "wf_test".into(),
             definition_id: "demo".into(),
             definition_version: "1.0.0".into(),
+            definition: json!({"initialState": "awaiting_approval", "states": {}}),
             state: "awaiting_approval".into(),
             version: 0,
             input: json!({}),

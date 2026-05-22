@@ -12,6 +12,13 @@ pub struct WorkflowInstance {
     pub id: WorkflowId,
     pub definition_id: WorkflowDefinitionId,
     pub definition_version: String,
+    /// The resolved workflow definition snapshot this instance was started
+    /// with (SPEC §8.2 / §8.3). Captured once at `workflow.start` from the
+    /// `DefinitionStore` and persisted with the instance. Every in-flight
+    /// operation (`get`, `submit`, deterministic chaining, timeout) resolves
+    /// the definition from *this* field — never from the live config — so
+    /// editing or hot-reloading config never disturbs a running instance.
+    pub definition: Value,
     pub state: StateName,
     pub version: u64,
     pub input: Value,

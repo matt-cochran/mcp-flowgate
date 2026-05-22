@@ -122,10 +122,13 @@ impl WorkflowRuntime {
         let request = StartWorkflow { input, ..request };
 
         let initial_state = required_str(&definition, "/initialState")?.to_owned();
+        // The instance carries its own resolved definition snapshot. Source
+        // `definition_version` from that snapshot's `version` (Task 4.1
+        // guarantees every workflow definition has one, defaulting to "0").
         let definition_version = definition
             .get("version")
             .and_then(Value::as_str)
-            .unwrap_or("1.0.0")
+            .unwrap_or("0")
             .to_owned();
 
         let initial_context = definition
@@ -136,6 +139,7 @@ impl WorkflowRuntime {
             id: format!("wf_{}", Uuid::new_v4().simple()),
             definition_id: request.definition_id.clone(),
             definition_version,
+            definition: definition.clone(),
             state: initial_state,
             version: 0,
             input: request.input,
@@ -267,7 +271,10 @@ impl WorkflowRuntime {
 
     pub async fn get(&self, request: GetWorkflow) -> anyhow::Result<Value> {
         let instance = self.store.load(&request.workflow_id).await?;
-        let definition = self.definitions.load(&instance.definition_id).await?;
+        // In-flight: resolve the definition from the instance's carried
+        // snapshot, never from the live `DefinitionStore`. A config edit or
+        // hot reload must not disturb a running instance (SPEC §8.3).
+        let definition = instance.definition.clone();
         if let Some(timed_out) = self
             .check_and_apply_timeout(&definition, instance.clone(), &request.principal)
             .await?
@@ -295,7 +302,9 @@ impl WorkflowRuntime {
 
     pub async fn submit(&self, request: SubmitTransition) -> anyhow::Result<Value> {
         let instance = self.store.load(&request.workflow_id).await?;
-        let definition = self.definitions.load(&instance.definition_id).await?;
+        // In-flight: resolve the definition from the instance's carried
+        // snapshot, never from the live `DefinitionStore` (SPEC §8.3).
+        let definition = instance.definition.clone();
 
         let correlation_id = format!("cor_{}", Uuid::new_v4().simple());
 
@@ -683,7 +692,9 @@ impl WorkflowRuntime {
 
     pub async fn explain(&self, workflow_id: &str, transition: &str) -> anyhow::Result<Value> {
         let instance = self.store.load(workflow_id).await?;
-        let definition = self.definitions.load(&instance.definition_id).await?;
+        // In-flight: resolve the definition from the instance's carried
+        // snapshot, never from the live `DefinitionStore` (SPEC §8.3).
+        let definition = instance.definition.clone();
 
         let transition_def = transition_definition(&definition, &instance.state, transition);
         let allowed = transition_def.is_some();

@@ -34,6 +34,7 @@ fn make_request(
             id: "wf_test".into(),
             definition_id: "demo".into(),
             definition_version: "1.0.0".into(),
+            definition: json!({"initialState": "ready", "states": {}}),
             state: "ready".into(),
             version: 0,
             input: json!({}),

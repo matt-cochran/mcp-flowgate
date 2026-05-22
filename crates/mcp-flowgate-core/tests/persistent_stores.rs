@@ -15,6 +15,7 @@ fn instance(id: &str, state: &str, version: u64) -> WorkflowInstance {
         id: id.to_string(),
         definition_id: "demo".into(),
         definition_version: "1.0.0".into(),
+        definition: json!({"initialState": "open", "states": {}}),
         state: state.to_string(),
         version,
         input: json!({}),
