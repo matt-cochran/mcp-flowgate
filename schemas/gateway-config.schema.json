@@ -517,7 +517,16 @@
           "enum": ["stdout", "memory", "file", "none"],
           "default": "stdout"
         },
-        "path": { "type": "string" }
+        "path": {
+          "type": "string",
+          "description": "Directory into which rotated log files are written (used when sink=file). Each rotation period creates files named {stamp}-audit.log and {stamp}-transitions.log."
+        },
+        "rotation": {
+          "type": "string",
+          "enum": ["daily", "hourly", "weekly"],
+          "default": "daily",
+          "description": "How often to rotate log files. daily → YYYY-MM-DD stamp; hourly → YYYY-MM-DD-HH stamp; weekly → YYYY-Www stamp."
+        }
       }
     },
     "storeConfig": {

@@ -1,11 +1,10 @@
-use std::io::{BufRead, Seek};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use mcp_flowgate_core::audit::{
-    AuditSink, FileAuditSink, MemoryAuditSink, NullAuditSink, StdoutAuditSink,
+    AuditSink, FileAuditSink, MemoryAuditSink, NullAuditSink, RotationInterval, StdoutAuditSink,
 };
 use mcp_flowgate_core::capability::CapabilityRegistry;
 use mcp_flowgate_core::discovery::{DiscoveryIndex, InMemoryDiscoveryIndex};
@@ -514,7 +513,7 @@ fn approvals_resolve(config_path: &PathBuf, id: &str, outcome: &str) -> anyhow::
 
 fn approvals_tail(config_path: &PathBuf) -> anyhow::Result<()> {
     let config = load_config(config_path)?;
-    let audit_path = config
+    let audit_dir = config
         .pointer("/audit/path")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("audit.path is required for approvals tail"))?;
@@ -528,47 +527,31 @@ fn approvals_tail(config_path: &PathBuf) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    println!("tailing approvals from {}...", audit_path);
+    println!("tailing approvals from {}...", audit_dir);
     println!("(press Ctrl+C to stop)");
 
-    // Simple polling tail
-    let mut last_size = std::fs::metadata(audit_path).map(|m| m.len()).unwrap_or(0);
+    // Track read position per log file so new rotated files are picked up.
+    let mut file_offsets: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let current_size = std::fs::metadata(audit_path).map(|m| m.len()).unwrap_or(0);
-        if current_size > last_size {
-            if let Ok(file) = std::fs::File::open(audit_path) {
-                let mut reader = std::io::BufReader::new(file);
-                reader.seek(std::io::SeekFrom::Start(last_size)).ok();
-                let mut line = String::new();
-                while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                    if line.trim().is_empty() {
-                        line.clear();
-                        continue;
-                    }
-                    if let Ok(event) = serde_json::from_str::<Value>(&line) {
-                        if event.get("event_type").and_then(Value::as_str)
-                            == Some("human.approval.requested")
-                        {
-                            let id = event.get("id").and_then(Value::as_str).unwrap_or("?");
-                            let queue = event
-                                .get("payload")
-                                .and_then(|p| p.get("queue"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("?");
-                            let transition = event
-                                .get("payload")
-                                .and_then(|p| p.get("transition"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("?");
-                            println!("[{id}] queue={queue} transition={transition}");
-                        }
-                    }
-                    line.clear();
-                }
+        tail_dir_once(audit_dir, &mut file_offsets, |event| {
+            if event.get("event_type").and_then(Value::as_str)
+                == Some("human.approval.requested")
+            {
+                let id = event.get("id").and_then(Value::as_str).unwrap_or("?");
+                let queue = event
+                    .get("payload")
+                    .and_then(|p| p.get("queue"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("?");
+                let transition = event
+                    .get("payload")
+                    .and_then(|p| p.get("transition"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("?");
+                println!("[{id}] queue={queue} transition={transition}");
             }
-            last_size = current_size;
-        }
+        });
     }
 }
 
@@ -642,11 +625,26 @@ fn build_audit_sink(config: &Value) -> anyhow::Result<Arc<dyn AuditSink>> {
                 .pointer("/audit/path")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("audit.path is required when audit.sink=file"))?;
-            Arc::new(FileAuditSink::new(path))
+            let rotation = parse_rotation_interval(config);
+            Arc::new(FileAuditSink::new(path, rotation))
         }
         other => anyhow::bail!("unknown audit sink '{other}'"),
     };
     Ok(sink)
+}
+
+/// Parse `audit.rotation` from config; defaults to `Daily` when absent or
+/// unrecognized.
+fn parse_rotation_interval(config: &Value) -> RotationInterval {
+    match config
+        .pointer("/audit/rotation")
+        .and_then(Value::as_str)
+        .unwrap_or("daily")
+    {
+        "hourly" => RotationInterval::Hourly,
+        "weekly" => RotationInterval::Weekly,
+        _ => RotationInterval::Daily,
+    }
 }
 
 /// Append imported capabilities to the config's `proxy.expose` array. Doesn't
@@ -676,6 +674,53 @@ fn with_imports(mut config: Value, imported: &CapabilityRegistry) -> Value {
     Value::Object(root.clone())
 }
 
+/// Poll a directory of rotated log files for new lines. Tracks per-file byte
+/// offsets in `file_offsets` so each call only reads appended bytes. Newly
+/// appearing files (rotation events) are picked up automatically.
+///
+/// `handler` is called once per parsed JSON line; errors on individual lines
+/// are silently skipped to keep the tail running.
+fn tail_dir_once(
+    dir: &str,
+    file_offsets: &mut std::collections::HashMap<PathBuf, u64>,
+    mut handler: impl FnMut(&Value),
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("log"))
+        .collect();
+    paths.sort();
+
+    for path in paths {
+        let file_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let offset = file_offsets.entry(path.clone()).or_insert(0);
+        if file_len <= *offset {
+            continue;
+        }
+        if let Ok(file) = std::fs::File::open(&path) {
+            use std::io::{BufRead, BufReader, Seek, SeekFrom};
+            let mut reader = BufReader::new(file);
+            reader.seek(SeekFrom::Start(*offset)).ok();
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    if let Ok(event) = serde_json::from_str::<Value>(trimmed) {
+                        handler(&event);
+                    }
+                }
+                line.clear();
+            }
+            *offset = reader.stream_position().unwrap_or(file_len);
+        }
+    }
+}
+
 fn inspect_workflow(config_path: &PathBuf, workflow_id: &str) -> anyhow::Result<()> {
     let config = load_config(config_path)?;
     let store = build_workflow_store(&config)?;
@@ -702,50 +747,35 @@ fn inspect_workflow(config_path: &PathBuf, workflow_id: &str) -> anyhow::Result<
 
 fn audit_tail(config_path: &PathBuf, filter: &Option<String>) -> anyhow::Result<()> {
     let config = load_config(config_path)?;
-    let audit_path = config
+    let audit_dir = config
         .pointer("/audit/path")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("audit.path is required for audit tail"))?;
 
-    println!("tailing audit events from {}...", audit_path);
+    println!("tailing audit events from {}...", audit_dir);
     if let Some(f) = filter {
         println!("filter: event_type == \"{f}\"");
     }
     println!("(press Ctrl+C to stop)");
 
-    let mut last_size = std::fs::metadata(audit_path).map(|m| m.len()).unwrap_or(0);
+    let mut file_offsets: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let current_size = std::fs::metadata(audit_path).map(|m| m.len()).unwrap_or(0);
-        if current_size > last_size {
-            if let Ok(file) = std::fs::File::open(audit_path) {
-                use std::io::{BufRead, BufReader, Seek, SeekFrom};
-                let mut reader = BufReader::new(file);
-                reader.seek(SeekFrom::Start(last_size)).ok();
-                let mut line = String::new();
-                while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                    if line.trim().is_empty() {
-                        line.clear();
-                        continue;
-                    }
-                    if let Ok(event) = serde_json::from_str::<Value>(&line) {
-                        let event_type = event
-                            .get("event_type")
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        if let Some(f) = filter {
-                            if event_type != f.as_str() {
-                                line.clear();
-                                continue;
-                            }
-                        }
-                        println!("{}", serde_json::to_string_pretty(&event)?);
-                        println!("---");
-                    }
-                    line.clear();
+        let filter_ref = filter.as_deref();
+        tail_dir_once(audit_dir, &mut file_offsets, |event| {
+            let event_type = event
+                .get("event_type")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if let Some(f) = filter_ref {
+                if event_type != f {
+                    return;
                 }
             }
-            last_size = current_size;
-        }
+            if let Ok(pretty) = serde_json::to_string_pretty(&event) {
+                println!("{pretty}");
+                println!("---");
+            }
+        });
     }
 }

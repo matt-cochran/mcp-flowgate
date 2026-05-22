@@ -1,7 +1,8 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, IsoWeek, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -135,19 +136,94 @@ impl AuditSink for MemoryAuditSink {
     }
 }
 
-/// Appends one JSON line per event to a file. Opens for each write to keep the
-/// implementation tiny — fine for low-throughput audit streams.
+// ---------------------------------------------------------------------------
+// FileAuditSink — date-rotated, category-split file output
+// ---------------------------------------------------------------------------
+
+/// Controls the granularity of date-rotation for [`FileAuditSink`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RotationInterval {
+    /// Rotate once per calendar day. Stamp format: `YYYY-MM-DD`.
+    #[default]
+    Daily,
+    /// Rotate once per clock hour. Stamp format: `YYYY-MM-DD-HH`.
+    Hourly,
+    /// Rotate once per ISO week. Stamp format: `YYYY-Www` (e.g. `2026-W03`).
+    Weekly,
+}
+
+impl RotationInterval {
+    /// Derive the stamp string for the given instant and interval.
+    pub fn stamp(&self, at: DateTime<Utc>) -> String {
+        match self {
+            RotationInterval::Daily => at.format("%Y-%m-%d").to_string(),
+            RotationInterval::Hourly => at.format("%Y-%m-%d-%H").to_string(),
+            RotationInterval::Weekly => {
+                let iw: IsoWeek = at.iso_week();
+                format!("{:04}-W{:02}", iw.year(), iw.week())
+            }
+        }
+    }
+}
+
+/// A clock function that returns the current time. Boxed so tests can inject
+/// a deterministic implementation without spawning real timers.
+type ClockFn = Box<dyn Fn() -> DateTime<Utc> + Send + Sync>;
+
+/// Writes date-rotated, category-split NDJSON audit logs into a **directory**.
+///
+/// On each [`record`][AuditSink::record] call:
+/// - The current time is obtained from the injected clock (defaults to
+///   [`Utc::now`]).
+/// - The date stamp is derived from the clock and the configured
+///   [`RotationInterval`].
+/// - Events whose `event_type == "workflow.transition"` are routed to
+///   `{stamp}-transitions.log`; all other events go to `{stamp}-audit.log`.
+/// - The parent directory is created if it does not already exist.
 pub struct FileAuditSink {
-    path: std::path::PathBuf,
+    /// The directory into which rotated log files are written.
+    dir: PathBuf,
+    rotation: RotationInterval,
+    clock: ClockFn,
     lock: tokio::sync::Mutex<()>,
 }
 
 impl FileAuditSink {
-    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+    /// Create a sink that writes into `dir` with daily rotation and the system
+    /// clock.
+    pub fn new(dir: impl Into<PathBuf>, rotation: RotationInterval) -> Self {
         Self {
-            path: path.into(),
+            dir: dir.into(),
+            rotation,
+            clock: Box::new(Utc::now),
             lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Create a sink with a custom clock. Intended for deterministic testing.
+    pub fn with_clock(
+        dir: impl Into<PathBuf>,
+        rotation: RotationInterval,
+        clock: ClockFn,
+    ) -> Self {
+        Self {
+            dir: dir.into(),
+            rotation,
+            clock,
+            lock: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// Derive the log file path for the given event at the current clock time.
+    fn log_path(&self, event: &AuditEvent) -> PathBuf {
+        let stamp = self.rotation.stamp((self.clock)());
+        let category = if event.event_type == "workflow.transition" {
+            "transitions"
+        } else {
+            "audit"
+        };
+        self.dir.join(format!("{stamp}-{category}.log"))
     }
 }
 
@@ -156,24 +232,56 @@ impl AuditSink for FileAuditSink {
     async fn record(&self, event: AuditEvent) -> anyhow::Result<()> {
         use tokio::io::AsyncWriteExt;
         let _guard = self.lock.lock().await;
+        // Ensure the directory exists (create on first write rather than in
+        // the constructor so tests that never record don't create empty dirs).
+        tokio::fs::create_dir_all(&self.dir).await?;
+        let path = self.log_path(&event);
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.path)
+            .open(&path)
             .await?;
         let mut line = serde_json::to_vec(&event)?;
         line.push(b'\n');
         file.write_all(&line).await?;
+        file.flush().await?;
         Ok(())
     }
 
+    /// Read all events from every rotated file in the directory and return them
+    /// ordered chronologically by each event's `timestamp` field. Returns
+    /// `None` if the directory doesn't exist.
     async fn list_events(&self) -> Option<Vec<AuditEvent>> {
-        let content = tokio::fs::read_to_string(&self.path).await.ok()?;
-        let events: Vec<AuditEvent> = content
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
+        let mut read_dir = tokio::fs::read_dir(&self.dir).await.ok()?;
+        let mut paths: Vec<PathBuf> = Vec::new();
+        loop {
+            match read_dir.next_entry().await {
+                Ok(Some(entry)) => {
+                    let p = entry.path();
+                    if p.extension().and_then(|e| e.to_str()) == Some("log") {
+                        paths.push(p);
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => continue,
+            }
+        }
+        paths.sort();
+
+        let mut events: Vec<AuditEvent> = Vec::new();
+        for path in paths {
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                for line in content.lines() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    if let Ok(e) = serde_json::from_str(line) {
+                        events.push(e);
+                    }
+                }
+            }
+        }
+        events.sort_by_key(|e| e.timestamp);
         Some(events)
     }
 }

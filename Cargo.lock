@@ -1636,6 +1636,7 @@ name = "mcp-flowgate-schema"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "prettyplease",
  "regress",
  "schemars 0.8.22",

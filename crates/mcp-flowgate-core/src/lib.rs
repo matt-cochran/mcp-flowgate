@@ -25,7 +25,8 @@ pub mod store_sqlite;
 pub mod validate;
 
 pub use audit::{
-    AuditEvent, AuditSink, FileAuditSink, MemoryAuditSink, NullAuditSink, StdoutAuditSink,
+    AuditEvent, AuditSink, FileAuditSink, MemoryAuditSink, NullAuditSink, RotationInterval,
+    StdoutAuditSink,
 };
 pub use capability::{Capability, CapabilityRegistry, CapabilitySource};
 pub use discovery::{
