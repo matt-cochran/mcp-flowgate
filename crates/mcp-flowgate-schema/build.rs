@@ -12,6 +12,7 @@ fn main() -> anyhow::Result<()> {
 
     let inputs = [
         "gateway-config.schema.json",
+        "transition-record.schema.json",
         "workflow-response.schema.json",
     ];
 
