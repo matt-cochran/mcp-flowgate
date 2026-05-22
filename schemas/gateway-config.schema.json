@@ -241,6 +241,10 @@
       "required": ["initialState", "states"],
       "additionalProperties": false,
       "properties": {
+        "version": {
+          "type": "string",
+          "description": "Definition version discriminator; an ISO 'as-of' date is the recommended convention."
+        },
         "description": { "type": "string" },
         "tags": {
           "type": "array",

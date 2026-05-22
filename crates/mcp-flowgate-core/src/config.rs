@@ -123,6 +123,22 @@ pub fn resolve(mut config: Value) -> anyhow::Result<Value> {
         let _: Option<Value> = obj.remove("capabilities");
     }
 
+    // 5. Apply the per-workflow-definition version default ("0") to any
+    //    workflow definition that does not carry an explicit `version`.
+    //    This ensures downstream code (runtime, stores) always sees a version
+    //    on every workflow definition.
+    if let Some(workflows) = config
+        .pointer_mut("/workflows")
+        .and_then(Value::as_object_mut)
+    {
+        for def in workflows.values_mut() {
+            if let Some(obj) = def.as_object_mut() {
+                obj.entry("version")
+                    .or_insert_with(|| Value::String("0".to_string()));
+            }
+        }
+    }
+
     Ok(config)
 }
 

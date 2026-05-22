@@ -165,3 +165,91 @@ fn no_blackboard_declared_no_warning() {
         "expected no blackboard slot warnings when no blackboard is declared, got: {slot_warnings:?}"
     );
 }
+
+// ── Workflow definition version discriminator tests ─────────────────────────
+
+/// A workflow definition with an explicit `version` retains that value after resolution.
+#[test]
+fn workflow_definition_explicit_version_is_preserved() {
+    let yaml = r#"
+proxy:
+  expose:
+    - name: echo
+      executor: { kind: noop }
+workflows:
+  ci:
+    version: "2026-05-22"
+    initialState: lint
+    states:
+      lint:
+        terminal: true
+"#;
+    let resolved = config::resolve_str(yaml).expect("should resolve");
+    let version = resolved
+        .pointer("/workflows/ci/version")
+        .and_then(|v| v.as_str())
+        .expect("workflows.ci.version should be present");
+    assert_eq!(
+        version, "2026-05-22",
+        "explicit version should be preserved; got: {version:?}"
+    );
+}
+
+/// A workflow definition with no `version` has `version == "0"` after resolution.
+#[test]
+fn workflow_definition_missing_version_gets_default() {
+    let yaml = r#"
+proxy:
+  expose:
+    - name: echo
+      executor: { kind: noop }
+workflows:
+  ci:
+    initialState: lint
+    states:
+      lint:
+        terminal: true
+"#;
+    let resolved = config::resolve_str(yaml).expect("should resolve");
+    let version = resolved
+        .pointer("/workflows/ci/version")
+        .and_then(|v| v.as_str())
+        .expect("workflows.ci.version should be present after resolution");
+    assert_eq!(
+        version, "0",
+        "missing version should default to \"0\"; got: {version:?}"
+    );
+}
+
+/// Sanity: the top-level config `version` field is unaffected by per-workflow defaulting.
+#[test]
+fn top_level_config_version_unchanged_after_workflow_defaulting() {
+    let yaml = r#"
+version: "1.0.0"
+proxy:
+  expose:
+    - name: echo
+      executor: { kind: noop }
+workflows:
+  ci:
+    initialState: lint
+    states:
+      lint:
+        terminal: true
+"#;
+    let resolved = config::resolve_str(yaml).expect("should resolve");
+    let top_version = resolved
+        .pointer("/version")
+        .and_then(|v| v.as_str())
+        .expect("top-level version should be present");
+    assert_eq!(
+        top_version, "1.0.0",
+        "top-level config version must be unchanged; got: {top_version:?}"
+    );
+    // Workflow version should still get its default.
+    let wf_version = resolved
+        .pointer("/workflows/ci/version")
+        .and_then(|v| v.as_str())
+        .expect("workflows.ci.version should be present after resolution");
+    assert_eq!(wf_version, "0", "workflow version should default to \"0\"");
+}
