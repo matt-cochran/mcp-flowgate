@@ -32,18 +32,29 @@ impl std::fmt::Display for Diagnostic {
 pub fn validate_workflows(config: &Value) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
+    let skill_subjects: HashSet<&str> = config
+        .pointer("/skills")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+
     let Some(workflows) = config.pointer("/workflows").and_then(Value::as_object) else {
         return diagnostics;
     };
 
     for (id, def) in workflows {
-        validate_one_workflow(id, def, &mut diagnostics);
+        validate_one_workflow(id, def, &skill_subjects, &mut diagnostics);
     }
 
     diagnostics
 }
 
-fn validate_one_workflow(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+fn validate_one_workflow(
+    id: &str,
+    def: &Value,
+    skill_subjects: &HashSet<&str>,
+    out: &mut Vec<Diagnostic>,
+) {
     let Some(initial_state) = def.get("initialState").and_then(Value::as_str) else {
         out.push(Diagnostic::Error(format!(
             "workflow '{id}': missing 'initialState'"
@@ -207,6 +218,295 @@ fn validate_one_workflow(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
                 out.push(Diagnostic::Warning(format!(
                     "workflow '{id}': state '{state_name}' is unreachable from initialState '{initial_state}'"
                 )));
+            }
+        }
+    }
+
+    check_use_before_def(id, def, states, initial_state, out);
+    check_skills_refs(id, def, states, skill_subjects, out);
+}
+
+/// Phase 6: SPEC §9, §11 — `$.context.X` referenced by an `expr` guard or
+/// `{{ }}` template must have a reachable predecessor writer; `$.context.summary`
+/// is never a valid guard input.
+fn check_use_before_def(
+    id: &str,
+    def: &Value,
+    states: &serde_json::Map<String, Value>,
+    initial_state: &str,
+    out: &mut Vec<Diagnostic>,
+) {
+    let writers = compute_writers_into(def, states, initial_state);
+
+    for (state_name, state_def) in states {
+        let available = writers.get(state_name.as_str()).cloned().unwrap_or_default();
+
+        // Templates on the state (state.goal, state.guidance).
+        for field in ["goal", "guidance"] {
+            if let Some(text) = state_def.get(field).and_then(Value::as_str) {
+                for slot in extract_template_context_slots(text) {
+                    if slot == "summary" {
+                        // summary is a model-authored content slot; reading it
+                        // from a template is fine (it gets rendered). Only
+                        // guards must not read it.
+                        continue;
+                    }
+                    if !available.contains(slot.as_str()) {
+                        out.push(Diagnostic::Warning(format!(
+                            "workflow '{id}': state '{state_name}' template `{field}` reads `$.context.{slot}` \
+                             which has no reachable writer (use-before-def)"
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Guards on every outgoing transition (incl. branch `when` guards).
+        if let Some(ts) = state_def.get("transitions").and_then(Value::as_object) {
+            for (t_name, t_def) in ts {
+                let mut guards = collect_guards(t_def.get("guards"));
+                if let Some(branches) = t_def.get("branches").and_then(Value::as_array) {
+                    for branch in branches {
+                        if let Some(when) = branch.get("when") {
+                            collect_guards_into(when, &mut guards);
+                        }
+                    }
+                }
+                for guard in guards {
+                    let expr = match guard.get("expr").and_then(Value::as_str) {
+                        Some(e) => e,
+                        None => continue,
+                    };
+                    for slot in extract_expr_context_slots(expr) {
+                        if slot == "summary" {
+                            out.push(Diagnostic::Error(format!(
+                                "workflow '{id}': transition '{t_name}' in state '{state_name}' \
+                                 guard reads `$.context.summary` — model-authored summary is never \
+                                 a valid guard input (SPEC §6.3)"
+                            )));
+                            continue;
+                        }
+                        if !available.contains(slot.as_str()) {
+                            out.push(Diagnostic::Error(format!(
+                                "workflow '{id}': transition '{t_name}' in state '{state_name}' \
+                                 guard reads `$.context.{slot}` which has no reachable writer \
+                                 (use-before-def, SPEC §11)"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Build per-state writers_into via a fixed-point over the reachable subgraph.
+/// `writers_into[S]` = union over every reachable path from initial to S of
+/// the slots written by initialContext + every transition output: on that path.
+fn compute_writers_into(
+    def: &Value,
+    states: &serde_json::Map<String, Value>,
+    initial_state: &str,
+) -> HashMap<String, HashSet<String>> {
+    let mut writers: HashMap<String, HashSet<String>> = HashMap::new();
+
+    // Seed: initialContext keys + any onEnter output on the initial state are
+    // available before the first guard fires.
+    let mut seed: HashSet<String> = def
+        .get("initialContext")
+        .and_then(Value::as_object)
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+    if let Some(state) = states.get(initial_state) {
+        if let Some(on_enter_out) = state.pointer("/onEnter/output").and_then(Value::as_object) {
+            seed.extend(on_enter_out.keys().cloned());
+        }
+    }
+    writers.insert(initial_state.to_string(), seed);
+
+    // Propagate to a fixed point. Worst case O(|states| * |transitions|),
+    // bounded by tens-to-hundreds of states in practice — no need for a
+    // worklist-style optimisation.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (state_name, state_def) in states {
+            let Some(state_writers) = writers.get(state_name).cloned() else {
+                continue;
+            };
+            let Some(ts) = state_def.get("transitions").and_then(Value::as_object) else {
+                continue;
+            };
+            for (_t_name, t_def) in ts {
+                let mut produced = state_writers.clone();
+                if let Some(output) = t_def.get("output").and_then(Value::as_object) {
+                    produced.extend(output.keys().cloned());
+                }
+                let mut targets: Vec<&str> = Vec::new();
+                if let Some(target) = t_def.get("target").and_then(Value::as_str) {
+                    targets.push(target);
+                }
+                if let Some(branches) = t_def.get("branches").and_then(Value::as_array) {
+                    for branch in branches {
+                        if let Some(bt) = branch.get("target").and_then(Value::as_str) {
+                            targets.push(bt);
+                        }
+                    }
+                }
+                for target in targets {
+                    let entry = writers.entry(target.to_string()).or_default();
+                    let mut to_merge = produced.clone();
+                    // Add this state's own onEnter output (visible to any
+                    // guard leaving the target state).
+                    if let Some(target_state) = states.get(target) {
+                        if let Some(on_enter_out) = target_state
+                            .pointer("/onEnter/output")
+                            .and_then(Value::as_object)
+                        {
+                            to_merge.extend(on_enter_out.keys().cloned());
+                        }
+                    }
+                    for key in to_merge {
+                        if entry.insert(key) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    writers
+}
+
+fn collect_guards(guards: Option<&Value>) -> Vec<Value> {
+    let mut out = Vec::new();
+    if let Some(arr) = guards.and_then(Value::as_array) {
+        for g in arr {
+            collect_guards_into(g, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_guards_into(guard: &Value, out: &mut Vec<Value>) {
+    match guard.get("kind").and_then(Value::as_str) {
+        Some("all_of") | Some("any_of") => {
+            if let Some(inner) = guard.get("guards").and_then(Value::as_array) {
+                for g in inner {
+                    collect_guards_into(g, out);
+                }
+            }
+        }
+        Some("not") => {
+            if let Some(inner) = guard.get("guard") {
+                collect_guards_into(inner, out);
+            }
+        }
+        _ => out.push(guard.clone()),
+    }
+}
+
+/// Extract slot names from `$.context.X` paths inside an expression. Conservative
+/// regex-free scan — collects identifier-shaped suffixes after each `$.context.`.
+fn extract_expr_context_slots(expr: &str) -> Vec<String> {
+    extract_context_slots_from(expr)
+}
+
+/// Extract slot names from `{{ $.context.X }}` templates in a string.
+fn extract_template_context_slots(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            // Find closing `}}`.
+            if let Some(end) = find_subslice(&bytes[i + 2..], b"}}") {
+                let inner = &text[i + 2..i + 2 + end];
+                out.extend(extract_context_slots_from(inner));
+                i += 2 + end + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > hay.len() {
+        return None;
+    }
+    for i in 0..=hay.len() - needle.len() {
+        if &hay[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+    }
+    None
+}
+
+fn extract_context_slots_from(text: &str) -> Vec<String> {
+    const PREFIX: &str = "$.context.";
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(idx) = rest.find(PREFIX) {
+        let after = &rest[idx + PREFIX.len()..];
+        let slot: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !slot.is_empty() {
+            out.push(slot);
+        }
+        rest = &after[after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after.len())..];
+    }
+    out
+}
+
+/// Phase 6: SPEC §5.5, §11 — skills references resolve to a declared fragment;
+/// more than ~4 refs at one scope warns.
+fn check_skills_refs(
+    id: &str,
+    def: &Value,
+    states: &serde_json::Map<String, Value>,
+    skill_subjects: &HashSet<&str>,
+    out: &mut Vec<Diagnostic>,
+) {
+    const REF_WARN_THRESHOLD: usize = 4;
+
+    let mut check_scope = |scope: &str, refs: &Value| {
+        let Some(arr) = refs.as_array() else { return };
+        if arr.len() > REF_WARN_THRESHOLD {
+            out.push(Diagnostic::Warning(format!(
+                "workflow '{id}': {scope} surfaces {n} skills refs — the menu is itself payload, \
+                 consider trimming to ≤{REF_WARN_THRESHOLD}",
+                n = arr.len()
+            )));
+        }
+        for entry in arr {
+            let Some(subject) = entry.as_str() else { continue };
+            if !skill_subjects.contains(subject) {
+                out.push(Diagnostic::Error(format!(
+                    "workflow '{id}': {scope} references skills entry '{subject}' \
+                     which is not declared in the top-level `skills:` library (SPEC §11)"
+                )));
+            }
+        }
+    };
+
+    if let Some(refs) = def.get("skills") {
+        check_scope("workflow scope", refs);
+    }
+    for (state_name, state_def) in states {
+        if let Some(refs) = state_def.get("skills") {
+            check_scope(&format!("state '{state_name}'"), refs);
+        }
+        if let Some(ts) = state_def.get("transitions").and_then(Value::as_object) {
+            for (t_name, t_def) in ts {
+                if let Some(refs) = t_def.get("skills") {
+                    check_scope(&format!("transition '{t_name}' in state '{state_name}'"), refs);
+                }
             }
         }
     }

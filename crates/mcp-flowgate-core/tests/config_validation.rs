@@ -291,6 +291,224 @@ skills:
     );
 }
 
+// ── Phase 6: `check` use-before-def (SPEC §9, §11) ───────────────────────────
+
+#[test]
+fn guard_reading_unwritten_slot_errors() {
+    // `$.context.X` referenced by an expr guard with no reachable predecessor
+    // writer is a `check` error (SPEC §11: use-before-def → error).
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "blackboard": ["needsApproval"],
+                "states": {
+                    "start": {
+                        "transitions": {
+                            "go": {
+                                "target": "gate",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.needsApproval == true" }
+                                ]
+                            }
+                        }
+                    },
+                    "gate": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.is_error() && d.message().contains("needsApproval"))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "expected an error naming the unwritten slot 'needsApproval'; got: {diags:?}"
+    );
+}
+
+#[test]
+fn guard_reading_summary_errors() {
+    // `$.context.summary` is model-authored content — it is never a guard
+    // input. Reading it from an `expr` guard is a `check` error regardless
+    // of declared blackboard slots (SPEC §6.3, §11).
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "states": {
+                    "start": {
+                        "transitions": {
+                            "go": {
+                                "target": "done",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.summary == 'ok'" }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.is_error() && d.message().contains("summary"))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "expected an error naming the forbidden `summary` guard read; got: {diags:?}"
+    );
+}
+
+#[test]
+fn template_unknown_slot_warns() {
+    // Templates that read `$.context.X` with no reachable writer render a
+    // stub at runtime (SPEC §5.2) — so `check` reports a warning, not an
+    // error: it's a likely bug but not a fail-fast violation.
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "states": {
+                    "start": {
+                        "guidance": "Hello {{ $.context.unknownSlot }}",
+                        "transitions": {
+                            "go": { "target": "done" }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let warnings: Vec<_> = diags
+        .iter()
+        .filter(|d| !d.is_error() && d.message().contains("unknownSlot"))
+        .collect();
+    assert!(
+        !warnings.is_empty(),
+        "expected a warning for template reading the undeclared slot 'unknownSlot'; got: {diags:?}"
+    );
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.is_error() && d.message().contains("unknownSlot"))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "template-slot diagnostic must be a warning, not an error; got: {errors:?}"
+    );
+}
+
+#[test]
+fn guard_reading_slot_with_reachable_writer_clean() {
+    // Reachable predecessor writer satisfies use-before-def — no diagnostic.
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "lint",
+                "blackboard": ["lintPassed"],
+                "states": {
+                    "lint": {
+                        "transitions": {
+                            "done": {
+                                "target": "gate",
+                                "output": { "lintPassed": "$.result.value" }
+                            }
+                        }
+                    },
+                    "gate": {
+                        "transitions": {
+                            "deploy": {
+                                "target": "deployed",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.lintPassed == true" }
+                                ]
+                            }
+                        }
+                    },
+                    "deployed": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.is_error() && d.message().contains("lintPassed"))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "no error expected when slot has a reachable writer; got: {errors:?}"
+    );
+}
+
+#[test]
+fn dangling_skills_ref_errors() {
+    // A `skills:` reference to a subject not in the top-level library → error.
+    let config = json!({
+        "skills": {
+            "house-voice": { "verb": "apply", "body": "..." }
+        },
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "skills": ["does-not-exist"],
+                "states": {
+                    "start": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.is_error() && d.message().contains("does-not-exist"))
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "expected an error naming the dangling skills ref; got: {diags:?}"
+    );
+}
+
+#[test]
+fn many_skills_refs_at_one_scope_warns() {
+    // More than ~4 refs surfaced at a single scope → warn (the menu is itself
+    // payload). SPEC §11.
+    let config = json!({
+        "skills": {
+            "a": { "verb": "apply", "body": "..." },
+            "b": { "verb": "apply", "body": "..." },
+            "c": { "verb": "apply", "body": "..." },
+            "d": { "verb": "apply", "body": "..." },
+            "e": { "verb": "apply", "body": "..." }
+        },
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "skills": ["a", "b", "c", "d", "e"],
+                "states": {
+                    "start": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let warnings: Vec<_> = diags
+        .iter()
+        .filter(|d| !d.is_error() && d.message().to_lowercase().contains("skills"))
+        .collect();
+    assert!(
+        !warnings.is_empty(),
+        "expected a warning about too many refs at one scope; got: {diags:?}"
+    );
+}
+
 #[test]
 fn well_formed_skills_load_clean() {
     let yaml = r##"
