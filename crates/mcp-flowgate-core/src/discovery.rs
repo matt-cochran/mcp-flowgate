@@ -201,10 +201,18 @@ impl DiscoveryIndex for InMemoryDiscoveryIndex {
         let terms = tokenize(&request.query);
         let want_all = terms.is_empty();
 
+        // Guidance fragments are looked up by known subject via
+        // `gateway.describe` — they're not the answer to "what can I do?".
+        // They stay in the index (so describe can find them) but are
+        // excluded from search unless the caller asks for them explicitly
+        // via `kind=guidance`.
         let mut hits: Vec<SearchHit> = self
             .docs
             .iter()
-            .filter(|d| request.kind.map(|k| k == d.kind).unwrap_or(true))
+            .filter(|d| match request.kind {
+                Some(k) => k == d.kind,
+                None => d.kind != DiscoveryKind::Guidance,
+            })
             .filter_map(|d| {
                 let score = score_doc(d, &terms);
                 if want_all || score > 0.0 {
@@ -235,7 +243,10 @@ impl DiscoveryIndex for InMemoryDiscoveryIndex {
         Ok(self
             .docs
             .iter()
-            .filter(|d| kind.map(|k| k == d.kind).unwrap_or(true))
+            .filter(|d| match kind {
+                Some(k) => k == d.kind,
+                None => d.kind != DiscoveryKind::Guidance,
+            })
             .cloned()
             .collect())
     }
