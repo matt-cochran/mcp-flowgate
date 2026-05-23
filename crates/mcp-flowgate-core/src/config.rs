@@ -182,28 +182,73 @@ fn validate_skills(config: &Value) -> anyhow::Result<()> {
 }
 
 fn stamp_skills_library(config: &mut Value) {
-    let library: Map<String, Value> = match config.pointer("/skills").and_then(Value::as_object) {
-        Some(skills) if !skills.is_empty() => {
-            // Carry verb only — body lives in the top-level map and is fetched
-            // via `gateway.describe`, not embedded per-workflow.
-            let mut lib = Map::new();
-            for (subject, entry) in skills {
-                if let Some(verb) = entry.get("verb").and_then(Value::as_str) {
-                    lib.insert(subject.clone(), Value::String(verb.to_string()));
+    let full_library: Map<String, Value> =
+        match config.pointer("/skills").and_then(Value::as_object) {
+            Some(skills) if !skills.is_empty() => {
+                // Carry verb only — body lives in the top-level map and is fetched
+                // via `gateway.describe`, not embedded per-workflow.
+                let mut lib = Map::new();
+                for (subject, entry) in skills {
+                    if let Some(verb) = entry.get("verb").and_then(Value::as_str) {
+                        lib.insert(subject.clone(), Value::String(verb.to_string()));
+                    }
                 }
+                lib
             }
-            lib
-        }
-        _ => return,
-    };
+            _ => return,
+        };
 
     if let Some(workflows) = config
         .pointer_mut("/workflows")
         .and_then(Value::as_object_mut)
     {
         for def in workflows.values_mut() {
-            if let Some(obj) = def.as_object_mut() {
-                obj.insert("_skillsLibrary".into(), Value::Object(library.clone()));
+            let Some(obj) = def.as_object_mut() else { continue };
+            let referenced = collect_referenced_subjects(obj);
+            if referenced.is_empty() {
+                continue;
+            }
+            let mut scoped = Map::new();
+            for subject in &referenced {
+                if let Some(verb) = full_library.get(subject) {
+                    scoped.insert(subject.clone(), verb.clone());
+                }
+            }
+            // Skip stamping if none of the referenced subjects resolve — the
+            // check pass reports those dangling refs as errors; no need to
+            // bloat the snapshot with an empty library.
+            if !scoped.is_empty() {
+                obj.insert("_skillsLibrary".into(), Value::Object(scoped));
+            }
+        }
+    }
+}
+
+/// Walk a workflow definition and collect every subject named in any
+/// `skills:` array — workflow, state, and transition scope (SPEC §5.5).
+fn collect_referenced_subjects(workflow: &Map<String, Value>) -> HashSet<String> {
+    let mut out = HashSet::new();
+    collect_skills_strings(workflow.get("skills"), &mut out);
+    let Some(states) = workflow.get("states").and_then(Value::as_object) else {
+        return out;
+    };
+    for state in states.values() {
+        collect_skills_strings(state.get("skills"), &mut out);
+        let Some(transitions) = state.get("transitions").and_then(Value::as_object) else {
+            continue;
+        };
+        for t in transitions.values() {
+            collect_skills_strings(t.get("skills"), &mut out);
+        }
+    }
+    out
+}
+
+fn collect_skills_strings(scope: Option<&Value>, out: &mut HashSet<String>) {
+    if let Some(arr) = scope.and_then(Value::as_array) {
+        for entry in arr {
+            if let Some(s) = entry.as_str() {
+                out.insert(s.to_string());
             }
         }
     }

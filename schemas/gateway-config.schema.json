@@ -325,6 +325,11 @@
           "description": "Declared context slots — either a list of slot names, or a map of slot name to a JSON-schema fragment. Optional; absent means no declared slots."
         },
         "skills": { "$ref": "#/$defs/skillRefs" },
+        "_skillsLibrary": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Runtime-stamped — do NOT author. Resolve writes this as a `{ subject: verb }` slice of the top-level `skills:` map, scoped to the subjects this workflow actually references. Used by the runtime to decorate `guidance.refs` from the per-instance snapshot alone."
+        },
         "states": {
           "type": "object",
           "minProperties": 1,
