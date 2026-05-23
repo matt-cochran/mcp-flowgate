@@ -85,6 +85,8 @@ fn build_discovery() -> Arc<InMemoryDiscoveryIndex> {
                 args: json!({ "definitionId": "wf.alpha", "input": {} }),
                 input_schema: None,
             }],
+            verb: None,
+            body: None,
         },
         DiscoveryItem {
             id: "cap.beta".into(),
@@ -96,6 +98,8 @@ fn build_discovery() -> Arc<InMemoryDiscoveryIndex> {
             aliases: vec![],
             text: "beta text".into(),
             links: vec![],
+            verb: None,
+            body: None,
         },
     ]))
 }

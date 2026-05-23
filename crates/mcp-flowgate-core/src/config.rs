@@ -145,6 +145,13 @@ pub fn resolve(mut config: Value) -> anyhow::Result<Value> {
     //    rather than only linted.
     validate_skills(&config)?;
 
+    // 7. Stamp each workflow definition with `_skillsLibrary: { subject: verb }`
+    //    drawn from the top-level `skills:` map (subjects only — verb, no body;
+    //    body is fetched on demand via `gateway.describe`). Lets the runtime
+    //    decorate `guidance.refs` from the per-instance snapshot alone without
+    //    needing a side channel to the top-level config.
+    stamp_skills_library(&mut config);
+
     Ok(config)
 }
 
@@ -172,6 +179,34 @@ fn validate_skills(config: &Value) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn stamp_skills_library(config: &mut Value) {
+    let library: Map<String, Value> = match config.pointer("/skills").and_then(Value::as_object) {
+        Some(skills) if !skills.is_empty() => {
+            // Carry verb only — body lives in the top-level map and is fetched
+            // via `gateway.describe`, not embedded per-workflow.
+            let mut lib = Map::new();
+            for (subject, entry) in skills {
+                if let Some(verb) = entry.get("verb").and_then(Value::as_str) {
+                    lib.insert(subject.clone(), Value::String(verb.to_string()));
+                }
+            }
+            lib
+        }
+        _ => return,
+    };
+
+    if let Some(workflows) = config
+        .pointer_mut("/workflows")
+        .and_then(Value::as_object_mut)
+    {
+        for def in workflows.values_mut() {
+            if let Some(obj) = def.as_object_mut() {
+                obj.insert("_skillsLibrary".into(), Value::Object(library.clone()));
+            }
+        }
+    }
 }
 
 fn is_kebab_token(s: &str) -> bool {

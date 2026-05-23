@@ -47,7 +47,42 @@ pub fn index_from_config(config: &Value) -> Vec<DiscoveryItem> {
         }
     }
 
+    // Skills are always indexed when present — they have no opt-out switch in
+    // `discovery.include` because they exist only when the author declares a
+    // `skills:` block, which is itself the opt-in (SPEC v2 §5.3).
+    if let Some(skills) = config.pointer("/skills").and_then(Value::as_object) {
+        for (subject, entry) in skills {
+            items.push(guidance_item(subject, entry));
+        }
+    }
+
     items
+}
+
+fn guidance_item(subject: &str, entry: &Value) -> DiscoveryItem {
+    let verb = entry
+        .get("verb")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let body = entry
+        .get("body")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    DiscoveryItem {
+        id: subject.to_string(),
+        kind: DiscoveryKind::Guidance,
+        title: subject.to_string(),
+        description: format!("Guidance fragment '{subject}' (verb: {verb})."),
+        tags: vec![],
+        examples: vec![],
+        aliases: vec![],
+        text: format!("{subject} {verb}"),
+        links: vec![],
+        verb: Some(verb),
+        body: Some(body),
+    }
 }
 
 fn workflow_item(id: &str, def: &Value) -> DiscoveryItem {
@@ -115,6 +150,8 @@ fn workflow_item(id: &str, def: &Value) -> DiscoveryItem {
             args: Value::Object(start_args),
             input_schema,
         }],
+        verb: None,
+        body: None,
     }
 }
 
@@ -161,6 +198,8 @@ fn capability_item(exposure: &Value) -> Option<DiscoveryItem> {
             args: Value::Object(start_args),
             input_schema,
         }],
+        verb: None,
+        body: None,
     })
 }
 
@@ -180,6 +219,8 @@ fn connection_item(name: &str, conn: &Value) -> DiscoveryItem {
         aliases: vec![],
         text: format!("{name} {kind}"),
         links: vec![],
+        verb: None,
+        body: None,
     }
 }
 

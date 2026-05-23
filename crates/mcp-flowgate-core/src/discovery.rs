@@ -21,6 +21,9 @@ pub enum DiscoveryKind {
     Workflow,
     Capability,
     Connection,
+    /// A reusable guidance fragment ("skill"). The lookup id is the fragment's
+    /// `subject`; `gateway.describe(subject)` returns its `verb` + `body`.
+    Guidance,
 }
 
 impl DiscoveryKind {
@@ -29,6 +32,7 @@ impl DiscoveryKind {
             DiscoveryKind::Workflow => "workflow",
             DiscoveryKind::Capability => "capability",
             DiscoveryKind::Connection => "connection",
+            DiscoveryKind::Guidance => "guidance",
         }
     }
 }
@@ -60,6 +64,14 @@ pub struct DiscoveryItem {
     /// HATEOAS templates for what to do with this item.
     #[serde(default)]
     pub links: Vec<DiscoveryLink>,
+    /// Guidance fragments only: the fragment's space-free `verb` (`apply`,
+    /// `check`, ...). `None` for non-guidance items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verb: Option<String>,
+    /// Guidance fragments only: the fragment's static markdown body returned
+    /// by `gateway.describe`. `None` for non-guidance items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// A pre-built HATEOAS link attached to a `DiscoveryItem`. These are

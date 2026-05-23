@@ -1467,8 +1467,9 @@ impl WorkflowRuntime {
         // `{{ }}` placeholders are interpolated at render time against the
         // live instance; stored strings are never mutated (SPEC v2 §5.2).
         let state_path = format!("/states/{}", pointer_escape(&instance.state));
-        if let Some(state_def) = definition.pointer(&state_path) {
-            let mut guidance = serde_json::Map::new();
+        let state_def_opt = definition.pointer(&state_path);
+        let mut guidance = serde_json::Map::new();
+        if let Some(state_def) = state_def_opt {
             if let Some(g) = state_def.get("goal").and_then(Value::as_str) {
                 guidance.insert("goal".into(), json!(render_template(g, instance)));
             }
@@ -1478,9 +1479,19 @@ impl WorkflowRuntime {
                     json!(render_template(g, instance)),
                 );
             }
-            if !guidance.is_empty() {
-                body["guidance"] = Value::Object(guidance);
-            }
+        }
+
+        // Skills refs: surface workflow-scope + active-state-scope refs
+        // (SPEC v2 §5.5). Each ref pairs `subject` (the gateway.describe
+        // lookup) with `verb` (the mode). Verbs are resolved from the
+        // `_skillsLibrary` stamped onto the snapshot at config-resolve.
+        let refs = collect_guidance_refs(definition, state_def_opt);
+        if !refs.is_empty() {
+            guidance.insert("refs".into(), Value::Array(refs));
+        }
+
+        if !guidance.is_empty() {
+            body["guidance"] = Value::Object(guidance);
         }
 
         body
@@ -1770,6 +1781,44 @@ fn empty_object_schema() -> Value {
         "properties": {},
         "additionalProperties": false
     })
+}
+
+// ---------------------------------------------------------------------------
+// Guidance refs (SPEC v2 §5.5)
+// ---------------------------------------------------------------------------
+
+/// Build the `guidance.refs` array from a workflow snapshot. Pulls subjects
+/// from workflow-scope `skills:` and the active state's `skills:` (de-duped,
+/// declaration order). Each emitted ref pairs `subject` with the `verb` looked
+/// up in the snapshot-stamped `_skillsLibrary`. Subjects with no library
+/// entry are skipped here — `check` reports those as errors (SPEC §5.5).
+fn collect_guidance_refs(definition: &Value, state_def: Option<&Value>) -> Vec<Value> {
+    let library = definition
+        .get("_skillsLibrary")
+        .and_then(Value::as_object);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+
+    let mut push_scope = |scope: Option<&Value>| {
+        let Some(arr) = scope.and_then(Value::as_array) else {
+            return;
+        };
+        for entry in arr {
+            let Some(subject) = entry.as_str() else { continue };
+            if !seen.insert(subject.to_string()) {
+                continue;
+            }
+            let verb = library
+                .and_then(|lib| lib.get(subject))
+                .and_then(Value::as_str);
+            let Some(verb) = verb else { continue };
+            out.push(json!({ "verb": verb, "subject": subject }));
+        }
+    };
+
+    push_scope(definition.get("skills"));
+    push_scope(state_def.and_then(|s| s.get("skills")));
+    out
 }
 
 // ---------------------------------------------------------------------------

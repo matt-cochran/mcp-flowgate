@@ -221,3 +221,102 @@ async fn template_value_not_re_expanded() {
         "outer placeholder must be consumed, got: {instructions}"
     );
 }
+
+// ── test 4 ────────────────────────────────────────────────────────────────────
+// SPEC v2 §5.5: a state referencing a `skills:` entry surfaces a
+// `guidance.refs` entry `{verb, subject}`; `gateway.describe(subject)` returns
+// the body.
+
+#[tokio::test]
+async fn response_surfaces_guidance_refs() {
+    use mcp_flowgate_core::discovery::{DiscoveryIndex, InMemoryDiscoveryIndex};
+
+    let cfg = json!({
+        "version": "1.0.0",
+        "skills": {
+            "house-voice": {
+                "verb": "apply",
+                "body": "Lead with the reader's problem. Short sentences."
+            },
+            "editorial-checklist": {
+                "verb": "follow",
+                "body": "1. Verify facts. 2. Cite sources."
+            }
+        },
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "skills": ["house-voice"],
+                "states": {
+                    "draft": {
+                        "goal": "Write the draft",
+                        "skills": ["editorial-checklist"],
+                        "transitions": {
+                            "submit": { "target": "done", "actor": "agent" }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+
+    // The runtime needs `skills:` in the snapshot — driven through `resolve` so
+    // the resolve-time stamping path is exercised.
+    let resolved = mcp_flowgate_core::config::resolve(cfg.clone()).expect("config should resolve");
+
+    let (runtime, _) = build_runtime(resolved.clone());
+    let resp = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+
+    // The response carries a refs list that includes both scopes' refs.
+    let refs = resp["guidance"]["refs"]
+        .as_array()
+        .expect("guidance.refs must be present");
+    let subjects: Vec<&str> = refs
+        .iter()
+        .filter_map(|r| r["subject"].as_str())
+        .collect();
+    assert!(
+        subjects.contains(&"house-voice"),
+        "workflow-scope ref must be surfaced; got: {subjects:?}"
+    );
+    assert!(
+        subjects.contains(&"editorial-checklist"),
+        "state-scope ref must be surfaced; got: {subjects:?}"
+    );
+
+    // Each ref carries the verb from the top-level library.
+    for r in refs {
+        let subj = r["subject"].as_str().unwrap();
+        let verb = r["verb"]
+            .as_str()
+            .unwrap_or_else(|| panic!("ref must carry verb; got {r}"));
+        match subj {
+            "house-voice" => assert_eq!(verb, "apply"),
+            "editorial-checklist" => assert_eq!(verb, "follow"),
+            other => panic!("unexpected ref subject: {other}"),
+        }
+    }
+
+    // `gateway.describe(subject)` returns the body via the discovery layer.
+    let discovery = InMemoryDiscoveryIndex::from_config(&resolved);
+    let item = discovery
+        .describe("house-voice")
+        .await
+        .unwrap()
+        .expect("house-voice should be discoverable");
+    let body = serde_json::to_value(&item).unwrap();
+    let body_str = body["body"].as_str().expect("describe must return body");
+    assert!(
+        body_str.contains("reader's problem"),
+        "body should be surfaced; got: {body_str}"
+    );
+    assert_eq!(body["verb"].as_str(), Some("apply"));
+}

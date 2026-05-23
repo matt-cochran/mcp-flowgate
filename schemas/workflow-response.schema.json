@@ -30,7 +30,21 @@
       "additionalProperties": false,
       "properties": {
         "goal": { "type": "string" },
-        "instructions": { "type": "string" }
+        "instructions": { "type": "string" },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["verb", "subject"],
+            "additionalProperties": false,
+            "properties": {
+              "verb": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "subject": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+            }
+          },
+          "default": [],
+          "description": "Referenced-tier guidance — a menu of `{verb, subject}` tokens the model can fetch via gateway.describe (SPEC §5.4-§5.5)."
+        }
       },
       "description": "Phase-level guidance for the LLM: what to aim for and how to behave in the current workflow state."
     }
