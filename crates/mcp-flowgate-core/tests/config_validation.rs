@@ -449,6 +449,54 @@ fn guard_reading_slot_with_reachable_writer_clean() {
 }
 
 #[test]
+fn ontimeout_target_inherits_writers_from_any_reachable_state() {
+    // SPEC §9: onTimeout fires from any reachable state, so its target
+    // should see slots written along ANY reachable path. A guard on a
+    // transition leaving the timeout target that reads such a slot must
+    // not be flagged as use-before-def.
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "lint",
+                "blackboard": ["lintPassed"],
+                "onTimeout": { "target": "timed_out" },
+                "states": {
+                    "lint": {
+                        "transitions": {
+                            "done": {
+                                "target": "deploy",
+                                "output": { "lintPassed": "$.result.value" }
+                            }
+                        }
+                    },
+                    "deploy": { "terminal": true },
+                    "timed_out": {
+                        "transitions": {
+                            "review": {
+                                "target": "reviewed",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.lintPassed == true" }
+                                ]
+                            }
+                        }
+                    },
+                    "reviewed": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| d.is_error() && d.message().contains("lintPassed"))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "onTimeout target should see writers from reachable predecessors; got: {errors:?}"
+    );
+}
+
+#[test]
 fn dangling_skills_ref_errors() {
     // A `skills:` reference to a subject not in the top-level library → error.
     let config = json!({

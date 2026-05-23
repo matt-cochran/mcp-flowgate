@@ -327,6 +327,10 @@ fn compute_writers_into(
     // Propagate to a fixed point. Worst case O(|states| * |transitions|),
     // bounded by tens-to-hundreds of states in practice — no need for a
     // worklist-style optimisation.
+    let timeout_target = def
+        .pointer("/onTimeout/target")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let mut changed = true;
     while changed {
         changed = false;
@@ -334,6 +338,29 @@ fn compute_writers_into(
             let Some(state_writers) = writers.get(state_name).cloned() else {
                 continue;
             };
+
+            // SPEC §9: onTimeout is reachable from EVERY state. Whatever the
+            // current state has accumulated, the timeout target can see — so
+            // we propagate state_writers (plus the target's onEnter output)
+            // into the timeout target as if from every reachable state.
+            if let Some(target) = &timeout_target {
+                let entry = writers.entry(target.clone()).or_default();
+                let mut to_merge = state_writers.clone();
+                if let Some(target_state) = states.get(target) {
+                    if let Some(on_enter_out) = target_state
+                        .pointer("/onEnter/output")
+                        .and_then(Value::as_object)
+                    {
+                        to_merge.extend(on_enter_out.keys().cloned());
+                    }
+                }
+                for key in to_merge {
+                    if entry.insert(key) {
+                        changed = true;
+                    }
+                }
+            }
+
             let Some(ts) = state_def.get("transitions").and_then(Value::as_object) else {
                 continue;
             };
