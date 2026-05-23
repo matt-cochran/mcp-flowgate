@@ -139,7 +139,48 @@ pub fn resolve(mut config: Value) -> anyhow::Result<Value> {
         }
     }
 
+    // 6. Poka-yoke on `skills:` (SPEC §5.4). `verb` and the `skills:` keys
+    //    must match `^[a-z][a-z0-9-]*$` — lowercase kebab, no whitespace.
+    //    Enforced at config load so malformed descriptors are unrepresentable
+    //    rather than only linted.
+    validate_skills(&config)?;
+
     Ok(config)
+}
+
+fn validate_skills(config: &Value) -> anyhow::Result<()> {
+    let Some(skills) = config.pointer("/skills").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for (subject, entry) in skills {
+        if !is_kebab_token(subject) {
+            bail!(
+                "skills key '{subject}' must match ^[a-z][a-z0-9-]*$ — lowercase kebab, no whitespace (SPEC §5.4)"
+            );
+        }
+        let verb = entry
+            .get("verb")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("skills entry '{subject}' is missing a `verb`"))?;
+        if !is_kebab_token(verb) {
+            bail!(
+                "skills entry '{subject}' has verb '{verb}' which must match ^[a-z][a-z0-9-]*$ — lowercase kebab, no whitespace (SPEC §5.4)"
+            );
+        }
+        if entry.get("body").and_then(Value::as_str).is_none() {
+            bail!("skills entry '{subject}' is missing a `body` string");
+        }
+    }
+    Ok(())
+}
+
+fn is_kebab_token(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_lowercase() => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// Convenience: load + resolve in one call.

@@ -2,7 +2,7 @@
 
 use mcp_flowgate_core::config;
 use mcp_flowgate_core::validate::validate_workflows;
-use serde_json::json;
+use serde_json::{json, Value};
 
 #[test]
 fn valid_config_with_version_field() {
@@ -252,4 +252,61 @@ workflows:
         .and_then(|v| v.as_str())
         .expect("workflows.ci.version should be present after resolution");
     assert_eq!(wf_version, "0", "workflow version should default to \"0\"");
+}
+
+// ── Skills poka-yoke (Phase 5.2, SPEC §5.4) ──────────────────────────────────
+
+#[test]
+fn verb_with_space_rejected_at_load() {
+    // A `verb` containing whitespace must fail config load — not lint-time.
+    let yaml = r##"
+version: "1.0.0"
+skills:
+  house-voice:
+    verb: "apply now"
+    body: "House voice body"
+"##;
+    let err = config::resolve_str(yaml).expect_err("verb with space must be rejected at load");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("apply now") && msg.contains("verb"),
+        "error should name the offending verb; got: {msg}"
+    );
+}
+
+#[test]
+fn skills_key_with_uppercase_rejected_at_load() {
+    let yaml = r##"
+version: "1.0.0"
+skills:
+  HouseVoice:
+    verb: apply
+    body: "House voice body"
+"##;
+    let err = config::resolve_str(yaml).expect_err("uppercase skills key must be rejected at load");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("HouseVoice"),
+        "error should name the offending subject key; got: {msg}"
+    );
+}
+
+#[test]
+fn well_formed_skills_load_clean() {
+    let yaml = r##"
+version: "1.0.0"
+skills:
+  house-voice:
+    verb: apply
+    body: "House voice body"
+  deploy-safety:
+    verb: check
+    body: "Deploy safety body"
+"##;
+    let resolved = config::resolve_str(yaml).expect("well-formed skills should load");
+    let verb = resolved
+        .pointer("/skills/house-voice/verb")
+        .and_then(Value::as_str)
+        .expect("verb should round-trip through resolve");
+    assert_eq!(verb, "apply");
 }

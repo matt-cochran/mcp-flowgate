@@ -32,7 +32,14 @@
     },
     "audit": { "$ref": "#/$defs/auditConfig" },
     "discovery": { "$ref": "#/$defs/discoveryConfig" },
-    "store": { "$ref": "#/$defs/storeConfig" }
+    "store": { "$ref": "#/$defs/storeConfig" },
+    "skills": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/skillFragment" },
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "default": {},
+      "description": "Guidance fragment library. Each entry is keyed by its `subject` (the gateway.describe lookup handle) and carries a space-free `verb` + a static markdown `body`. Subjects and verbs are constrained at config load to lowercase kebab — malformed descriptors are unrepresentable (SPEC §5.4)."
+    }
   },
   "$defs": {
     "connection": {
@@ -236,6 +243,28 @@
         "reliability": { "$ref": "#/$defs/reliabilityPolicy" }
       }
     },
+    "skillFragment": {
+      "type": "object",
+      "required": ["verb", "body"],
+      "additionalProperties": false,
+      "properties": {
+        "verb": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Space-free mode token — e.g. `apply`, `check`, `avoid`. Surfaced alongside the subject so the model reads the ref as `\"{verb} {subject}\"`."
+        },
+        "body": {
+          "type": "string",
+          "description": "Static markdown body. Referenced fragments are never templated (SPEC §5.3) — they cache once for the workflow's life."
+        }
+      }
+    },
+    "skillRefs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+      "default": [],
+      "description": "References to entries in the top-level `skills:` library. Surfaced in the response's `guidance.refs` whenever this scope is active."
+    },
     "workflowDefinition": {
       "type": "object",
       "required": ["initialState", "states"],
@@ -295,6 +324,7 @@
           "default": [],
           "description": "Declared context slots — either a list of slot names, or a map of slot name to a JSON-schema fragment. Optional; absent means no declared slots."
         },
+        "skills": { "$ref": "#/$defs/skillRefs" },
         "states": {
           "type": "object",
           "minProperties": 1,
@@ -317,6 +347,7 @@
         },
         "terminal": { "type": "boolean", "default": false },
         "onEnter": { "$ref": "#/$defs/action" },
+        "skills": { "$ref": "#/$defs/skillRefs" },
         "linkFilter": {
           "type": "string",
           "enum": ["all", "byGuards"],
@@ -352,6 +383,7 @@
         "output": { "$ref": "#/$defs/outputMapping" },
         "evidence": { "$ref": "#/$defs/evidenceRequirement" },
         "reliability": { "$ref": "#/$defs/reliabilityPolicy" },
+        "skills": { "$ref": "#/$defs/skillRefs" },
         "prefill": {
           "type": "object",
           "additionalProperties": true,
