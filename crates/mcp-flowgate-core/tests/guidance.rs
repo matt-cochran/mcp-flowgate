@@ -320,3 +320,77 @@ async fn response_surfaces_guidance_refs() {
     );
     assert_eq!(body["verb"].as_str(), Some("apply"));
 }
+
+// ── test 5 ────────────────────────────────────────────────────────────────────
+// SPEC v2 §5.5: transition-scope `skills:` refs ride on the link object, not
+// on the top-level `guidance.refs`, so the model can tell which fragments are
+// tied to taking *this specific* transition.
+
+#[tokio::test]
+async fn transition_scope_refs_ride_on_link() {
+    let cfg = json!({
+        "version": "1.0.0",
+        "skills": {
+            "tone-for-review": {
+                "verb": "apply",
+                "body": "Be terse. Lead with the change, not the rationale."
+            }
+        },
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "states": {
+                    "draft": {
+                        "goal": "Write the draft",
+                        "transitions": {
+                            "submit_draft": {
+                                "target": "review",
+                                "actor": "agent",
+                                "skills": ["tone-for-review"]
+                            }
+                        }
+                    },
+                    "review": { "terminal": true }
+                }
+            }
+        }
+    });
+
+    let resolved = mcp_flowgate_core::config::resolve(cfg).expect("config should resolve");
+    let (runtime, _) = build_runtime(resolved);
+    let resp = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+
+    // Top-level guidance.refs must NOT carry the transition-scope ref.
+    let top_refs = resp["guidance"]
+        .get("refs")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let top_subjects: Vec<&str> = top_refs.iter().filter_map(|r| r["subject"].as_str()).collect();
+    assert!(
+        !top_subjects.contains(&"tone-for-review"),
+        "transition-scope ref leaked into guidance.refs (workflow/state-only): {top_subjects:?}"
+    );
+
+    // The submit_draft link itself must carry guidance.refs = [{verb, subject}].
+    let links = resp["links"].as_array().expect("links present");
+    let submit_link = links
+        .iter()
+        .find(|l| l["rel"].as_str() == Some("submit_draft"))
+        .expect("submit_draft link must be present");
+    let link_refs = submit_link
+        .get("guidance")
+        .and_then(|g| g.get("refs"))
+        .and_then(|r| r.as_array())
+        .expect("link must carry guidance.refs for transition-scope skills");
+    assert_eq!(link_refs.len(), 1, "expected one ref on link; got {link_refs:?}");
+    assert_eq!(link_refs[0]["verb"].as_str(), Some("apply"));
+    assert_eq!(link_refs[0]["subject"].as_str(), Some("tone-for-review"));
+}

@@ -108,7 +108,26 @@
             "transition": { "type": "string" }
           }
         },
-        "inputSchema": { "type": "object" }
+        "inputSchema": { "type": "object" },
+        "guidance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "refs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["verb", "subject"],
+                "additionalProperties": false,
+                "properties": {
+                  "verb": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                  "subject": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+                }
+              }
+            }
+          },
+          "description": "Link-scoped guidance — references that surface only when this transition is offered (SPEC §5.5 transition-scope skills)."
+        }
       }
     },
     "evidence": {

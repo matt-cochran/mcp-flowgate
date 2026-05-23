@@ -1660,6 +1660,8 @@ fn links(definition: &Value, instance: &WorkflowInstance) -> Vec<Value> {
         return vec![];
     };
 
+    let library = definition.get("_skillsLibrary").and_then(Value::as_object);
+
     transitions
         .iter()
         .filter(|(_, t)| t.get("actor").and_then(Value::as_str) != Some("deterministic"))
@@ -1691,7 +1693,11 @@ fn links(definition: &Value, instance: &WorkflowInstance) -> Vec<Value> {
                 }
             }
 
-            json!({
+            // SPEC v2 §5.5: transition-scope `skills:` refs ride on the link.
+            // They are NOT folded into `guidance.refs` (which carries workflow
+            // and state scope) so the model can tell which fragments are
+            // tied to taking *this specific* transition.
+            let mut link = json!({
                 "rel": rel,
                 "title": transition.get("title").and_then(Value::as_str).unwrap_or(rel),
                 "description": transition.get("description"),
@@ -1699,7 +1705,12 @@ fn links(definition: &Value, instance: &WorkflowInstance) -> Vec<Value> {
                 "actor": transition.get("actor").and_then(Value::as_str).unwrap_or("agent"),
                 "args": args,
                 "inputSchema": transition.get("inputSchema").cloned().unwrap_or_else(empty_object_schema),
-            })
+            });
+            let refs = resolve_skill_refs(transition.get("skills"), library);
+            if !refs.is_empty() {
+                link["guidance"] = json!({ "refs": refs });
+            }
+            link
         })
         .collect()
 }
@@ -1789,36 +1800,60 @@ fn empty_object_schema() -> Value {
 
 /// Build the `guidance.refs` array from a workflow snapshot. Pulls subjects
 /// from workflow-scope `skills:` and the active state's `skills:` (de-duped,
-/// declaration order). Each emitted ref pairs `subject` with the `verb` looked
-/// up in the snapshot-stamped `_skillsLibrary`. Subjects with no library
-/// entry are skipped here — `check` reports those as errors (SPEC §5.5).
+/// declaration order). Transition-scope refs are surfaced on the link object
+/// instead (SPEC §5.5) so callers can tell which fragments are tied to
+/// taking *this specific* transition; they are NOT folded in here. Each
+/// emitted ref pairs `subject` with the `verb` looked up in the
+/// snapshot-stamped `_skillsLibrary`. Subjects with no library entry are
+/// skipped — `check` reports those as errors.
 fn collect_guidance_refs(definition: &Value, state_def: Option<&Value>) -> Vec<Value> {
-    let library = definition
-        .get("_skillsLibrary")
-        .and_then(Value::as_object);
+    let library = definition.get("_skillsLibrary").and_then(Value::as_object);
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
-
-    let mut push_scope = |scope: Option<&Value>| {
-        let Some(arr) = scope.and_then(Value::as_array) else {
-            return;
-        };
-        for entry in arr {
-            let Some(subject) = entry.as_str() else { continue };
-            if !seen.insert(subject.to_string()) {
-                continue;
-            }
-            let verb = library
-                .and_then(|lib| lib.get(subject))
-                .and_then(Value::as_str);
-            let Some(verb) = verb else { continue };
-            out.push(json!({ "verb": verb, "subject": subject }));
-        }
-    };
-
-    push_scope(definition.get("skills"));
-    push_scope(state_def.and_then(|s| s.get("skills")));
+    push_resolved_refs(definition.get("skills"), library, &mut seen, &mut out);
+    push_resolved_refs(
+        state_def.and_then(|s| s.get("skills")),
+        library,
+        &mut seen,
+        &mut out,
+    );
     out
+}
+
+/// Resolve a single scope's `skills: [subject]` against the library and
+/// emit `{verb, subject}` JSON values for the link layer. Used independently
+/// of `collect_guidance_refs` so transition-scope refs (which need their own
+/// `seen` set per link) don't accidentally consume workflow/state state.
+fn resolve_skill_refs(
+    scope: Option<&Value>,
+    library: Option<&serde_json::Map<String, Value>>,
+) -> Vec<Value> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    push_resolved_refs(scope, library, &mut seen, &mut out);
+    out
+}
+
+fn push_resolved_refs(
+    scope: Option<&Value>,
+    library: Option<&serde_json::Map<String, Value>>,
+    seen: &mut std::collections::BTreeSet<String>,
+    out: &mut Vec<Value>,
+) {
+    let Some(arr) = scope.and_then(Value::as_array) else {
+        return;
+    };
+    for entry in arr {
+        let Some(subject) = entry.as_str() else { continue };
+        if !seen.insert(subject.to_string()) {
+            continue;
+        }
+        let verb = library
+            .and_then(|lib| lib.get(subject))
+            .and_then(Value::as_str);
+        let Some(verb) = verb else { continue };
+        out.push(json!({ "verb": verb, "subject": subject }));
+    }
 }
 
 // ---------------------------------------------------------------------------
