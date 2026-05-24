@@ -586,6 +586,127 @@ async fn guards_array_populated_with_kind_and_result() {
 }
 
 #[tokio::test]
+async fn executor_descriptor_carries_kind_ok_and_duration_ms() {
+    // SPEC §7.2: the record's `executor` carries `{ kind, ok, durationMs }`
+    // when the transition's executor actually ran.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": {
+                                "target": "done",
+                                "actor": "agent",
+                                "executor": { "kind": "noop" }
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
+    let (runtime, _) = build_runtime(cfg, audit.clone());
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+    runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    let events = audit.list_events().await.expect("memory sink lists");
+    let record = events
+        .iter()
+        .find(|e| e.event_type == "workflow.transition")
+        .expect("a transition record must be emitted");
+    let executor = record
+        .payload
+        .get("executor")
+        .and_then(Value::as_object)
+        .expect("executor descriptor must be present");
+    assert_eq!(executor.get("kind").and_then(Value::as_str), Some("noop"));
+    assert_eq!(executor.get("ok").and_then(Value::as_bool), Some(true));
+    assert!(
+        executor.get("durationMs").and_then(Value::as_u64).is_some(),
+        "durationMs must be present as a non-negative integer; got: {executor:?}"
+    );
+}
+
+#[tokio::test]
+async fn executor_descriptor_omitted_when_no_executor_runs() {
+    // A transition without an executor declared must NOT emit a partial
+    // descriptor — schema says the field is optional and absent is the
+    // honest signal that nothing ran.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "states": {
+                    "draft": {
+                        "transitions": { "submit": { "target": "done", "actor": "agent" } }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
+    let (runtime, _) = build_runtime(cfg, audit.clone());
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+    runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    let events = audit.list_events().await.expect("memory sink lists");
+    let record = events
+        .iter()
+        .find(|e| e.event_type == "workflow.transition")
+        .expect("a transition record must be emitted");
+    assert!(
+        record.payload.get("executor").is_none(),
+        "no executor declared → no executor descriptor on the record; got: {}",
+        record.payload
+    );
+}
+
+#[tokio::test]
 async fn blackboard_delta_chain_hops_have_distinct_deltas() {
     // Two-hop deterministic chain; each hop writes its own slot. Each emitted
     // record's delta must reflect only that hop's mutation.

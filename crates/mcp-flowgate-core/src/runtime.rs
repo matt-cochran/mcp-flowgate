@@ -479,9 +479,11 @@ impl WorkflowRuntime {
         let mut next = instance.clone();
         let mut accumulated_evidence: Vec<Evidence> = Vec::new();
         let mut child_workflow_id: Option<String> = None;
+        let mut executor_outcome: Option<(bool, u64)> = None;
 
         if let Some(executor_config) = transition.get("executor") {
             let policy = ReliabilityPolicy::from_value(transition.get("reliability"));
+            let exec_started = std::time::Instant::now();
             match execute_with_reliability(
                 self.executors.as_ref(),
                 &self.audit,
@@ -495,6 +497,8 @@ impl WorkflowRuntime {
             .await
             {
                 Ok(result) => {
+                    executor_outcome =
+                        Some((true, exec_started.elapsed().as_millis() as u64));
                     merge_output(
                         &mut next.context,
                         transition.get("output"),
@@ -607,6 +611,7 @@ impl WorkflowRuntime {
             delta,
             guard_results,
             child_workflow_id,
+            executor_outcome,
             &correlation_id,
         )
         .await?;
@@ -841,19 +846,29 @@ impl WorkflowRuntime {
         blackboard_delta: Value,
         guard_results: Vec<Value>,
         child_workflow_id: Option<String>,
+        executor_outcome: Option<(bool, u64)>,
         correlation_id: &str,
     ) -> Result<(), RuntimeError> {
         let seq = instance.version;
 
-        // Executor descriptor: best-effort. We can cleanly name the executor
-        // `kind` from the transition definition at the commit point. The
-        // `ok`/`durationMs` fields are not retained structurally here, so they
-        // are omitted (the schema makes them optional).
+        // SPEC §7.2 — executor descriptor: `{ kind, ok, durationMs }` when
+        // the transition's executor actually ran. `kind` comes from the
+        // declared executor on the transition; `ok` + `durationMs` come
+        // from the caller's wall-clock around `execute_with_reliability`.
+        // For transitions without an executor (or paths like onTimeout)
+        // the descriptor is omitted entirely.
         let executor = transition_def
             .get("executor")
             .and_then(|e| e.get("kind"))
             .and_then(Value::as_str)
-            .map(|kind| json!({ "kind": kind }));
+            .map(|kind| {
+                let mut desc = json!({ "kind": kind });
+                if let Some((ok, duration_ms)) = executor_outcome {
+                    desc["ok"] = Value::Bool(ok);
+                    desc["durationMs"] = json!(duration_ms);
+                }
+                desc
+            });
 
         // SPEC §7.2 — `blackboardDelta` carries the per-transition diff of
         // `context` so cumulative replay (§7.5) can reconstruct the blackboard
@@ -1040,6 +1055,7 @@ impl WorkflowRuntime {
                 &json!({}),
                 Value::Object(serde_json::Map::new()),
                 Vec::new(),
+                None,
                 None,
                 &correlation_id,
             )
@@ -1256,10 +1272,12 @@ impl WorkflowRuntime {
             // is bounded.
             let pre_context = instance.context.clone();
             let mut chain_child_workflow_id: Option<String> = None;
+            let mut chain_executor_outcome: Option<(bool, u64)> = None;
 
             // Execute the transition's executor (if present)
             if let Some(executor_config) = transition_def.get("executor") {
                 let policy = ReliabilityPolicy::from_value(transition_def.get("reliability"));
+                let exec_started = std::time::Instant::now();
                 match execute_with_reliability(
                     self.executors.as_ref(),
                     &self.audit,
@@ -1273,6 +1291,8 @@ impl WorkflowRuntime {
                 .await
                 {
                     Ok(result) => {
+                        chain_executor_outcome =
+                            Some((true, exec_started.elapsed().as_millis() as u64));
                         merge_output(
                             &mut instance.context,
                             transition_def.get("output"),
@@ -1378,6 +1398,7 @@ impl WorkflowRuntime {
                 delta,
                 Vec::new(),
                 chain_child_workflow_id,
+                chain_executor_outcome,
                 correlation_id,
             )
             .await?;
