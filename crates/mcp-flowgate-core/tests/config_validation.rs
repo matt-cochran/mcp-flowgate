@@ -366,10 +366,11 @@ fn guard_reading_summary_errors() {
 }
 
 #[test]
-fn template_unknown_slot_warns() {
-    // Templates that read `$.context.X` with no reachable writer render a
-    // stub at runtime (SPEC §5.2) — so `check` reports a warning, not an
-    // error: it's a likely bug but not a fail-fast violation.
+fn template_unknown_slot_errors() {
+    // SPEC §11: use-before-def is an error for guards *and* templates. The
+    // runtime renders a stub (§5.2) so the live workflow degrades gracefully,
+    // but `check` is the static line of defence and reports this as a
+    // fail-fast authoring bug.
     let config = json!({
         "workflows": {
             "demo": {
@@ -387,21 +388,13 @@ fn template_unknown_slot_warns() {
         }
     });
     let diags = validate_workflows(&config);
-    let warnings: Vec<_> = diags
-        .iter()
-        .filter(|d| !d.is_error() && d.message().contains("unknownSlot"))
-        .collect();
-    assert!(
-        !warnings.is_empty(),
-        "expected a warning for template reading the undeclared slot 'unknownSlot'; got: {diags:?}"
-    );
     let errors: Vec<_> = diags
         .iter()
         .filter(|d| d.is_error() && d.message().contains("unknownSlot"))
         .collect();
     assert!(
-        errors.is_empty(),
-        "template-slot diagnostic must be a warning, not an error; got: {errors:?}"
+        !errors.is_empty(),
+        "expected an error for template reading the undeclared slot 'unknownSlot'; got: {diags:?}"
     );
 }
 

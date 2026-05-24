@@ -272,9 +272,10 @@ fn check_use_before_def(
                         }
                     }
                     if !available.contains(slot.as_str()) {
-                        out.push(Diagnostic::Warning(format!(
+                        out.push(Diagnostic::Error(format!(
                             "workflow '{id}': state '{state_name}' template `{field}` reads `$.context.{slot}` \
-                             which has no reachable writer (use-before-def)"
+                             which has no reachable writer (use-before-def, SPEC §11). \
+                             Runtime will render a stub but this is a likely authoring bug."
                         )));
                     }
                 }
