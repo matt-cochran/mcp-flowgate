@@ -75,7 +75,7 @@ impl GuardEvaluator for DefaultGuardEvaluator {
                     tracing::warn!("guard kind \"jsonpath\" is deprecated; use \"expr\" instead");
                 }
                 let expr = guard.get("expr").and_then(Value::as_str).unwrap_or("");
-                eval_expr(expr, &instance.context, arguments, &instance.input)
+                eval_expr(expr, instance, arguments)
             }
 
             "all_of" => {
@@ -203,30 +203,32 @@ fn parse_evidence_requirement(v: &Value) -> Option<(String, usize)> {
 ///   to `Value::Null` and is *not* an unset-slot error.
 /// - `$.arguments.X` / `$.workflow.input.X` for a missing path resolve to
 ///   `Value::Null` (caller-controlled scopes; absent fields are legitimate).
+/// - `$.workflow.id` / `$.workflow.state` / `$.workflow.version` resolve to
+///   the instance's identity / current state / pinned definition version
+///   (SPEC §5.2: "same `$.`-rooted paths as guards: `$.context.*`,
+///   `$.workflow.input.*`, `$.workflow.*`").
 ///
 /// `null == null` is true; `null` compared to anything else is false
 /// (except `!=` which inverts).
 fn eval_expr(
     expr: &str,
-    context: &Value,
+    instance: &WorkflowInstance,
     arguments: &Value,
-    input: &Value,
 ) -> anyhow::Result<bool> {
     let Some((left, op, right)) = parse_binary_expr(expr) else {
         return Ok(false);
     };
 
-    let l = resolve_operand(left, context, arguments, input)?;
-    let r = resolve_operand(right, context, arguments, input)?;
+    let l = resolve_operand(left, instance, arguments)?;
+    let r = resolve_operand(right, instance, arguments)?;
 
     Ok(compare_values(&l, op, &r))
 }
 
 fn resolve_operand(
     s: &str,
-    context: &Value,
+    instance: &WorkflowInstance,
     arguments: &Value,
-    input: &Value,
 ) -> anyhow::Result<Value> {
     let s = s.trim();
 
@@ -249,9 +251,21 @@ fn resolve_operand(
             .map(Value::Number)
             .unwrap_or(Value::Null));
     }
+    // Workflow identity / state / version — three closed paths. Order
+    // matters: check before `$.workflow.input.` so the input prefix doesn't
+    // accidentally swallow these.
+    if s == "$.workflow.id" {
+        return Ok(Value::String(instance.id.clone()));
+    }
+    if s == "$.workflow.state" {
+        return Ok(Value::String(instance.state.clone()));
+    }
+    if s == "$.workflow.version" {
+        return Ok(Value::String(instance.definition_version.clone()));
+    }
     // Path — `$.context.*` fails fast on missing; other scopes coalesce.
     if let Some(path) = s.strip_prefix("$.context.") {
-        return match context.pointer(&path_to_pointer(path)) {
+        return match instance.context.pointer(&path_to_pointer(path)) {
             Some(v) => Ok(v.clone()),
             None => Err(UnsetSlotError {
                 path: format!("$.context.{path}"),
@@ -266,7 +280,8 @@ fn resolve_operand(
             .unwrap_or(Value::Null));
     }
     if let Some(path) = s.strip_prefix("$.workflow.input.") {
-        return Ok(input
+        return Ok(instance
+            .input
             .pointer(&path_to_pointer(path))
             .cloned()
             .unwrap_or(Value::Null));

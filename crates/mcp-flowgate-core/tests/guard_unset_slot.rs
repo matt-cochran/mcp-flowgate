@@ -232,6 +232,67 @@ async fn any_of_with_unset_sibling_passes_if_another_clause_satisfies() {
 }
 
 #[tokio::test]
+async fn guard_can_read_workflow_state_id_and_version() {
+    // SPEC §5.2: templates and guards share the same `$.`-rooted paths,
+    // including `$.workflow.*`. A guard comparing the instance's state must
+    // resolve to the live state name and evaluate without an unset-slot
+    // error.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "version": "2026-05-22",
+                "initialState": "draft",
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": {
+                                "target": "done",
+                                "actor": "agent",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.workflow.state == 'draft'" }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let runtime = build_runtime(cfg);
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+
+    let resp = runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    assert_ne!(
+        resp["result"]["status"].as_str(),
+        Some("rejected"),
+        "guard reading $.workflow.state must resolve without rejection; got: {resp}"
+    );
+    assert_eq!(resp["workflow"]["state"], "done");
+}
+
+#[tokio::test]
 async fn any_of_with_only_unset_clauses_surfaces_unset_error() {
     // If `any_of` has no passing clause AND at least one errored on an
     // unset slot, the runtime must surface GUARD_UNSET_SLOT — silent
