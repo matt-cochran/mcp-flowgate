@@ -48,6 +48,7 @@ impl Executor for RecordingExecutor {
         Ok(ExecuteResult {
             output: json!({ "ok": true }),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }

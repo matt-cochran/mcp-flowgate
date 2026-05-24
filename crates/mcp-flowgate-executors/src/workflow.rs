@@ -152,6 +152,7 @@ impl Executor for WorkflowExecutor {
                     return Ok(ExecuteResult {
                         output: context,
                         evidence: vec![],
+                        child_workflow_id: Some(sub_workflow_id.to_string()),
                     });
                 }
                 "failed" | "timed_out" => {

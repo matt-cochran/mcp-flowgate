@@ -30,6 +30,7 @@ impl Executor for EmitsEvidence {
                 uri: None,
                 summary: None,
             }],
+            child_workflow_id: None,
         })
     }
 }
@@ -182,6 +183,7 @@ async fn evidence_guard_rejects_without_required_kind() {
                     uri: None,
                     summary: None,
                 }],
+                child_workflow_id: None,
             })
         }
     }

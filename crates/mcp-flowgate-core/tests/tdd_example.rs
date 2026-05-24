@@ -67,6 +67,7 @@ impl Executor for ScriptedRunner {
                 "json":     { "passed": next.passed, "count": next.count, "output": "(scripted)" },
             }),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }
@@ -85,6 +86,7 @@ impl Executor for InertNoop {
         Ok(ExecuteResult {
             output: json!({}),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }

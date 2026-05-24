@@ -173,6 +173,7 @@ impl Executor for CliExecutor {
                 uri: None,
                 summary: Some(format!("Executed '{}'", command)),
             }],
+            child_workflow_id: None,
         })
     }
 }

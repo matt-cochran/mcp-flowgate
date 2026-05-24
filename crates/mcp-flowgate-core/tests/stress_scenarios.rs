@@ -68,6 +68,7 @@ impl Executor for FixedExecutor {
                     summary: None,
                 })
                 .collect(),
+                child_workflow_id: None,
         })
     }
 }
@@ -689,6 +690,7 @@ async fn s03_multi_approver_quorum() {
                     uri: None,
                     summary: None,
                 }],
+                child_workflow_id: None,
             })
         }
     }
@@ -1266,6 +1268,7 @@ async fn s14_transition_auto_branches() {
             Ok(ExecuteResult {
                 output: json!({ "success": self.0 }),
                 evidence: vec![],
+                child_workflow_id: None,
             })
         }
     }

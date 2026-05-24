@@ -114,4 +114,9 @@ pub struct ExecuteRequest {
 pub struct ExecuteResult {
     pub output: Value,
     pub evidence: Vec<Evidence>,
+    /// SPEC §7.2 — when this executor is `kind: workflow`, the id of the
+    /// sub-workflow it started. Surfaced on the parent's transition record
+    /// as `childWorkflowId` so audit reconstruction can follow the chain.
+    /// `None` for every other executor kind.
+    pub child_workflow_id: Option<String>,
 }

@@ -453,6 +453,7 @@ impl WorkflowRuntime {
 
         let mut next = instance.clone();
         let mut accumulated_evidence: Vec<Evidence> = Vec::new();
+        let mut child_workflow_id: Option<String> = None;
 
         if let Some(executor_config) = transition.get("executor") {
             let policy = ReliabilityPolicy::from_value(transition.get("reliability"));
@@ -497,6 +498,7 @@ impl WorkflowRuntime {
                             )
                             .await);
                     }
+                    child_workflow_id = result.child_workflow_id.clone();
                     accumulated_evidence.extend(result.evidence);
                 }
                 Err(err) => {
@@ -579,6 +581,7 @@ impl WorkflowRuntime {
             &arguments,
             delta,
             guard_results,
+            child_workflow_id,
             &correlation_id,
         )
         .await?;
@@ -812,6 +815,7 @@ impl WorkflowRuntime {
         arguments: &Value,
         blackboard_delta: Value,
         guard_results: Vec<Value>,
+        child_workflow_id: Option<String>,
         correlation_id: &str,
     ) -> Result<(), RuntimeError> {
         let seq = instance.version;
@@ -834,11 +838,13 @@ impl WorkflowRuntime {
         // SPEC §7.2 — `guards` carries each guard that was actually evaluated
         // on this transition, in declaration order, as `{kind, result}` pairs.
         // For deterministic chain hops and onTimeout (where guards aren't
-        // evaluated), this is an empty vec.
-        //
-        // Best-effort field not yet sourced at commit:
-        //  - `childWorkflowId`: workflow-kind executor spawn id not threaded
-        //    through here yet; emitted as null (G6 follow-up).
+        // evaluated), this is an empty vec. `childWorkflowId` is set when
+        // the transition's executor was `kind: workflow` and reported the
+        // sub-workflow id it spawned; null otherwise.
+        let child = match child_workflow_id {
+            Some(id) => Value::String(id),
+            None => Value::Null,
+        };
         let mut record = json!({
             "workflowId": instance.id,
             "definitionId": instance.definition_id,
@@ -853,7 +859,7 @@ impl WorkflowRuntime {
             "guards": guard_results,
             "arguments": arguments,
             "blackboardDelta": blackboard_delta,
-            "childWorkflowId": Value::Null,
+            "childWorkflowId": child,
             "correlationId": correlation_id,
         });
         if let Some(executor) = executor {
@@ -1009,6 +1015,7 @@ impl WorkflowRuntime {
                 &json!({}),
                 Value::Object(serde_json::Map::new()),
                 Vec::new(),
+                None,
                 &correlation_id,
             )
             .await
@@ -1223,6 +1230,7 @@ impl WorkflowRuntime {
             // an accurate blackboardDelta (SPEC §7.2). Cheap clone — context
             // is bounded.
             let pre_context = instance.context.clone();
+            let mut chain_child_workflow_id: Option<String> = None;
 
             // Execute the transition's executor (if present)
             if let Some(executor_config) = transition_def.get("executor") {
@@ -1247,6 +1255,7 @@ impl WorkflowRuntime {
                             &instance.input,
                             &result.output,
                         )?;
+                        chain_child_workflow_id = result.child_workflow_id.clone();
                         if let Err((slot, reason)) = validate_blackboard_writes(
                             definition,
                             transition_def.get("output"),
@@ -1343,6 +1352,7 @@ impl WorkflowRuntime {
                 &json!({}),
                 delta,
                 Vec::new(),
+                chain_child_workflow_id,
                 correlation_id,
             )
             .await?;

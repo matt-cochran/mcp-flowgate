@@ -51,6 +51,7 @@ impl Executor for FixedExecutor {
         Ok(ExecuteResult {
             output: self.output.clone(),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }
@@ -77,6 +78,7 @@ impl Executor for FailAfterN {
             Ok(ExecuteResult {
                 output: json!({}),
                 evidence: vec![],
+                child_workflow_id: None,
             })
         } else {
             Err(ExecutorError::Permanent("simulated failure".into()))

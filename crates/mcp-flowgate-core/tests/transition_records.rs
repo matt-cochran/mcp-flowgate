@@ -380,6 +380,7 @@ impl Executor for FixedOutputExecutor {
         Ok(mcp_flowgate_core::model::ExecuteResult {
             output: self.output.clone(),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }

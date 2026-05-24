@@ -221,6 +221,7 @@ impl Executor for RestExecutor {
                 uri: Some(url),
                 summary: Some(summary),
             }],
+            child_workflow_id: None,
         })
     }
 }

@@ -71,6 +71,7 @@ impl Executor for HumanExecutor {
                 uri: None,
                 summary: Some(format!("Human action queued in '{queue}'")),
             }],
+            child_workflow_id: None,
         })
     }
 }

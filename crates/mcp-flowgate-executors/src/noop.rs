@@ -15,6 +15,7 @@ impl Executor for NoopExecutor {
         Ok(ExecuteResult {
             output: json!({}),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }

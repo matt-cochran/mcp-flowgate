@@ -229,6 +229,7 @@ impl Executor for McpExecutor {
                 uri: None,
                 summary: Some(format!("Called {connection}.{tool}")),
             }],
+            child_workflow_id: None,
         })
     }
 }

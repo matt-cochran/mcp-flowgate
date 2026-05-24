@@ -65,6 +65,7 @@ impl Executor for RecordingExecutor {
         Ok(ExecuteResult {
             output: self.output.lock().unwrap().clone(),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }
