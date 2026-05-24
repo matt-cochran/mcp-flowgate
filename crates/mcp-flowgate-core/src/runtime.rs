@@ -428,7 +428,7 @@ impl WorkflowRuntime {
                 .await);
         }
 
-        if !self
+        let (guards_ok, guard_results) = self
             .guards_pass(
                 &transition,
                 &instance,
@@ -436,8 +436,8 @@ impl WorkflowRuntime {
                 &request.principal,
                 &correlation_id,
             )
-            .await?
-        {
+            .await?;
+        if !guards_ok {
             return Ok(self
                 .record_rejected(
                     &definition,
@@ -578,6 +578,7 @@ impl WorkflowRuntime {
             principal,
             &arguments,
             delta,
+            guard_results,
             &correlation_id,
         )
         .await?;
@@ -810,6 +811,7 @@ impl WorkflowRuntime {
         principal: Option<&str>,
         arguments: &Value,
         blackboard_delta: Value,
+        guard_results: Vec<Value>,
         correlation_id: &str,
     ) -> Result<(), RuntimeError> {
         let seq = instance.version;
@@ -829,9 +831,12 @@ impl WorkflowRuntime {
         // at any past `seq`. Computed by the call site against pre/post-merge
         // contexts.
         //
-        // Best-effort fields not yet sourced at commit:
-        //  - `guards`: per-guard {kind,result} not retained at commit; emitted
-        //    as [] (G5 follow-up).
+        // SPEC §7.2 — `guards` carries each guard that was actually evaluated
+        // on this transition, in declaration order, as `{kind, result}` pairs.
+        // For deterministic chain hops and onTimeout (where guards aren't
+        // evaluated), this is an empty vec.
+        //
+        // Best-effort field not yet sourced at commit:
         //  - `childWorkflowId`: workflow-kind executor spawn id not threaded
         //    through here yet; emitted as null (G6 follow-up).
         let mut record = json!({
@@ -845,7 +850,7 @@ impl WorkflowRuntime {
             "transition": transition_name,
             "actor": actor,
             "principal": principal,
-            "guards": [],
+            "guards": guard_results,
             "arguments": arguments,
             "blackboardDelta": blackboard_delta,
             "childWorkflowId": Value::Null,
@@ -1003,6 +1008,7 @@ impl WorkflowRuntime {
                 None,
                 &json!({}),
                 Value::Object(serde_json::Map::new()),
+                Vec::new(),
                 &correlation_id,
             )
             .await
@@ -1336,6 +1342,7 @@ impl WorkflowRuntime {
                 None,
                 &json!({}),
                 delta,
+                Vec::new(),
                 correlation_id,
             )
             .await?;
@@ -1495,6 +1502,11 @@ impl WorkflowRuntime {
         }
     }
 
+    /// Evaluate every guard on a transition in declaration order. Returns
+    /// `(overall_pass, evaluated)` where `evaluated` is the SPEC §7.2 record
+    /// shape `[{kind, result}, …]` covering every guard actually checked.
+    /// Evaluation short-circuits on the first failure — `evaluated` includes
+    /// that failing guard but not any after it.
     async fn guards_pass(
         &self,
         transition: &Value,
@@ -1502,18 +1514,25 @@ impl WorkflowRuntime {
         arguments: &Value,
         principal: &Principal,
         correlation_id: &str,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<(bool, Vec<Value>)> {
         let guards = transition
             .get("guards")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
 
+        let mut evaluated = Vec::with_capacity(guards.len());
         for (idx, guard) in guards.iter().enumerate() {
             let pass = self
                 .guards
                 .evaluate(guard, instance, arguments, principal)
                 .await?;
+            let kind = guard
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            evaluated.push(json!({ "kind": kind, "result": pass }));
             self.audit
                 .record(
                     AuditEvent::new("guard.evaluated")
@@ -1527,11 +1546,11 @@ impl WorkflowRuntime {
                 )
                 .await?;
             if !pass {
-                return Ok(false);
+                return Ok((false, evaluated));
             }
         }
 
-        Ok(true)
+        Ok((true, evaluated))
     }
 
     /// Build the response body, including link filtering when the workflow

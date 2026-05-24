@@ -519,6 +519,72 @@ async fn blackboard_delta_empty_when_no_context_change() {
 }
 
 #[tokio::test]
+async fn guards_array_populated_with_kind_and_result() {
+    // A transition with one passing `expr` guard must emit a record whose
+    // `guards` array contains exactly that guard's {kind, result: true}.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "initialContext": { "ready": true },
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": {
+                                "target": "done",
+                                "actor": "agent",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.ready == true" }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
+    let (runtime, _) = build_runtime(cfg, audit.clone());
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+    runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    let events = audit.list_events().await.expect("memory sink lists");
+    let record = events
+        .iter()
+        .find(|e| e.event_type == "workflow.transition")
+        .expect("a transition record must be emitted");
+    let guards = record
+        .payload
+        .get("guards")
+        .and_then(Value::as_array)
+        .expect("guards must be present and an array");
+    assert_eq!(guards.len(), 1, "expected one guard entry; got {guards:?}");
+    assert_eq!(guards[0]["kind"].as_str(), Some("expr"));
+    assert_eq!(guards[0]["result"], json!(true));
+}
+
+#[tokio::test]
 async fn blackboard_delta_chain_hops_have_distinct_deltas() {
     // Two-hop deterministic chain; each hop writes its own slot. Each emitted
     // record's delta must reflect only that hop's mutation.
