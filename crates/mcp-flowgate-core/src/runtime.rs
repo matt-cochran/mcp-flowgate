@@ -568,6 +568,7 @@ impl WorkflowRuntime {
         } else {
             Some(request.principal.subject.as_str())
         };
+        let delta = blackboard_delta(&instance.context, &next.context);
         self.emit_transition_record(
             &next,
             &from_state,
@@ -576,6 +577,7 @@ impl WorkflowRuntime {
             actor,
             principal,
             &arguments,
+            delta,
             &correlation_id,
         )
         .await?;
@@ -797,6 +799,7 @@ impl WorkflowRuntime {
     /// whole point of the record-first ordering. The `Result` must never be
     /// swallowed.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     async fn emit_transition_record(
         &self,
         instance: &WorkflowInstance,
@@ -806,6 +809,7 @@ impl WorkflowRuntime {
         actor: &str,
         principal: Option<&str>,
         arguments: &Value,
+        blackboard_delta: Value,
         correlation_id: &str,
     ) -> Result<(), RuntimeError> {
         let seq = instance.version;
@@ -820,13 +824,16 @@ impl WorkflowRuntime {
             .and_then(Value::as_str)
             .map(|kind| json!({ "kind": kind }));
 
-        // Best-effort fields that cannot be cleanly sourced at the commit point
-        // are given empty/null values per the schema defaults:
-        //  - `guards`: the runtime evaluates guards but does not retain a
-        //    structured per-guard {kind,result} list at the commit point.
-        //  - `blackboardDelta`: context mutation is merged in place; the delta
-        //    is not computed separately.
-        //  - `childWorkflowId`: no child-workflow spawn exists in this runtime.
+        // SPEC §7.2 — `blackboardDelta` carries the per-transition diff of
+        // `context` so cumulative replay (§7.5) can reconstruct the blackboard
+        // at any past `seq`. Computed by the call site against pre/post-merge
+        // contexts.
+        //
+        // Best-effort fields not yet sourced at commit:
+        //  - `guards`: per-guard {kind,result} not retained at commit; emitted
+        //    as [] (G5 follow-up).
+        //  - `childWorkflowId`: workflow-kind executor spawn id not threaded
+        //    through here yet; emitted as null (G6 follow-up).
         let mut record = json!({
             "workflowId": instance.id,
             "definitionId": instance.definition_id,
@@ -840,7 +847,7 @@ impl WorkflowRuntime {
             "principal": principal,
             "guards": [],
             "arguments": arguments,
-            "blackboardDelta": {},
+            "blackboardDelta": blackboard_delta,
             "childWorkflowId": Value::Null,
             "correlationId": correlation_id,
         });
@@ -995,6 +1002,7 @@ impl WorkflowRuntime {
                 "system",
                 None,
                 &json!({}),
+                Value::Object(serde_json::Map::new()),
                 &correlation_id,
             )
             .await
@@ -1205,6 +1213,11 @@ impl WorkflowRuntime {
                 )
                 .await;
 
+            // Snapshot pre-merge context so the transition record can carry
+            // an accurate blackboardDelta (SPEC §7.2). Cheap clone — context
+            // is bounded.
+            let pre_context = instance.context.clone();
+
             // Execute the transition's executor (if present)
             if let Some(executor_config) = transition_def.get("executor") {
                 let policy = ReliabilityPolicy::from_value(transition_def.get("reliability"));
@@ -1313,6 +1326,7 @@ impl WorkflowRuntime {
             // BEFORE committing the snapshot. Deterministic transitions carry a
             // null principal. A record-write failure aborts the whole chain
             // before `save_if_version`, so the instance version stays unchanged.
+            let delta = blackboard_delta(&pre_context, &instance.context);
             self.emit_transition_record(
                 &instance,
                 &from_state,
@@ -1321,6 +1335,7 @@ impl WorkflowRuntime {
                 "deterministic",
                 None,
                 &json!({}),
+                delta,
                 correlation_id,
             )
             .await?;
@@ -1868,6 +1883,38 @@ fn apply_schema_defaults(schema: Option<&Value>, value: &mut Value) {
             Some(child) => apply_schema_defaults(Some(prop_schema), child),
         }
     }
+}
+
+/// SPEC §7.2 — compute the per-transition delta of the workflow's
+/// `context` so transition records can carry the structural diff. Cumulative
+/// replay of these deltas reconstructs `context` at any past `seq` (§7.5).
+///
+/// Semantics: any key whose value differs between pre and post is included
+/// (new keys → their post value; mutated keys → the new value; deleted keys
+/// → explicit `null`). Returns an empty object when there is no diff or
+/// when either side is not an object.
+fn blackboard_delta(pre: &Value, post: &Value) -> Value {
+    let pre_obj = pre.as_object();
+    let post_obj = post.as_object();
+    let mut delta = serde_json::Map::new();
+    if let Some(post_obj) = post_obj {
+        for (k, v) in post_obj {
+            match pre_obj.and_then(|m| m.get(k)) {
+                Some(prev) if prev == v => {}
+                _ => {
+                    delta.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+    if let Some(pre_obj) = pre_obj {
+        for k in pre_obj.keys() {
+            if !post_obj.is_some_and(|m| m.contains_key(k)) {
+                delta.insert(k.clone(), Value::Null);
+            }
+        }
+    }
+    Value::Object(delta)
 }
 
 /// SPEC §6.2 — validate `output:` writes against any *typed* blackboard slot.

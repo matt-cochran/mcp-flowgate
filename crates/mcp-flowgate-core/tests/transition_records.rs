@@ -358,3 +358,236 @@ async fn timeout_emits_workflow_transition_record_with_system_actor() {
         "workflow.transition record (pos {tr_pos}) must precede workflow.timed_out (pos {timed_out_pos})"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC §7.2 / §7.5 — blackboardDelta carries the per-transition diff so a
+// cumulative replay reconstructs the blackboard at any past `seq`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// An executor that returns a fixed `output` value — drives controlled
+/// `merge_output` behaviour for delta tests.
+struct FixedOutputExecutor {
+    output: Value,
+}
+
+#[async_trait]
+impl Executor for FixedOutputExecutor {
+    async fn execute(
+        &self,
+        _: mcp_flowgate_core::model::ExecuteRequest,
+    ) -> Result<mcp_flowgate_core::model::ExecuteResult, mcp_flowgate_core::error::ExecutorError>
+    {
+        Ok(mcp_flowgate_core::model::ExecuteResult {
+            output: self.output.clone(),
+            evidence: vec![],
+        })
+    }
+}
+
+#[tokio::test]
+async fn blackboard_delta_populated_with_output_writes() {
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "blackboard": ["lintPassed", "testCount"],
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "ship": {
+                                "target": "done",
+                                "actor": "agent",
+                                "executor": { "kind": "noop" },
+                                "output": {
+                                    "lintPassed": "$.output.lint",
+                                    "testCount": "$.output.tests"
+                                }
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+
+    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
+    let definitions = Arc::new(ConfigDefinitionStore::from_config(&cfg));
+    let store = Arc::new(InMemoryWorkflowStore::new());
+    let executors = Arc::new(SingleExecRegistry {
+        inner: Arc::new(FixedOutputExecutor {
+            output: json!({ "lint": true, "tests": 12 }),
+        }),
+    });
+    let guards = Arc::new(mcp_flowgate_core::guards::DefaultGuardEvaluator::new());
+    let runtime = WorkflowRuntime::new(definitions, store.clone(), executors, guards, audit.clone());
+
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+
+    runtime
+        .submit(SubmitTransition {
+            workflow_id: workflow_id.clone(),
+            expected_version: version,
+            transition: "ship".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    let events = audit.list_events().await.expect("memory sink lists");
+    let record = events
+        .iter()
+        .find(|e| e.event_type == "workflow.transition")
+        .expect("a transition record must be emitted");
+    let delta = record
+        .payload
+        .get("blackboardDelta")
+        .expect("blackboardDelta must be present");
+    assert_eq!(delta["lintPassed"], json!(true));
+    assert_eq!(delta["testCount"], json!(12));
+}
+
+#[tokio::test]
+async fn blackboard_delta_empty_when_no_context_change() {
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": { "target": "done", "actor": "agent" }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+
+    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
+    let (runtime, _) = build_runtime(cfg, audit.clone());
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+    runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    let events = audit.list_events().await.expect("memory sink lists");
+    let record = events
+        .iter()
+        .find(|e| e.event_type == "workflow.transition")
+        .expect("a transition record must be emitted");
+    let delta = record
+        .payload
+        .get("blackboardDelta")
+        .and_then(Value::as_object)
+        .expect("blackboardDelta must be an object");
+    assert!(
+        delta.is_empty(),
+        "no output: writes → blackboardDelta should be empty; got: {delta:?}"
+    );
+}
+
+#[tokio::test]
+async fn blackboard_delta_chain_hops_have_distinct_deltas() {
+    // Two-hop deterministic chain; each hop writes its own slot. Each emitted
+    // record's delta must reflect only that hop's mutation.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "pipeline": {
+                "initialState": "a",
+                "states": {
+                    "a": {
+                        "transitions": {
+                            "s1": {
+                                "target": "b",
+                                "actor": "deterministic",
+                                "executor": { "kind": "noop" },
+                                "output": { "first": "$.output.v1" }
+                            }
+                        }
+                    },
+                    "b": {
+                        "transitions": {
+                            "s2": {
+                                "target": "c",
+                                "actor": "deterministic",
+                                "executor": { "kind": "noop" },
+                                "output": { "second": "$.output.v2" }
+                            }
+                        }
+                    },
+                    "c": { "terminal": true }
+                }
+            }
+        }
+    });
+
+    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
+    let definitions = Arc::new(ConfigDefinitionStore::from_config(&cfg));
+    let store = Arc::new(InMemoryWorkflowStore::new());
+    let executors = Arc::new(SingleExecRegistry {
+        inner: Arc::new(FixedOutputExecutor {
+            output: json!({ "v1": "alpha", "v2": "beta" }),
+        }),
+    });
+    let guards = Arc::new(mcp_flowgate_core::guards::DefaultGuardEvaluator::new());
+    let runtime = WorkflowRuntime::new(definitions, store, executors, guards, audit.clone());
+
+    runtime
+        .start(StartWorkflow {
+            definition_id: "pipeline".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+
+    let events = audit.list_events().await.expect("memory sink lists");
+    let records: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == "workflow.transition")
+        .collect();
+    assert_eq!(records.len(), 2, "expected 2 chain-hop records; got {}", records.len());
+
+    // Hop 1 writes only `first`; the executor's $.output.v1 == "alpha".
+    let d1 = records[0].payload.get("blackboardDelta").unwrap();
+    assert_eq!(d1["first"], json!("alpha"));
+    assert!(d1.get("second").is_none(), "delta for hop 1 must not include slots written by hop 2: {d1}");
+
+    // Hop 2 writes only `second`.
+    let d2 = records[1].payload.get("blackboardDelta").unwrap();
+    assert_eq!(d2["second"], json!("beta"));
+    assert!(d2.get("first").is_none(), "delta for hop 2 must not re-include hop 1's slot: {d2}");
+}
