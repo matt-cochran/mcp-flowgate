@@ -449,6 +449,128 @@ fn guard_reading_slot_with_reachable_writer_clean() {
 }
 
 #[test]
+fn guard_reading_undeclared_slot_errors_when_blackboard_declared() {
+    // SPEC §11: when `blackboard:` is declared, reading a slot not in that
+    // declaration is an error on the read side — independent of whether a
+    // writer exists. The writer to `b` here triggers a separate
+    // "undeclared output" warn; the guard read of `b` must error.
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "blackboard": ["a"],
+                "states": {
+                    "start": {
+                        "transitions": {
+                            "go": {
+                                "target": "gate",
+                                "output": { "b": "$.output.v" }
+                            }
+                        }
+                    },
+                    "gate": {
+                        "transitions": {
+                            "use": {
+                                "target": "done",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.b == 1" }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let read_side_errors: Vec<_> = diags
+        .iter()
+        .filter(|d| {
+            d.is_error()
+                && d.message().contains("not a declared blackboard slot")
+                && d.message().contains("$.context.b")
+        })
+        .collect();
+    assert!(
+        !read_side_errors.is_empty(),
+        "expected a read-side error for guard reading undeclared slot 'b'; got: {diags:?}"
+    );
+}
+
+#[test]
+fn template_reading_undeclared_slot_errors_when_blackboard_declared() {
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "blackboard": ["a"],
+                "states": {
+                    "start": {
+                        "guidance": "Stage is {{ $.context.b }}",
+                        "transitions": {
+                            "go": { "target": "done" }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let errors: Vec<_> = diags
+        .iter()
+        .filter(|d| {
+            d.is_error()
+                && d.message().contains("not a declared blackboard slot")
+                && d.message().contains("$.context.b")
+        })
+        .collect();
+    assert!(
+        !errors.is_empty(),
+        "expected a read-side error for template reading undeclared slot 'b'; got: {diags:?}"
+    );
+}
+
+#[test]
+fn guard_reading_context_clean_when_blackboard_absent() {
+    // No `blackboard:` declared → the SPEC §11 declared-slot read check is
+    // skipped (SPEC §14 compatibility). use-before-def still applies on
+    // guards. With a reachable writer, no diagnostic is raised.
+    let config = json!({
+        "workflows": {
+            "demo": {
+                "initialState": "start",
+                "states": {
+                    "start": {
+                        "transitions": {
+                            "go": {
+                                "target": "gate",
+                                "output": { "anySlot": "$.output.v" }
+                            }
+                        }
+                    },
+                    "gate": {
+                        "transitions": {
+                            "use": {
+                                "target": "done",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.anySlot == true" }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let diags = validate_workflows(&config);
+    let errs: Vec<_> = diags.iter().filter(|d| d.is_error()).collect();
+    assert!(errs.is_empty(), "no errors expected without blackboard declaration; got: {errs:?}");
+}
+
+#[test]
 fn ontimeout_target_inherits_writers_from_any_reachable_state() {
     // SPEC §9: onTimeout fires from any reachable state, so its target
     // should see slots written along ANY reachable path. A guard on a

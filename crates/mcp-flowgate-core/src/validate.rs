@@ -229,6 +229,13 @@ fn validate_one_workflow(
 /// Phase 6: SPEC §9, §11 — `$.context.X` referenced by an `expr` guard or
 /// `{{ }}` template must have a reachable predecessor writer; `$.context.summary`
 /// is never a valid guard input.
+///
+/// When `blackboard:` is declared, an additional check fires: a guard or
+/// template that reads `$.context.X` for X **not in the declared slots** is
+/// an error on the read side — independent of whether a writer happens to
+/// exist (a writer to the same undeclared slot triggers the separate output:
+/// warn from §6.1). Without a declared blackboard this check is skipped so
+/// blackboard remains opt-in (SPEC §14 compatibility).
 fn check_use_before_def(
     id: &str,
     def: &Value,
@@ -237,6 +244,7 @@ fn check_use_before_def(
     out: &mut Vec<Diagnostic>,
 ) {
     let writers = compute_writers_into(def, states, initial_state);
+    let declared = declared_blackboard_slots(def);
 
     for (state_name, state_def) in states {
         let available = writers.get(state_name.as_str()).cloned().unwrap_or_default();
@@ -250,6 +258,18 @@ fn check_use_before_def(
                         // from a template is fine (it gets rendered). Only
                         // guards must not read it.
                         continue;
+                    }
+                    if let Some(declared) = &declared {
+                        if !declared.contains(slot.as_str()) {
+                            out.push(Diagnostic::Error(format!(
+                                "workflow '{id}': state '{state_name}' template `{field}` reads \
+                                 `$.context.{slot}` which is not a declared blackboard slot \
+                                 (SPEC §11)"
+                            )));
+                            // Slot isn't declared — the use-before-def check
+                            // is moot. Skip to the next slot.
+                            continue;
+                        }
                     }
                     if !available.contains(slot.as_str()) {
                         out.push(Diagnostic::Warning(format!(
@@ -286,6 +306,16 @@ fn check_use_before_def(
                             )));
                             continue;
                         }
+                        if let Some(declared) = &declared {
+                            if !declared.contains(slot.as_str()) {
+                                out.push(Diagnostic::Error(format!(
+                                    "workflow '{id}': transition '{t_name}' in state '{state_name}' \
+                                     guard reads `$.context.{slot}` which is not a declared \
+                                     blackboard slot (SPEC §11)"
+                                )));
+                                continue;
+                            }
+                        }
                         if !available.contains(slot.as_str()) {
                             out.push(Diagnostic::Error(format!(
                                 "workflow '{id}': transition '{t_name}' in state '{state_name}' \
@@ -298,6 +328,23 @@ fn check_use_before_def(
             }
         }
     }
+}
+
+/// Extract declared blackboard slot names from a workflow def. Returns
+/// `Some(set)` only when `blackboard:` is present — `None` means "no
+/// declaration; skip the read-side declared-slot check entirely" so configs
+/// without a blackboard remain compatible (SPEC §14).
+fn declared_blackboard_slots(def: &Value) -> Option<HashSet<String>> {
+    let bb = def.get("blackboard")?;
+    let set: HashSet<String> = match bb {
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        Value::Object(obj) => obj.keys().cloned().collect(),
+        _ => return None,
+    };
+    Some(set)
 }
 
 /// Build per-state writers_into via a fixed-point over the reachable subgraph.
