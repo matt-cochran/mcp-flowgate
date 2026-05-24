@@ -66,7 +66,10 @@ fn describe_schema_snapshot() {
         schema_of(TOOL_DESCRIBE),
         json!({
             "type": "object",
-            "properties": { "id": { "type": "string" } },
+            "properties": {
+                "id": { "type": "string" },
+                "workflowId": { "type": "string" }
+            },
             "required": ["id"],
             "additionalProperties": false
         })

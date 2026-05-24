@@ -327,8 +327,16 @@
         "skills": { "$ref": "#/$defs/skillRefs" },
         "_skillsLibrary": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
-          "description": "Runtime-stamped — do NOT author. Resolve writes this as a `{ subject: verb }` slice of the top-level `skills:` map, scoped to the subjects this workflow actually references. Used by the runtime to decorate `guidance.refs` from the per-instance snapshot alone."
+          "additionalProperties": {
+            "type": "object",
+            "required": ["verb", "body"],
+            "additionalProperties": false,
+            "properties": {
+              "verb": { "type": "string" },
+              "body": { "type": "string" }
+            }
+          },
+          "description": "Runtime-stamped — do NOT author. Resolve writes this as a `{ subject: { verb, body } }` slice of the top-level `skills:` map, scoped to the subjects this workflow references. SPEC §8.2: the snapshot carries resolved fragment bodies so an in-flight instance never depends on the live config — editing the top-level `skills:` block cannot mutate what running instances see."
         },
         "states": {
           "type": "object",

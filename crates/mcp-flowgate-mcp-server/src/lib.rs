@@ -228,6 +228,30 @@ impl FlowgateServer {
     async fn handle_describe(&self, args: Value) -> anyhow::Result<Value> {
         let parsed: DescribeArgs = serde_json::from_value(args)?;
         let id = parsed.id.ok_or_else(|| anyhow::anyhow!("id is required"))?;
+
+        // SPEC §8.2: if the caller is acting inside a workflow, resolve
+        // guidance bodies from the instance's pinned snapshot — the live
+        // config could have drifted since `workflow.start`. Falls back to
+        // the live discovery index when no workflowId is given or when the
+        // subject is not in the snapshot (e.g. it's a workflow/capability
+        // lookup, not a guidance fragment).
+        if let Some(workflow_id) = parsed.workflow_id.as_deref() {
+            if let Some(body) = self
+                .runtime
+                .describe_guidance_for_workflow(workflow_id, &id)
+                .await?
+            {
+                return Ok(json!({
+                    "id": id,
+                    "item": body,
+                    "links": [
+                        { "rel": "home", "method": "gateway.home", "args": {} },
+                        { "rel": "get", "method": "workflow.get", "args": { "workflowId": workflow_id } }
+                    ]
+                }));
+            }
+        }
+
         let item = self.discovery.describe(&id).await?;
         Ok(json!({
             "id": id,
@@ -351,6 +375,11 @@ struct SearchArgs {
 #[serde(rename_all = "camelCase")]
 struct DescribeArgs {
     id: Option<String>,
+    /// SPEC §8.2 — when present, resolve guidance bodies from this
+    /// workflow's pinned snapshot so an in-flight instance sees the
+    /// body that existed at `workflow.start`, not whatever the live
+    /// config currently says. Workflow / capability lookups ignore it.
+    workflow_id: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

@@ -720,6 +720,36 @@ impl WorkflowRuntime {
         }
     }
 
+    /// SPEC §8.2 + §12 — resolve a guidance fragment's `{verb, body}` from the
+    /// snapshot pinned to a specific workflow instance. Returns `None` if
+    /// either the workflow id or the subject is unknown to the snapshot.
+    /// Used by `gateway.describe { id, workflowId }` so an in-flight LLM
+    /// receives the body that existed when the workflow was started — not
+    /// whatever the operator has since edited the live config to say.
+    pub async fn describe_guidance_for_workflow(
+        &self,
+        workflow_id: &str,
+        subject: &str,
+    ) -> anyhow::Result<Option<Value>> {
+        let instance = self.store.load(workflow_id).await?;
+        let Some(entry) = instance
+            .definition
+            .pointer("/_skillsLibrary")
+            .and_then(Value::as_object)
+            .and_then(|lib| lib.get(subject))
+        else {
+            return Ok(None);
+        };
+        let verb = entry.get("verb").and_then(Value::as_str).unwrap_or_default();
+        let body = entry.get("body").and_then(Value::as_str).unwrap_or_default();
+        Ok(Some(json!({
+            "kind": "guidance",
+            "subject": subject,
+            "verb": verb,
+            "body": body,
+        })))
+    }
+
     pub async fn explain(&self, workflow_id: &str, transition: &str) -> anyhow::Result<Value> {
         let instance = self.store.load(workflow_id).await?;
         // In-flight: resolve the definition from the instance's carried
@@ -1991,8 +2021,12 @@ fn push_resolved_refs(
         if !seen.insert(subject.to_string()) {
             continue;
         }
+        // `_skillsLibrary` is `{ subject: { verb, body } }` post-§8.2; only
+        // `verb` is needed to assemble the surfaced ref. Body is consulted
+        // by `gateway.describe(id, workflowId)` against the snapshot.
         let verb = library
             .and_then(|lib| lib.get(subject))
+            .and_then(|entry| entry.get("verb"))
             .and_then(Value::as_str);
         let Some(verb) = verb else { continue };
         out.push(json!({ "verb": verb, "subject": subject }));

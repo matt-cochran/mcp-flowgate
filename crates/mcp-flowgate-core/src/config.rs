@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 /// Recursively load `path` as YAML and merge any `include:` files into it.
 /// Includes resolve relative to the file that lists them.
@@ -185,13 +185,24 @@ fn stamp_skills_library(config: &mut Value) {
     let full_library: Map<String, Value> =
         match config.pointer("/skills").and_then(Value::as_object) {
             Some(skills) if !skills.is_empty() => {
-                // Carry verb only — body lives in the top-level map and is fetched
-                // via `gateway.describe`, not embedded per-workflow.
+                // SPEC §8.2: the snapshot is self-contained — it carries the
+                // resolved fragment bodies the workflow references, not just
+                // the verb. Editing the top-level `skills:` block cannot
+                // mutate what an in-flight instance sees.
                 let mut lib = Map::new();
                 for (subject, entry) in skills {
-                    if let Some(verb) = entry.get("verb").and_then(Value::as_str) {
-                        lib.insert(subject.clone(), Value::String(verb.to_string()));
-                    }
+                    let Some(verb) = entry.get("verb").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let body = entry
+                        .get("body")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    lib.insert(
+                        subject.clone(),
+                        json!({ "verb": verb, "body": body }),
+                    );
                 }
                 lib
             }
@@ -210,8 +221,8 @@ fn stamp_skills_library(config: &mut Value) {
             }
             let mut scoped = Map::new();
             for subject in &referenced {
-                if let Some(verb) = full_library.get(subject) {
-                    scoped.insert(subject.clone(), verb.clone());
+                if let Some(entry) = full_library.get(subject) {
+                    scoped.insert(subject.clone(), entry.clone());
                 }
             }
             // Skip stamping if none of the referenced subjects resolve — the
