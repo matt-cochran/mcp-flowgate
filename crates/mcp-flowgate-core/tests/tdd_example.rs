@@ -143,6 +143,7 @@ async fn submit(runtime: &WorkflowRuntime, id: &str, version: u64, transition: &
             transition: transition.to_string(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap()

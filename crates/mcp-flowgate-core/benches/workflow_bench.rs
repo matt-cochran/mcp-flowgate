@@ -151,6 +151,7 @@ fn bench_submit(c: &mut Criterion) {
                     transition: "approve".into(),
                     arguments: json!({"reason": "benchmark"}),
                     principal: Principal::anonymous(),
+                    summary: None,
                 })
                 .await
                 .expect("submit should succeed");

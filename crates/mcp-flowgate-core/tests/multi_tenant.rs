@@ -273,6 +273,7 @@ async fn admin_can_submit_admin_action() {
             transition: "admin_action".to_string(),
             arguments: json!({}),
             principal: admin(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -303,6 +304,7 @@ async fn user_cannot_submit_admin_action() {
             transition: "admin_action".to_string(),
             arguments: json!({}),
             principal: user(), // Submit as user -> should fail
+            summary: None,
         })
         .await
         .unwrap();

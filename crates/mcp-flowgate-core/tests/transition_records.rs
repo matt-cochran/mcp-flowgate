@@ -212,6 +212,7 @@ async fn record_write_failure_aborts_transition() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await;
 
@@ -248,6 +249,7 @@ async fn version_unchanged_when_record_write_fails() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await;
     assert!(result.is_err(), "submit must fail");

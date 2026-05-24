@@ -548,6 +548,7 @@ async fn chain_runs_after_submit() {
             transition: "begin".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -834,6 +835,7 @@ async fn deterministic_transition_submittable_for_recovery() {
             transition: "auto_step".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();

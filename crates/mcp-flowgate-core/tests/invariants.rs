@@ -201,6 +201,7 @@ async fn invariant_2_input_schema_is_validated_before_executor() {
             transition: "echo".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -233,6 +234,7 @@ async fn invariant_3_guards_run_before_executor() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -266,6 +268,7 @@ async fn invariant_4_executor_failure_yields_failed_not_advanced_state() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: principal_with(&["demo.approve"]),
+            summary: None,
         })
         .await
         .unwrap();
@@ -298,6 +301,7 @@ async fn invariant_5_invalid_transitions_return_current_links() {
             transition: "definitely_not_a_thing".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -337,6 +341,7 @@ async fn invariant_6_stale_expected_version_is_rejected() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: principal_with(&["demo.approve"]),
+            summary: None,
         })
         .await
         .unwrap();
@@ -366,6 +371,7 @@ async fn invariant_7_successful_transition_increments_version() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: principal_with(&["demo.approve"]),
+            summary: None,
         })
         .await
         .unwrap();
@@ -399,6 +405,7 @@ async fn invariant_8_terminal_state_has_no_links() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: principal_with(&["demo.approve"]),
+            summary: None,
         })
         .await
         .unwrap();
@@ -442,6 +449,7 @@ async fn invariant_10_unknown_transition_does_not_invoke_executor() {
             transition: "ghost".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -471,6 +479,7 @@ async fn audit_records_workflow_transitioned() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: principal_with(&["demo.approve"]),
+            summary: None,
         })
         .await
         .unwrap();
@@ -507,6 +516,7 @@ async fn audit_records_transition_rejected_on_guard_rejection() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -541,6 +551,7 @@ async fn audit_records_transition_rejected_on_stale_version() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: principal_with(&["demo.approve"]),
+            summary: None,
         })
         .await
         .unwrap();
@@ -653,6 +664,7 @@ async fn audit_records_fallback_selected_when_primary_exhausts() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -727,6 +739,7 @@ async fn actor_gate_rejects_agent_on_human_only_transition() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -764,6 +777,7 @@ async fn actor_gate_admits_human_on_human_only_transition() {
             transition: "approve".into(),
             arguments: json!({}),
             principal: human_principal(),
+            summary: None,
         })
         .await
         .unwrap();

@@ -141,6 +141,7 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             transition: "run_tests".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -153,6 +154,7 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             transition: "verify".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -232,6 +234,7 @@ async fn evidence_guard_rejects_without_required_kind() {
             transition: "run_tests".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -244,6 +247,7 @@ async fn evidence_guard_rejects_without_required_kind() {
             transition: "verify".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();

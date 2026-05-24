@@ -9,6 +9,10 @@
     "workflow": { "$ref": "#/$defs/workflowSnapshot" },
     "result": { "$ref": "#/$defs/result" },
     "context": { "type": "object" },
+    "summary": {
+      "type": "string",
+      "description": "The optional model-authored summary stored at `context.summary` (SPEC §6.3). Surfaced here so a cold-resuming LLM sees the last narrative without digging through context."
+    },
     "links": {
       "type": "array",
       "items": { "$ref": "#/$defs/link" }

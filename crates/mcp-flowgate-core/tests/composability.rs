@@ -580,6 +580,7 @@ async fn capability_ref_in_workflow_actually_dispatches() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -714,6 +715,7 @@ async fn capability_ref_emits_full_audit_trail() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();

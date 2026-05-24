@@ -289,6 +289,7 @@ impl FlowgateServer {
                 transition,
                 arguments,
                 principal,
+                summary: parsed.summary,
             })
             .await
     }
@@ -375,6 +376,9 @@ struct SubmitArgs {
     transition: Option<String>,
     #[schemars(schema_with = "object_schema")]
     arguments: Option<Value>,
+    /// SPEC §6.3 — optional model-authored summary. Stored to
+    /// `context.summary` on commit; surfaced in every response.
+    summary: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]

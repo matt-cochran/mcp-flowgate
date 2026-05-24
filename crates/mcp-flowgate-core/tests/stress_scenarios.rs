@@ -177,6 +177,7 @@ impl Scenario {
                 transition: transition.to_string(),
                 arguments: args,
                 principal,
+                summary: None,
             })
             .await
             .expect("submit returns Ok (rejection is in body)");
@@ -204,6 +205,7 @@ impl Scenario {
                 transition: transition.to_string(),
                 arguments: args,
                 principal,
+                summary: None,
             })
             .await
             .expect("submit returns Ok");

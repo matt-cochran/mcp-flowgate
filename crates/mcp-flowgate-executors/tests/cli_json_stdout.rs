@@ -78,6 +78,7 @@ async fn cli_stdout_parsed_as_json_into_output_json() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();

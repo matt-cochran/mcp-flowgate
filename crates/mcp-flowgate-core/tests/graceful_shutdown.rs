@@ -133,6 +133,7 @@ async fn drain_allows_inflight_submit_and_get() {
             transition: "go".to_string(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();

@@ -121,6 +121,7 @@ async fn typed_slot_mismatch_aborts_with_blackboard_type_error() {
             transition: "done".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -197,6 +198,7 @@ async fn typed_slot_conforming_value_advances_transition() {
             transition: "done".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();
@@ -257,6 +259,7 @@ async fn bare_name_slot_accepts_any_value() {
             transition: "done".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .unwrap();

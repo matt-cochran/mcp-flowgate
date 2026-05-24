@@ -527,6 +527,15 @@ impl WorkflowRuntime {
             }
         }
 
+        // SPEC §6.3 — write the optional model-authored summary to
+        // `context.summary`. Reserved slot; never a guard input (`check`
+        // errors on guards reading it); surfaced in every response.
+        if let Some(summary) = &request.summary {
+            if let Some(ctx) = next.context.as_object_mut() {
+                ctx.insert("summary".into(), Value::String(summary.clone()));
+            }
+        }
+
         // Pick the destination state. By default it's the transition's
         // `target`, but `branches: [{ when, target }]` can override based on
         // the executor's result and the post-output context. First branch
@@ -1520,6 +1529,17 @@ impl WorkflowRuntime {
             "links": all_links,
             "evidence": [],
         });
+
+        // SPEC §6.3 — surface the reserved `summary` slot at top level so an
+        // LLM resuming a workflow cold sees the last human-readable summary
+        // without having to dig through context. Absent when never set.
+        if let Some(summary) = instance
+            .context
+            .get("summary")
+            .and_then(Value::as_str)
+        {
+            body["summary"] = Value::String(summary.to_string());
+        }
 
         if let Some(err) = error {
             body["error"] = err;

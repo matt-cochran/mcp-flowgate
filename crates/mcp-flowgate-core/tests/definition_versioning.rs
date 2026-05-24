@@ -240,6 +240,7 @@ async fn config_edit_does_not_disturb_inflight_instance() {
             transition: "next".to_string(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .expect("submit resolves against the carried snapshot");
@@ -257,6 +258,7 @@ async fn config_edit_does_not_disturb_inflight_instance() {
             transition: "finish".to_string(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
         })
         .await
         .expect("the carried definition drives the instance to completion");

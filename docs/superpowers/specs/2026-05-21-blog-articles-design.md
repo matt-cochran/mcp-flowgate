@@ -6,8 +6,9 @@
 
 ## Goal
 
-Write seven long-form blog articles for the mcp-flowgate site: one welcome
-article and six deep-dives. Every article must be **specifically about
+Write ten long-form blog articles for the mcp-flowgate site: one welcome
+article and nine deep-dives (the eighth, ninth, and tenth were added after
+the initial brainstorm, at the user's request). Every article must be **specifically about
 mcp-flowgate and rooted in the tool's actual, in-repo capabilities** — real
 YAML, real wire traces, real audit event names, real numbers, real error
 codes. No generic MCP think-pieces. No invented capabilities.
@@ -54,11 +55,13 @@ matches the two existing posts' house style.
     `code-window` blocks for YAML/JSON.
   - `<footer>` block — copied exactly from existing posts.
 - `site/src/pages/blog/index.astro` is rewritten: one `blog-card` per
-  article. Welcome listed first, then the six deep-dives.
+  article. Welcome listed first, then the nine deep-dives.
 - `why-seven-tools.astro` and `deterministic-chaining-explained.astro` are
   deleted. The site is days old with no SEO equity, so orphaned URLs are a
-  non-issue; all seven articles get fresh, clean slugs.
-- All articles dated 2026-05-21.
+  non-issue; all ten articles get fresh, clean slugs.
+- Articles are back-dated across April–May 2026 at a cadence of one or two
+  per week; `welcome` is the oldest (2026-04-02) and `deterministic-chaining`
+  is the most recent (2026-05-21).
 
 ### Voice & style
 
@@ -143,7 +146,7 @@ Key facts articles draw on:
   (multi-tenant, quorum, idempotent payment), `tdd` (red→green→refactor),
   `deploy-pipeline` (deterministic chaining).
 
-## The seven articles
+## The ten articles
 
 ### 1. Welcome — "The bet behind mcp-flowgate"
 
@@ -156,7 +159,7 @@ Key facts articles draw on:
 - **Worked example:** the one-line `hello.echo` config (from the README
   quick-start) growing into a governed workflow without rewiring.
 - **Honesty beat:** pre-1.0, no case studies yet, throughput not
-  load-tested. Closes by previewing the six deep-dives.
+  load-tested. Closes by previewing the nine deep-dives.
 - **CTA:** `/quick-start`, GitHub.
 
 ### 2. "The hidden cost of 50 MCP tools"
@@ -249,6 +252,76 @@ Key facts articles draw on:
   post it replaces: adds auto-branching and the audit-trail angle.
 - **CTA:** `/guides/chaining`, the `deploy-pipeline` example on GitHub.
 
+### 8. "Why your AI agent needs a state machine"
+
+- **Slug:** `why-agents-need-state-machines` · **Length:** ~1,900 words
+- **Added after the initial brainstorm**, at the user's request. Placed
+  third in the blog index (after Welcome and the token-cost post, before
+  HATEOAS) — the foundational pair with the HATEOAS essay.
+- **Core idea:** the state machine is the oldest, most boring pattern in
+  computing, and agent governance is structurally the exact problem it was
+  built for. An agent without one has no notion of "where it is" or "what's
+  legal from here".
+- **Rooted in:** "every tool is a transition"; `proxy_default` as the
+  one-state degenerate case; states / transitions / the version counter;
+  `actor: human`; the four properties that make a state machine the right
+  tool — order, legality, recorded history, an author distinct from the
+  actor.
+- **Worked example:** a governed `content_publish` workflow skeleton in
+  which `publish` is unreachable except by walking every state, one of
+  which is human-gated.
+- **Honesty beat:** a state machine is the *wrong* tool for stateless work
+  — said plainly; the pattern earns its place only for problems with order,
+  legality, history, and an external rule-setter.
+- **CTA:** `/introduction`, `/guides/workflows`.
+
+### 9. "Your LLM is a generator, not a calculator"
+
+- **Slug:** `generator-not-a-calculator` · **Length:** ~1,500 words
+- **Added after the initial brainstorm**, at the user's request. Placed
+  eighth in the blog index, immediately before *Deterministic chaining*
+  (principle → mechanism).
+- **Core idea:** an LLM does one kind of work — nondeterministic generation
+  — and cannot compute, by design, not by immaturity. Deterministic work
+  belongs to code. The pervasive mistake is using the generative tool for
+  deterministic jobs ("when all you have is a hammer…").
+- **Rooted in:** `actor: deterministic` vs `actor: agent` as the
+  right-tool-per-step line; `expr`/`evidence` guards computing checks;
+  `branches` + `treatNonZeroAsFailure: false` routing on a real exit code;
+  `inputSchema` validation; the state machine + version counter tracking
+  state instead of the model "remembering".
+- **Worked example:** a deploy split — run tests (`deterministic`), decide
+  to ship (`agent`), "tests before deploy" enforced by workflow shape — vs.
+  the one-model-turn blob that mixes all of it.
+- **Honesty beat:** the line isn't always clean — tasks have a generative
+  core in a deterministic shell; the skill is decomposing and routing each
+  piece. Moving rules out of the prompt costs a workflow, but a prompt rule
+  was never a guarantee.
+- **CTA:** `/blog/deterministic-chaining`, `/guides/workflows`.
+
+### 10. "What do a deploy pipeline and an expense report have in common?"
+
+- **Slug:** `not-just-for-coding` · **Length:** ~1,800 words
+- **Added after the initial brainstorm**, at the user's request. Placed
+  second in the blog index (right after Welcome) — a positioning piece
+  that corrects the "agentic coding tool" misread before the reader meets
+  the code-shaped examples.
+- **Core idea:** mcp-flowgate is not a coding tool; it governs any process
+  where an LLM takes consequential action. Coding is one use case among
+  many — and regulation is, separately, a large part of why the audit
+  trail now matters.
+- **Rooted in:** the real examples — `content-publish` (marketing),
+  `expense-approval` (finance, RBAC, quorum), `multi-tenant` (SaaS data),
+  `governed-change` (engineering / FMECA), with `tdd` and `deploy-pipeline`
+  as the two coding ones; the audit trail (~18 event types,
+  `correlationId`, the recorded state path); `actor: human` oversight.
+- **Regulatory section:** framed as *a large part* of why-now, not the
+  whole answer. Grounded in the EU AI Act (Article 12 record-keeping,
+  six-month log retention, human oversight, enforceable 2 Aug 2026) and
+  the 2026 US state-law wave. Carries a `References` section and explicit
+  "not legal advice / no tool makes you compliant" caveats.
+- **CTA:** `/examples`, `/quick-start`.
+
 ## Out of scope
 
 - Site layout, styling, or component changes beyond adding blog pages and
@@ -258,7 +331,7 @@ Key facts articles draw on:
 
 ## Success criteria
 
-- Seven `.astro` articles plus an updated `blog/index.astro`, building
+- Ten `.astro` articles plus an updated `blog/index.astro`, building
   cleanly under Astro.
 - Every capability claim traceable to the repo. No invented features.
 - Each article passes the Matt C style guide's pre-publish checklist.

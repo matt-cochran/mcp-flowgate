@@ -33,7 +33,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The `v*` tag triggers four workflows:
+The `v*` tag triggers three workflows:
 
 | Workflow          | Produces |
 |-------------------|----------|

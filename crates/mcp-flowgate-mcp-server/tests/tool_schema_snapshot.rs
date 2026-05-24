@@ -112,7 +112,8 @@ fn submit_schema_snapshot() {
                 "workflowId": { "type": "string" },
                 "expectedVersion": { "type": "integer" },
                 "transition": { "type": "string" },
-                "arguments": { "type": "object" }
+                "arguments": { "type": "object" },
+                "summary": { "type": "string" }
             },
             "required": ["workflowId", "expectedVersion", "transition", "arguments"],
             "additionalProperties": false

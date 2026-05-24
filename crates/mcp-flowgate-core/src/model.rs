@@ -80,6 +80,11 @@ pub struct SubmitTransition {
     pub transition: TransitionName,
     pub arguments: Value,
     pub principal: Principal,
+    /// SPEC §6.3 — optional model-authored summary. When present, the runtime
+    /// stores it to `context.summary` on commit. It is **never** a guard input
+    /// (model-authored content is untrusted); `check` errors on any guard that
+    /// reads `$.context.summary`.
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
