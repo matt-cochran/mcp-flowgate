@@ -2,9 +2,21 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
+use thiserror::Error;
 
 use crate::model::*;
 use crate::ports::{EvidenceStore, GuardEvaluator};
+
+/// Raised when an `expr` guard references `$.context.X` (or another rooted
+/// scope) for a path that does not resolve to *any* value — distinct from a
+/// path that resolves to an explicit `null`. SPEC §9 mandates the runtime
+/// fail fast on this case rather than silently coercing the missing read
+/// to `null` (which would let the guard evaluate to a meaningless `false`).
+#[derive(Debug, Error)]
+#[error("GUARD_UNSET_SLOT: guard reads `{path}` which is not set on the workflow context")]
+pub struct UnsetSlotError {
+    pub path: String,
+}
 
 /// The built-in `GuardEvaluator`. Handles `permission`, `role`, `expr`,
 /// and `evidence` kinds out of the box. The `evidence` kind needs an
@@ -91,13 +103,29 @@ impl GuardEvaluator for DefaultGuardEvaluator {
                     // Vacuously: nothing to satisfy → false (consistent with `requires` semantics).
                     return Ok(false);
                 }
+                // SPEC §9 interplay with `any_of`: a sub-guard reading an
+                // unset slot is *not* a workflow-level failure if a sibling
+                // clause passes — the author explicitly opted into "any of
+                // these works". Errors are remembered and only surfaced if
+                // no sibling satisfies. This preserves fail-fast for the
+                // "no clause covered me" case without breaking the
+                // declarative use of `any_of` over partially-written slots.
+                let mut first_err: Option<anyhow::Error> = None;
                 for g in inner {
-                    let pass = self.evaluate(&g, instance, arguments, principal).await?;
-                    if pass {
-                        return Ok(true);
+                    match self.evaluate(&g, instance, arguments, principal).await {
+                        Ok(true) => return Ok(true),
+                        Ok(false) => {}
+                        Err(e) => {
+                            if first_err.is_none() {
+                                first_err = Some(e);
+                            }
+                        }
                     }
                 }
-                Ok(false)
+                match first_err {
+                    Some(e) => Err(e),
+                    None => Ok(false),
+                }
             }
 
             "not" => {
@@ -167,8 +195,17 @@ fn parse_evidence_requirement(v: &Value) -> Option<(String, usize)> {
 ///   - `==`, `!=`: any two same-typed operands (or null)
 ///   - `<`, `<=`, `>`, `>=`: numbers only
 ///
-/// Missing path resolutions become null. `null == null` is true; `null`
-/// compared to anything else is false (except `!=` which inverts).
+/// Path resolution semantics:
+///
+/// - `$.context.X` for an unset slot → **fail-fast** with [`UnsetSlotError`]
+///   (SPEC §9: "a guard hitting an unset slot fails fast with rich context,
+///   never a silent `false`"). A slot explicitly set to JSON `null` resolves
+///   to `Value::Null` and is *not* an unset-slot error.
+/// - `$.arguments.X` / `$.workflow.input.X` for a missing path resolve to
+///   `Value::Null` (caller-controlled scopes; absent fields are legitimate).
+///
+/// `null == null` is true; `null` compared to anything else is false
+/// (except `!=` which inverts).
 fn eval_expr(
     expr: &str,
     context: &Value,
@@ -179,54 +216,62 @@ fn eval_expr(
         return Ok(false);
     };
 
-    let l = resolve_operand(left, context, arguments, input);
-    let r = resolve_operand(right, context, arguments, input);
+    let l = resolve_operand(left, context, arguments, input)?;
+    let r = resolve_operand(right, context, arguments, input)?;
 
     Ok(compare_values(&l, op, &r))
 }
 
-fn resolve_operand(s: &str, context: &Value, arguments: &Value, input: &Value) -> Value {
+fn resolve_operand(
+    s: &str,
+    context: &Value,
+    arguments: &Value,
+    input: &Value,
+) -> anyhow::Result<Value> {
     let s = s.trim();
 
     // Quoted string literal.
     if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
         || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
     {
-        return Value::String(s[1..s.len() - 1].to_string());
+        return Ok(Value::String(s[1..s.len() - 1].to_string()));
     }
     // Bool / null.
     match s {
-        "true" => return Value::Bool(true),
-        "false" => return Value::Bool(false),
-        "null" => return Value::Null,
+        "true" => return Ok(Value::Bool(true)),
+        "false" => return Ok(Value::Bool(false)),
+        "null" => return Ok(Value::Null),
         _ => {}
     }
     // Number.
     if let Ok(n) = s.parse::<f64>() {
-        return serde_json::Number::from_f64(n)
+        return Ok(serde_json::Number::from_f64(n)
             .map(Value::Number)
-            .unwrap_or(Value::Null);
+            .unwrap_or(Value::Null));
     }
-    // Path.
+    // Path — `$.context.*` fails fast on missing; other scopes coalesce.
     if let Some(path) = s.strip_prefix("$.context.") {
-        return context
-            .pointer(&path_to_pointer(path))
-            .cloned()
-            .unwrap_or(Value::Null);
+        return match context.pointer(&path_to_pointer(path)) {
+            Some(v) => Ok(v.clone()),
+            None => Err(UnsetSlotError {
+                path: format!("$.context.{path}"),
+            }
+            .into()),
+        };
     }
     if let Some(path) = s.strip_prefix("$.arguments.") {
-        return arguments
+        return Ok(arguments
             .pointer(&path_to_pointer(path))
             .cloned()
-            .unwrap_or(Value::Null);
+            .unwrap_or(Value::Null));
     }
     if let Some(path) = s.strip_prefix("$.workflow.input.") {
-        return input
+        return Ok(input
             .pointer(&path_to_pointer(path))
             .cloned()
-            .unwrap_or(Value::Null);
+            .unwrap_or(Value::Null));
     }
-    Value::Null
+    Ok(Value::Null)
 }
 
 /// Convert a dot-notation path (e.g. `items[0].name` or `items.0.name`)

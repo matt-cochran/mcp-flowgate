@@ -428,7 +428,7 @@ impl WorkflowRuntime {
                 .await);
         }
 
-        let (guards_ok, guard_results) = self
+        let (guards_ok, guard_results) = match self
             .guards_pass(
                 &transition,
                 &instance,
@@ -436,7 +436,32 @@ impl WorkflowRuntime {
                 &request.principal,
                 &correlation_id,
             )
-            .await?;
+            .await
+        {
+            Ok(pair) => pair,
+            Err(err) => {
+                // SPEC §9: a guard hitting an unset slot must fail fast with
+                // rich context, not a silent `false`. The runtime is the
+                // backstop here even when static `check` would have caught
+                // it. Other guard evaluator failures still propagate as
+                // anyhow errors (executor/audit/etc. — not a SPEC-classified
+                // rejection).
+                if let Some(unset) = err.downcast_ref::<crate::guards::UnsetSlotError>() {
+                    return Ok(self
+                        .record_rejected(
+                            &definition,
+                            &instance,
+                            "GUARD_UNSET_SLOT",
+                            unset.to_string(),
+                            &request.transition,
+                            &correlation_id,
+                            &request.principal,
+                        )
+                        .await);
+                }
+                return Err(err);
+            }
+        };
         if !guards_ok {
             return Ok(self
                 .record_rejected(

@@ -1,0 +1,293 @@
+//! Guarantee tests for SPEC §9 — the runtime fails fast on a guard
+//! evaluating against an unset blackboard slot.
+//!
+//! "The runtime remains the backstop — a guard hitting an unset slot fails
+//! fast with rich context, never a silent `false`."
+//!
+//! A slot explicitly set to JSON `null` is *not* "unset"; that's a
+//! deliberate write of the null value and must evaluate normally.
+
+use std::sync::Arc;
+
+use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
+use mcp_flowgate_core::guards::DefaultGuardEvaluator;
+use mcp_flowgate_core::model::{Principal, StartWorkflow, SubmitTransition};
+use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
+use mcp_flowgate_core::WorkflowRuntime;
+use serde_json::{json, Value};
+
+struct NoopRegistry;
+impl mcp_flowgate_core::ExecutorRegistry for NoopRegistry {
+    fn get(&self, _kind: &str) -> Option<Arc<dyn mcp_flowgate_core::Executor>> {
+        None
+    }
+}
+
+fn build_runtime(config: Value) -> WorkflowRuntime {
+    let definitions = Arc::new(ConfigDefinitionStore::from_config(&config));
+    let store = Arc::new(InMemoryWorkflowStore::new());
+    let executors = Arc::new(NoopRegistry);
+    let guards = Arc::new(DefaultGuardEvaluator::new());
+    let audit: Arc<dyn AuditSink> = Arc::new(MemoryAuditSink::new());
+    WorkflowRuntime::new(definitions, store, executors, guards, audit)
+}
+
+#[tokio::test]
+async fn guard_reading_unset_slot_returns_guard_unset_slot_rejection() {
+    // No initialContext; the guard reads $.context.flag which is never set.
+    // SPEC §9: must fail fast, not silently coalesce to null/false.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": {
+                                "target": "done",
+                                "actor": "agent",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.flag == true" }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let runtime = build_runtime(cfg);
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+
+    let resp = runtime
+        .submit(SubmitTransition {
+            workflow_id: workflow_id.clone(),
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp["result"]["status"].as_str(),
+        Some("rejected"),
+        "guard reading an unset slot must produce a rejection; got: {resp}"
+    );
+    assert_eq!(
+        resp["error"]["code"].as_str(),
+        Some("GUARD_UNSET_SLOT"),
+        "error code must be GUARD_UNSET_SLOT; got: {}",
+        resp["error"]
+    );
+    let message = resp["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("$.context.flag"),
+        "error message must name the unset slot path; got: {message}"
+    );
+
+    // Snapshot version unchanged — the transition was aborted at the guard.
+    assert_eq!(
+        resp["workflow"]["version"].as_u64(),
+        Some(version),
+        "version must not advance when guard fails on unset slot"
+    );
+}
+
+#[tokio::test]
+async fn explicitly_null_slot_is_not_unset() {
+    // `output: { x: null }` writes the slot to null. A subsequent guard
+    // `$.context.x == null` must evaluate normally (true) — this is NOT
+    // an unset-slot scenario.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "initialContext": { "x": null },
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": {
+                                "target": "done",
+                                "actor": "agent",
+                                "guards": [
+                                    { "kind": "expr", "expr": "$.context.x == null" }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let runtime = build_runtime(cfg);
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+
+    let resp = runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    assert_ne!(
+        resp["result"]["status"].as_str(),
+        Some("rejected"),
+        "explicit null is a write, not an unset slot; guard must evaluate normally. got: {resp}"
+    );
+    assert_eq!(resp["workflow"]["state"], "done");
+}
+
+#[tokio::test]
+async fn any_of_with_unset_sibling_passes_if_another_clause_satisfies() {
+    // `any_of` over an unset slot AND a passing clause must succeed via
+    // the passing clause — the author opted into "any of these works".
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "initialContext": { "ok": true },
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": {
+                                "target": "done",
+                                "actor": "agent",
+                                "guards": [
+                                    {
+                                        "kind": "any_of",
+                                        "guards": [
+                                            { "kind": "expr", "expr": "$.context.missing == true" },
+                                            { "kind": "expr", "expr": "$.context.ok == true" }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let runtime = build_runtime(cfg);
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+
+    let resp = runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    assert_ne!(
+        resp["result"]["status"].as_str(),
+        Some("rejected"),
+        "any_of must accept a passing sibling even when another clause hits an unset slot; got: {resp}"
+    );
+}
+
+#[tokio::test]
+async fn any_of_with_only_unset_clauses_surfaces_unset_error() {
+    // If `any_of` has no passing clause AND at least one errored on an
+    // unset slot, the runtime must surface GUARD_UNSET_SLOT — silent
+    // false would hide a real authoring bug.
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "wf": {
+                "initialState": "draft",
+                "states": {
+                    "draft": {
+                        "transitions": {
+                            "submit": {
+                                "target": "done",
+                                "actor": "agent",
+                                "guards": [
+                                    {
+                                        "kind": "any_of",
+                                        "guards": [
+                                            { "kind": "expr", "expr": "$.context.missing_a == true" },
+                                            { "kind": "expr", "expr": "$.context.missing_b == true" }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let runtime = build_runtime(cfg);
+    let start = runtime
+        .start(StartWorkflow {
+            definition_id: "wf".into(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+        })
+        .await
+        .unwrap();
+    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
+    let version = start["workflow"]["version"].as_u64().unwrap();
+
+    let resp = runtime
+        .submit(SubmitTransition {
+            workflow_id,
+            expected_version: version,
+            transition: "submit".into(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            summary: None,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(resp["result"]["status"].as_str(), Some("rejected"));
+    assert_eq!(resp["error"]["code"].as_str(), Some("GUARD_UNSET_SLOT"));
+}
