@@ -14,6 +14,14 @@ use crate::mapping::merge_output;
 use crate::model::*;
 use crate::ports::*;
 use crate::reliability::{execute_with_reliability, ReliabilityPolicy};
+pub(crate) use crate::runtime_schema::{apply_schema_defaults, required_str, validate_schema};
+pub(crate) use crate::runtime_records::{blackboard_delta, validate_blackboard_writes};
+pub use crate::runtime_links::is_terminal;
+pub(crate) use crate::runtime_links::{
+    collect_guidance_refs, empty_object_schema, link_filter_byguards, links, pointer_escape,
+    transition_definition,
+};
+pub(crate) use crate::templating::render_template;
 
 // ---------------------------------------------------------------------------
 // Deterministic chaining types
@@ -49,6 +57,28 @@ pub struct ChainResult {
     pub instance: WorkflowInstance,
     pub steps: Vec<ChainStep>,
     pub evidence: Vec<Evidence>,
+}
+
+/// SPEC §7.2 — parameter bundle for `emit_transition_record`. Collected into
+/// a struct so the caller doesn't shuffle ~12 positional arguments. Borrows
+/// the live instance + correlation id so the helper is a pure projection
+/// over the commit context.
+struct TransitionRecordParams<'a> {
+    instance: &'a WorkflowInstance,
+    from_state: &'a str,
+    transition_name: &'a str,
+    transition_def: &'a Value,
+    actor: &'a str,
+    principal: Option<&'a str>,
+    arguments: &'a Value,
+    blackboard_delta: Value,
+    guard_results: Vec<Value>,
+    child_workflow_id: Option<String>,
+    /// `Some((ok, durationMs))` only when the executor actually ran on this
+    /// transition. `None` for transitions without an `executor:` and for
+    /// `onTimeout` records.
+    executor_outcome: Option<(bool, u64)>,
+    correlation_id: &'a str,
 }
 
 /// The workflow runtime. Holds Arcs of all ports so it can be cloned cheaply
@@ -600,20 +630,20 @@ impl WorkflowRuntime {
             Some(request.principal.subject.as_str())
         };
         let delta = blackboard_delta(&instance.context, &next.context);
-        self.emit_transition_record(
-            &next,
-            &from_state,
-            &request.transition,
-            &transition,
+        self.emit_transition_record(TransitionRecordParams {
+            instance: &next,
+            from_state: &from_state,
+            transition_name: &request.transition,
+            transition_def: &transition,
             actor,
             principal,
-            &arguments,
-            delta,
+            arguments: &arguments,
+            blackboard_delta: delta,
             guard_results,
             child_workflow_id,
             executor_outcome,
-            &correlation_id,
-        )
+            correlation_id: &correlation_id,
+        })
         .await?;
 
         let next = self
@@ -832,24 +862,11 @@ impl WorkflowRuntime {
     /// snapshot — propagating the [`RuntimeError::RecordWriteFailed`] is the
     /// whole point of the record-first ordering. The `Result` must never be
     /// swallowed.
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     async fn emit_transition_record(
         &self,
-        instance: &WorkflowInstance,
-        from_state: &str,
-        transition_name: &str,
-        transition_def: &Value,
-        actor: &str,
-        principal: Option<&str>,
-        arguments: &Value,
-        blackboard_delta: Value,
-        guard_results: Vec<Value>,
-        child_workflow_id: Option<String>,
-        executor_outcome: Option<(bool, u64)>,
-        correlation_id: &str,
+        params: TransitionRecordParams<'_>,
     ) -> Result<(), RuntimeError> {
-        let seq = instance.version;
+        let seq = params.instance.version;
 
         // SPEC §7.2 — executor descriptor: `{ kind, ok, durationMs }` when
         // the transition's executor actually ran. `kind` comes from the
@@ -857,13 +874,14 @@ impl WorkflowRuntime {
         // from the caller's wall-clock around `execute_with_reliability`.
         // For transitions without an executor (or paths like onTimeout)
         // the descriptor is omitted entirely.
-        let executor = transition_def
+        let executor = params
+            .transition_def
             .get("executor")
             .and_then(|e| e.get("kind"))
             .and_then(Value::as_str)
             .map(|kind| {
                 let mut desc = json!({ "kind": kind });
-                if let Some((ok, duration_ms)) = executor_outcome {
+                if let Some((ok, duration_ms)) = params.executor_outcome {
                     desc["ok"] = Value::Bool(ok);
                     desc["durationMs"] = json!(duration_ms);
                 }
@@ -881,36 +899,36 @@ impl WorkflowRuntime {
         // evaluated), this is an empty vec. `childWorkflowId` is set when
         // the transition's executor was `kind: workflow` and reported the
         // sub-workflow id it spawned; null otherwise.
-        let child = match child_workflow_id {
+        let child = match params.child_workflow_id {
             Some(id) => Value::String(id),
             None => Value::Null,
         };
         let mut record = json!({
-            "workflowId": instance.id,
-            "definitionId": instance.definition_id,
-            "definitionVersion": instance.definition_version,
+            "workflowId": params.instance.id,
+            "definitionId": params.instance.definition_id,
+            "definitionVersion": params.instance.definition_version,
             "seq": seq,
             "timestamp": Utc::now().to_rfc3339(),
-            "fromState": from_state,
-            "toState": instance.state,
-            "transition": transition_name,
-            "actor": actor,
-            "principal": principal,
-            "guards": guard_results,
-            "arguments": arguments,
-            "blackboardDelta": blackboard_delta,
+            "fromState": params.from_state,
+            "toState": params.instance.state,
+            "transition": params.transition_name,
+            "actor": params.actor,
+            "principal": params.principal,
+            "guards": params.guard_results,
+            "arguments": params.arguments,
+            "blackboardDelta": params.blackboard_delta,
             "childWorkflowId": child,
-            "correlationId": correlation_id,
+            "correlationId": params.correlation_id,
         });
         if let Some(executor) = executor {
             record["executor"] = executor;
         }
 
         let mut event = AuditEvent::new("workflow.transition")
-            .with_workflow(&instance.id)
-            .with_correlation(correlation_id)
+            .with_workflow(&params.instance.id)
+            .with_correlation(params.correlation_id)
             .with_payload(record);
-        if let Some(principal) = principal {
+        if let Some(principal) = params.principal {
             event = event.with_actor(principal);
         }
 
@@ -918,7 +936,7 @@ impl WorkflowRuntime {
             .record(event)
             .await
             .map_err(|source| RuntimeError::RecordWriteFailed {
-                workflow_id: instance.id.clone(),
+                workflow_id: params.instance.id.clone(),
                 seq,
                 source,
             })
@@ -1045,20 +1063,20 @@ impl WorkflowRuntime {
             .cloned()
             .unwrap_or(Value::Null);
         if let Err(e) = self
-            .emit_transition_record(
-                &instance,
-                &from_state,
+            .emit_transition_record(TransitionRecordParams {
+                instance: &instance,
+                from_state: &from_state,
                 transition_name,
-                &on_timeout_def,
-                "system",
-                None,
-                &json!({}),
-                Value::Object(serde_json::Map::new()),
-                Vec::new(),
-                None,
-                None,
-                &correlation_id,
-            )
+                transition_def: &on_timeout_def,
+                actor: "system",
+                principal: None,
+                arguments: &json!({}),
+                blackboard_delta: Value::Object(serde_json::Map::new()),
+                guard_results: Vec::new(),
+                child_workflow_id: None,
+                executor_outcome: None,
+                correlation_id: &correlation_id,
+            })
             .await
         {
             tracing::warn!(
@@ -1387,20 +1405,20 @@ impl WorkflowRuntime {
             // null principal. A record-write failure aborts the whole chain
             // before `save_if_version`, so the instance version stays unchanged.
             let delta = blackboard_delta(&pre_context, &instance.context);
-            self.emit_transition_record(
-                &instance,
-                &from_state,
-                &transition_name,
-                &transition_def,
-                "deterministic",
-                None,
-                &json!({}),
-                delta,
-                Vec::new(),
-                chain_child_workflow_id,
-                chain_executor_outcome,
+            self.emit_transition_record(TransitionRecordParams {
+                instance: &instance,
+                from_state: &from_state,
+                transition_name: &transition_name,
+                transition_def: &transition_def,
+                actor: "deterministic",
+                principal: None,
+                arguments: &json!({}),
+                blackboard_delta: delta,
+                guard_results: Vec::new(),
+                child_workflow_id: chain_child_workflow_id,
+                executor_outcome: chain_executor_outcome,
                 correlation_id,
-            )
+            })
             .await?;
 
             instance = self
@@ -1836,417 +1854,11 @@ impl WorkflowRuntime {
     }
 }
 
-/// `linkFilter: byGuards` may be declared on the workflow or per-state.
-/// State setting wins when both exist.
-fn link_filter_byguards(definition: &Value, state: &str) -> bool {
-    let state_setting = definition
-        .pointer(&format!("/states/{}/linkFilter", pointer_escape(state)))
-        .and_then(Value::as_str);
-    if let Some(s) = state_setting {
-        return s == "byGuards";
-    }
-    definition
-        .get("linkFilter")
-        .and_then(Value::as_str)
-        .map(|s| s == "byGuards")
-        .unwrap_or(false)
-}
-
-fn links(definition: &Value, instance: &WorkflowInstance) -> Vec<Value> {
-    if is_terminal(definition, &instance.state) {
-        return vec![];
-    }
-
-    let path = format!("/states/{}/transitions", pointer_escape(&instance.state));
-    let Some(transitions) = definition.pointer(&path).and_then(Value::as_object) else {
-        return vec![];
-    };
-
-    let library = definition.get("_skillsLibrary").and_then(Value::as_object);
-
-    transitions
-        .iter()
-        .filter(|(_, t)| t.get("actor").and_then(Value::as_str) != Some("deterministic"))
-        .map(|(rel, transition)| {
-            // Build the args block. Always carry workflowId / expectedVersion /
-            // transition. If the transition declares `prefill`, resolve each
-            // value against current scopes and embed under `args.arguments`
-            // so an LLM caller can take them verbatim and only generate the
-            // fields it actually needs to choose.
-            let mut args = serde_json::Map::new();
-            args.insert("workflowId".into(), json!(instance.id));
-            args.insert("expectedVersion".into(), json!(instance.version));
-            args.insert("transition".into(), json!(rel));
-            if let Some(prefill) = transition.get("prefill").and_then(Value::as_object) {
-                let empty = json!({});
-                let mut resolved = serde_json::Map::with_capacity(prefill.len());
-                for (k, spec) in prefill {
-                    let v = crate::mapping::resolve_value(
-                        spec,
-                        &empty,             // no caller arguments at link-gen time
-                        &instance.context,
-                        &instance.input,
-                        &empty,             // no executor output at link-gen time
-                    );
-                    resolved.insert(k.clone(), v);
-                }
-                if !resolved.is_empty() {
-                    args.insert("arguments".into(), Value::Object(resolved));
-                }
-            }
-
-            // SPEC v2 §5.5: transition-scope `skills:` refs ride on the link.
-            // They are NOT folded into `guidance.refs` (which carries workflow
-            // and state scope) so the model can tell which fragments are
-            // tied to taking *this specific* transition.
-            let mut link = json!({
-                "rel": rel,
-                "title": transition.get("title").and_then(Value::as_str).unwrap_or(rel),
-                "description": transition.get("description"),
-                "method": "workflow.submit",
-                "actor": transition.get("actor").and_then(Value::as_str).unwrap_or("agent"),
-                "args": args,
-                "inputSchema": transition.get("inputSchema").cloned().unwrap_or_else(empty_object_schema),
-            });
-            let refs = resolve_skill_refs(transition.get("skills"), library);
-            if !refs.is_empty() {
-                link["guidance"] = json!({ "refs": refs });
-            }
-            link
-        })
-        .collect()
-}
-
-fn transition_definition<'a>(
-    definition: &'a Value,
-    state: &str,
-    transition: &str,
-) -> Option<&'a Value> {
-    definition.pointer(&format!(
-        "/states/{}/transitions/{}",
-        pointer_escape(state),
-        pointer_escape(transition)
-    ))
-}
-
-pub fn is_terminal(definition: &Value, state: &str) -> bool {
-    definition
-        .pointer(&format!("/states/{}/terminal", pointer_escape(state)))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
-/// Walk the schema's `properties` and fill in any `default` for keys missing
-/// from `value`. Recurses into nested object properties so defaults apply at
-/// any depth. No-ops if schema or value isn't an object — keeps the caller
-/// free of pre-checks.
-fn apply_schema_defaults(schema: Option<&Value>, value: &mut Value) {
-    let Some(schema) = schema else { return };
-    let Some(props) = schema.get("properties").and_then(Value::as_object) else {
-        return;
-    };
-    let Some(obj) = value.as_object_mut() else {
-        return;
-    };
-    for (key, prop_schema) in props {
-        match obj.get_mut(key) {
-            None => {
-                if let Some(default) = prop_schema.get("default") {
-                    obj.insert(key.clone(), default.clone());
-                }
-            }
-            Some(child) => apply_schema_defaults(Some(prop_schema), child),
-        }
-    }
-}
-
-/// SPEC §7.2 — compute the per-transition delta of the workflow's
-/// `context` so transition records can carry the structural diff. Cumulative
-/// replay of these deltas reconstructs `context` at any past `seq` (§7.5).
-///
-/// Semantics: any key whose value differs between pre and post is included
-/// (new keys → their post value; mutated keys → the new value; deleted keys
-/// → explicit `null`). Returns an empty object when there is no diff or
-/// when either side is not an object.
-fn blackboard_delta(pre: &Value, post: &Value) -> Value {
-    let pre_obj = pre.as_object();
-    let post_obj = post.as_object();
-    let mut delta = serde_json::Map::new();
-    if let Some(post_obj) = post_obj {
-        for (k, v) in post_obj {
-            match pre_obj.and_then(|m| m.get(k)) {
-                Some(prev) if prev == v => {}
-                _ => {
-                    delta.insert(k.clone(), v.clone());
-                }
-            }
-        }
-    }
-    if let Some(pre_obj) = pre_obj {
-        for k in pre_obj.keys() {
-            if !post_obj.is_some_and(|m| m.contains_key(k)) {
-                delta.insert(k.clone(), Value::Null);
-            }
-        }
-    }
-    Value::Object(delta)
-}
-
-/// SPEC §6.2 — validate `output:` writes against any *typed* blackboard slot.
-///
-/// Walks every key the transition's `output:` writes; if that key is declared
-/// in the workflow's `blackboard:` map with a JSON-Schema fragment (object
-/// form), the post-write value must conform. Returns the offending `(slot,
-/// reason)` on the first violation so the caller can surface a
-/// `BLACKBOARD_TYPE_ERROR` rejection BEFORE the transition advances.
-///
-/// Returns `Ok(())` when the blackboard is absent, in array form (no per-slot
-/// schemas declared), or when the slot is undeclared / declared bare. Undeclared
-/// writes are caught separately by `check` as a warning (SPEC §11) — this
-/// check is purely the typed-slot guarantee.
-pub(crate) fn validate_blackboard_writes(
-    definition: &Value,
-    output_mapping: Option<&Value>,
-    context: &Value,
-) -> Result<(), (String, String)> {
-    let Some(mapping) = output_mapping.and_then(Value::as_object) else {
-        return Ok(());
-    };
-    let Some(blackboard) = definition.get("blackboard").and_then(Value::as_object) else {
-        return Ok(());
-    };
-    let context_obj = context.as_object();
-    for slot in mapping.keys() {
-        let Some(slot_schema) = blackboard.get(slot) else {
-            continue;
-        };
-        // Bare-name declarations in object form are an empty object — nothing
-        // to validate. Only fragments that actually declare structure (a
-        // `type`, properties, etc.) trigger validation.
-        if !slot_schema.is_object() {
-            continue;
-        }
-        let Some(schema_obj) = slot_schema.as_object() else {
-            continue;
-        };
-        if schema_obj.is_empty() {
-            continue;
-        }
-        let value = context_obj
-            .and_then(|o| o.get(slot))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let validator = match jsonschema::validator_for(slot_schema) {
-            Ok(v) => v,
-            Err(e) => {
-                return Err((slot.clone(), format!("invalid blackboard schema: {e}")));
-            }
-        };
-        if !validator.is_valid(&value) {
-            let errs: Vec<String> = validator
-                .iter_errors(&value)
-                .map(|e| e.to_string())
-                .collect();
-            return Err((slot.clone(), errs.join("; ")));
-        }
-    }
-    Ok(())
-}
-
-fn validate_schema(schema: Option<&Value>, value: &Value, label: &str) -> anyhow::Result<()> {
-    let Some(schema) = schema else {
-        return Ok(());
-    };
-
-    let validator = jsonschema::validator_for(schema)
-        .map_err(|e| anyhow!("invalid {} schema: {}", label, e))?;
-    if !validator.is_valid(value) {
-        let errs: Vec<String> = validator
-            .iter_errors(value)
-            .map(|e| e.to_string())
-            .collect();
-        bail!("invalid {}: {}", label, errs.join("; "));
-    }
-    Ok(())
-}
-
-fn required_str<'a>(value: &'a Value, pointer: &str) -> anyhow::Result<&'a str> {
-    value
-        .pointer(pointer)
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("required string missing at {}", pointer))
-}
-
-fn pointer_escape(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
-}
-
-fn empty_object_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Guidance refs (SPEC v2 §5.5)
 // ---------------------------------------------------------------------------
 
-/// Build the `guidance.refs` array from a workflow snapshot. Pulls subjects
-/// from workflow-scope `skills:` and the active state's `skills:` (de-duped,
-/// declaration order). Transition-scope refs are surfaced on the link object
-/// instead (SPEC §5.5) so callers can tell which fragments are tied to
-/// taking *this specific* transition; they are NOT folded in here. Each
-/// emitted ref pairs `subject` with the `verb` looked up in the
-/// snapshot-stamped `_skillsLibrary`. Subjects with no library entry are
-/// skipped — `check` reports those as errors.
-fn collect_guidance_refs(definition: &Value, state_def: Option<&Value>) -> Vec<Value> {
-    let library = definition.get("_skillsLibrary").and_then(Value::as_object);
-    let mut seen = std::collections::BTreeSet::new();
-    let mut out = Vec::new();
-    push_resolved_refs(definition.get("skills"), library, &mut seen, &mut out);
-    push_resolved_refs(
-        state_def.and_then(|s| s.get("skills")),
-        library,
-        &mut seen,
-        &mut out,
-    );
-    out
-}
-
-/// Resolve a single scope's `skills: [subject]` against the library and
-/// emit `{verb, subject}` JSON values for the link layer. Used independently
-/// of `collect_guidance_refs` so transition-scope refs (which need their own
-/// `seen` set per link) don't accidentally consume workflow/state state.
-fn resolve_skill_refs(
-    scope: Option<&Value>,
-    library: Option<&serde_json::Map<String, Value>>,
-) -> Vec<Value> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut out = Vec::new();
-    push_resolved_refs(scope, library, &mut seen, &mut out);
-    out
-}
-
-fn push_resolved_refs(
-    scope: Option<&Value>,
-    library: Option<&serde_json::Map<String, Value>>,
-    seen: &mut std::collections::BTreeSet<String>,
-    out: &mut Vec<Value>,
-) {
-    let Some(arr) = scope.and_then(Value::as_array) else {
-        return;
-    };
-    for entry in arr {
-        let Some(subject) = entry.as_str() else { continue };
-        if !seen.insert(subject.to_string()) {
-            continue;
-        }
-        // `_skillsLibrary` is `{ subject: { verb, body } }` post-§8.2; only
-        // `verb` is needed to assemble the surfaced ref. Body is consulted
-        // by `gateway.describe(id, workflowId)` against the snapshot.
-        let verb = library
-            .and_then(|lib| lib.get(subject))
-            .and_then(|entry| entry.get("verb"))
-            .and_then(Value::as_str);
-        let Some(verb) = verb else { continue };
-        out.push(json!({ "verb": verb, "subject": subject }));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Guidance string templating (SPEC v2 §5.2)
 // ---------------------------------------------------------------------------
-
-/// Render a `goal` or `guidance` template string against a live workflow
-/// instance.
-///
-/// Placeholder syntax: `{{` optional-whitespace `$.`-rooted-path
-/// optional-whitespace `}}`.
-///
-/// Resolvable path prefixes:
-/// - `$.context.*`        → `instance.context`
-/// - `$.workflow.input.*` → `instance.input`
-/// - `$.workflow.id`      → `instance.id`
-/// - `$.workflow.state`   → `instance.state`
-/// - `$.workflow.version` → `instance.definition_version`
-///
-/// **Single-pass, non-recursive.** A substituted value that itself contains
-/// `{{ … }}` is written verbatim into the output and is NOT re-scanned.
-///
-/// **Unresolved → stub.** `{{ $.context.missing }}` renders as
-/// `(missing: unset)` — last path segment + `: unset`. The response is
-/// always produced; this function never fails.
-pub(crate) fn render_template(template: &str, instance: &WorkflowInstance) -> String {
-    let mut output = String::with_capacity(template.len());
-    let mut remaining = template;
-
-    while let Some(start) = remaining.find("{{") {
-        // Append everything before the opening `{{`.
-        output.push_str(&remaining[..start]);
-        let after_open = &remaining[start + 2..];
-
-        let Some(end_rel) = after_open.find("}}") else {
-            // No closing `}}` — emit the rest literally and stop.
-            output.push_str(&remaining[start..]);
-            return output;
-        };
-
-        let inner = after_open[..end_rel].trim();
-        if inner.is_empty() {
-            // Empty placeholder `{{}}` — not a valid token; emit verbatim.
-            output.push_str("{{}}");
-        } else {
-            let replacement = resolve_template_path(inner, instance);
-            output.push_str(&replacement);
-        }
-
-        // Advance past the closing `}}`.
-        remaining = &after_open[end_rel + 2..];
-    }
-
-    // Append any tail after the last placeholder.
-    output.push_str(remaining);
-    output
-}
-
-/// Resolve a single trimmed path token (e.g. `$.context.someKey`) against
-/// the instance. Returns the string representation of the matched JSON value,
-/// or a `(lastSegment: unset)` stub when the path cannot be resolved.
-fn resolve_template_path(path: &str, instance: &WorkflowInstance) -> String {
-    // Scalar instance metadata — no further traversal needed.
-    if path == "$.workflow.id" {
-        return instance.id.clone();
-    }
-    if path == "$.workflow.state" {
-        return instance.state.clone();
-    }
-    if path == "$.workflow.version" {
-        return instance.definition_version.clone();
-    }
-
-    let (root, tail) = if let Some(t) = path.strip_prefix("$.context.") {
-        (&instance.context, t)
-    } else if let Some(t) = path.strip_prefix("$.workflow.input.") {
-        (&instance.input, t)
-    } else {
-        // Unrecognised prefix → stub using last segment of the path.
-        let last = path.rsplit('.').next().unwrap_or(path);
-        return format!("({last}: unset)");
-    };
-
-    let pointer = crate::guards::path_to_pointer(tail);
-    match root.pointer(&pointer) {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Null) => "(null)".to_string(),
-        Some(v) => v.to_string(),
-        None => {
-            // Last dot-separated segment as the stub label.
-            let last = tail.rsplit('.').next().unwrap_or(tail);
-            format!("({last}: unset)")
-        }
-    }
-}
-
 

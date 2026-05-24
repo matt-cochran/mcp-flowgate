@@ -24,6 +24,10 @@ pub mod store_file;
 pub mod store_postgres;
 pub mod store_sqlite;
 pub mod validate;
+pub mod templating;
+pub mod runtime_links;
+pub mod runtime_records;
+pub mod runtime_schema;
 
 pub use audit::{
     AuditEvent, AuditSink, FileAuditSink, MemoryAuditSink, NullAuditSink, RotationInterval,
