@@ -248,6 +248,49 @@ async fn describe_with_unknown_id_returns_null_item() {
     assert_eq!(resp["item"], Value::Null);
 }
 
+/// SPEC §12 — `gateway.describe` on a guidance fragment returns the flat
+/// `{ kind: "guidance", subject, verb, body }` shape, NOT the workflow /
+/// capability `{ id, item, links }` wrapper. Workflow / capability lookups
+/// continue to use the wrapper (verified by the other describe tests above).
+#[tokio::test]
+async fn describe_guidance_uses_flat_wire_format() {
+    use mcp_flowgate_core::discovery::{DiscoveryItem, DiscoveryKind, InMemoryDiscoveryIndex};
+
+    // Build a runtime + discovery index containing a Guidance entry.
+    let runtime = build_runtime();
+    let discovery = InMemoryDiscoveryIndex::new(vec![DiscoveryItem {
+        id: "house-voice".into(),
+        kind: DiscoveryKind::Guidance,
+        title: "house-voice".into(),
+        description: String::new(),
+        tags: vec![],
+        examples: vec![],
+        aliases: vec![],
+        text: "house-voice apply".into(),
+        links: vec![],
+        verb: Some("apply".into()),
+        body: Some("Lead with the reader's problem.".into()),
+    }]);
+    let server = FlowgateServer::new(runtime).with_discovery(Arc::new(discovery));
+
+    let resp = dispatch(&server, TOOL_DESCRIBE, json!({ "id": "house-voice" }))
+        .await
+        .unwrap();
+
+    assert_eq!(resp["kind"].as_str(), Some("guidance"));
+    assert_eq!(resp["subject"].as_str(), Some("house-voice"));
+    assert_eq!(resp["verb"].as_str(), Some("apply"));
+    assert_eq!(
+        resp["body"].as_str(),
+        Some("Lead with the reader's problem.")
+    );
+    // Must NOT use the wrapper for guidance.
+    assert!(
+        resp.get("item").is_none(),
+        "guidance describe must not carry an `item` wrapper; got: {resp}"
+    );
+}
+
 // ---------- workflow.start -----------------------------------------------
 
 #[tokio::test]

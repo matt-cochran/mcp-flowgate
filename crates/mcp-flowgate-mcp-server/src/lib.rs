@@ -235,24 +235,58 @@ impl FlowgateServer {
         // the live discovery index when no workflowId is given or when the
         // subject is not in the snapshot (e.g. it's a workflow/capability
         // lookup, not a guidance fragment).
+        //
+        // Guidance responses use the SPEC §12 flat wire format:
+        //   { kind: "guidance", subject, verb, body }
+        // Workflow / capability / connection lookups keep the existing
+        // `{ id, item, links }` wrapper since they need the HATEOAS links
+        // to drive the next call.
         if let Some(workflow_id) = parsed.workflow_id.as_deref() {
-            if let Some(body) = self
+            if let Some(mut body) = self
                 .runtime
                 .describe_guidance_for_workflow(workflow_id, &id)
                 .await?
             {
+                // body is already SPEC §12 shape — just attach next-step
+                // links alongside (preserves HATEOAS without breaking the
+                // top-level shape).
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert(
+                        "links".into(),
+                        json!([
+                            { "rel": "home", "method": "gateway.home", "args": {} },
+                            {
+                                "rel": "get",
+                                "method": "workflow.get",
+                                "args": { "workflowId": workflow_id }
+                            }
+                        ]),
+                    );
+                }
+                return Ok(body);
+            }
+        }
+
+        let item = self.discovery.describe(&id).await?;
+
+        // If the discovery layer surfaced a guidance fragment, reshape it
+        // to SPEC §12 flat form. `DiscoveryKind::Guidance` items carry
+        // `verb` and `body` directly on the item.
+        if let Some(item) = &item {
+            if matches!(item.kind, DiscoveryKind::Guidance) {
                 return Ok(json!({
-                    "id": id,
-                    "item": body,
+                    "kind": "guidance",
+                    "subject": item.id,
+                    "verb": item.verb.as_deref().unwrap_or_default(),
+                    "body": item.body.as_deref().unwrap_or_default(),
                     "links": [
                         { "rel": "home", "method": "gateway.home", "args": {} },
-                        { "rel": "get", "method": "workflow.get", "args": { "workflowId": workflow_id } }
+                        { "rel": "search", "method": "gateway.search", "args": { "query": "" } }
                     ]
                 }));
             }
         }
 
-        let item = self.discovery.describe(&id).await?;
         Ok(json!({
             "id": id,
             "item": item,
