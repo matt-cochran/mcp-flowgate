@@ -85,6 +85,8 @@ async fn workflow_executor_sets_child_workflow_id_on_record() {
             definition_id: "parent".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -99,6 +101,8 @@ async fn workflow_executor_sets_child_workflow_id_on_record() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -167,6 +171,8 @@ async fn non_workflow_executor_leaves_child_workflow_id_null() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -180,6 +186,8 @@ async fn non_workflow_executor_leaves_child_workflow_id_null() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();

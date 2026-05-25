@@ -166,14 +166,27 @@ pub(crate) fn push_resolved_refs(
         if !seen.insert(subject.to_string()) {
             continue;
         }
-        // `_skillsLibrary` is `{ subject: { verb, body } }` post-§8.2; only
-        // `verb` is needed to assemble the surfaced ref. Body is consulted
-        // by `gateway.describe(id, workflowId)` against the snapshot.
-        let verb = library
-            .and_then(|lib| lib.get(subject))
+        // `_skillsLibrary` is `{ subject: { verb, lifecycle, body, hash, source } }`
+        // post-§5.7 stamp. Surfaced ref is `{verb, subject, hash}` —
+        // body is consulted by `gateway.describe(id, workflowId)` against
+        // the snapshot. SPEC §5.4: refs MUST carry hash for cache
+        // invalidation; library entries without hash indicate a stamp-time
+        // bug, so we surface the ref without hash and let the
+        // structural-analysis layer flag it rather than silently dropping.
+        let lib_entry = library.and_then(|lib| lib.get(subject));
+        let Some(verb) = lib_entry
             .and_then(|entry| entry.get("verb"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let hash = lib_entry
+            .and_then(|entry| entry.get("hash"))
             .and_then(Value::as_str);
-        let Some(verb) = verb else { continue };
-        out.push(json!({ "verb": verb, "subject": subject }));
+        let mut ref_obj = json!({ "verb": verb, "subject": subject });
+        if let Some(h) = hash {
+            ref_obj["hash"] = Value::String(h.to_string());
+        }
+        out.push(ref_obj);
     }
 }

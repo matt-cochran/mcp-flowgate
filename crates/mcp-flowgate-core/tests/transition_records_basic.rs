@@ -5,142 +5,21 @@
 //! the record is written before the authoritative state snapshot is committed.
 //! If the record write fails, the transition fails fast and the snapshot is NOT
 //! committed.
+//!
+//! This file holds the record-emission + blackboard-delta tests. The executor
+//! descriptor tests live in `transition_records_executor.rs`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use async_trait::async_trait;
 use mcp_flowgate_core::audit::{AuditEvent, AuditSink, MemoryAuditSink};
-use mcp_flowgate_core::guards::DefaultGuardEvaluator;
 use mcp_flowgate_core::model::{GetWorkflow, Principal, StartWorkflow, SubmitTransition};
-use mcp_flowgate_core::ports::{Executor, ExecutorRegistry, WorkflowStore};
+use mcp_flowgate_core::ports::WorkflowStore;
 use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
 use mcp_flowgate_core::WorkflowRuntime;
 use serde_json::{json, Value};
 
-// ---- test harness -----------------------------------------------------------
-
-/// Executor that does nothing useful and never fails. Deterministic chains
-/// reference `{ "kind": "noop" }`; the registry hands this back for any kind.
-struct NoopExecutor;
-
-#[async_trait]
-impl Executor for NoopExecutor {
-    async fn execute(
-        &self,
-        _: mcp_flowgate_core::model::ExecuteRequest,
-    ) -> Result<mcp_flowgate_core::model::ExecuteResult, mcp_flowgate_core::error::ExecutorError>
-    {
-        Ok(mcp_flowgate_core::model::ExecuteResult::default())
-    }
-}
-
-struct SingleExecRegistry {
-    inner: Arc<dyn Executor>,
-}
-
-impl ExecutorRegistry for SingleExecRegistry {
-    fn get(&self, _kind: &str) -> Option<Arc<dyn Executor>> {
-        Some(self.inner.clone())
-    }
-}
-
-/// An `AuditSink` that fails all `workflow.transition` audit events and
-/// succeeds for all other event types.
-struct FailingAuditSink {
-    recorded: Mutex<Vec<AuditEvent>>,
-}
-
-impl FailingAuditSink {
-    fn fail_all_transition_records() -> Self {
-        Self {
-            recorded: Mutex::new(Vec::new()),
-        }
-    }
-}
-
-#[async_trait]
-impl AuditSink for FailingAuditSink {
-    async fn record(&self, event: AuditEvent) -> anyhow::Result<()> {
-        let is_transition_record = event.event_type == "workflow.transition";
-        if is_transition_record {
-            anyhow::bail!("simulated audit sink failure");
-        }
-        self.recorded.lock().unwrap().push(event);
-        Ok(())
-    }
-
-    async fn list_events(&self) -> Option<Vec<AuditEvent>> {
-        Some(self.recorded.lock().unwrap().clone())
-    }
-}
-
-fn build_runtime(
-    config: Value,
-    audit: Arc<dyn AuditSink>,
-) -> (WorkflowRuntime, Arc<InMemoryWorkflowStore>) {
-    let definitions = Arc::new(ConfigDefinitionStore::from_config(&config));
-    let store = Arc::new(InMemoryWorkflowStore::new());
-    let executors = Arc::new(SingleExecRegistry {
-        inner: Arc::new(NoopExecutor),
-    });
-    let guards = Arc::new(DefaultGuardEvaluator::new());
-    let runtime = WorkflowRuntime::new(definitions, store.clone(), executors, guards, audit);
-    (runtime, store)
-}
-
-// ---- configs ----------------------------------------------------------------
-
-/// a -> b -> c -> d, all deterministic, d terminal. One `start` applies three
-/// transitions via the deterministic chain.
-fn three_step_chain() -> Value {
-    json!({
-        "version": "1.0.0",
-        "workflows": {
-            "pipeline": {
-                "initialState": "a",
-                "states": {
-                    "a": {
-                        "transitions": {
-                            "s1": { "target": "b", "actor": "deterministic", "executor": { "kind": "noop" } }
-                        }
-                    },
-                    "b": {
-                        "transitions": {
-                            "s2": { "target": "c", "actor": "deterministic", "executor": { "kind": "noop" } }
-                        }
-                    },
-                    "c": {
-                        "transitions": {
-                            "s3": { "target": "d", "actor": "deterministic", "executor": { "kind": "noop" } }
-                        }
-                    },
-                    "d": { "terminal": true }
-                }
-            }
-        }
-    })
-}
-
-/// a -> b, single agent transition. Used to drive a `submit` and observe what
-/// happens when the transition record write fails.
-fn single_agent_transition() -> Value {
-    json!({
-        "version": "1.0.0",
-        "workflows": {
-            "pipeline": {
-                "initialState": "a",
-                "states": {
-                    "a": {
-                        "transitions": {
-                            "go": { "target": "b", "actor": "agent", "executor": { "kind": "noop" } }
-                        }
-                    },
-                    "b": { "terminal": true }
-                }
-            }
-        }
-    })
-}
+mod common;
+use common::transition_records::*;
 
 // =============================================================================
 // Tests
@@ -159,6 +38,8 @@ async fn record_emitted_per_applied_transition() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("start should succeed");
@@ -199,6 +80,8 @@ async fn record_write_failure_aborts_transition() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("start should succeed (no transition applied at start)");
@@ -213,6 +96,8 @@ async fn record_write_failure_aborts_transition() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await;
 
@@ -236,6 +121,8 @@ async fn version_unchanged_when_record_write_fails() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("start should succeed");
@@ -250,6 +137,8 @@ async fn version_unchanged_when_record_write_fails() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await;
     assert!(result.is_err(), "submit must fail");
@@ -298,6 +187,8 @@ async fn timeout_emits_workflow_transition_record_with_system_actor() {
             definition_id: "short_lived".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("start should succeed");
@@ -311,6 +202,8 @@ async fn timeout_emits_workflow_transition_record_with_system_actor() {
         .get(GetWorkflow {
             workflow_id: wf_id.clone(),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("get should succeed");
@@ -364,27 +257,6 @@ async fn timeout_emits_workflow_transition_record_with_system_actor() {
 // cumulative replay reconstructs the blackboard at any past `seq`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// An executor that returns a fixed `output` value — drives controlled
-/// `merge_output` behaviour for delta tests.
-struct FixedOutputExecutor {
-    output: Value,
-}
-
-#[async_trait]
-impl Executor for FixedOutputExecutor {
-    async fn execute(
-        &self,
-        _: mcp_flowgate_core::model::ExecuteRequest,
-    ) -> Result<mcp_flowgate_core::model::ExecuteResult, mcp_flowgate_core::error::ExecutorError>
-    {
-        Ok(mcp_flowgate_core::model::ExecuteResult {
-            output: self.output.clone(),
-            evidence: vec![],
-            child_workflow_id: None,
-        })
-    }
-}
-
 #[tokio::test]
 async fn blackboard_delta_populated_with_output_writes() {
     let cfg = json!({
@@ -429,6 +301,8 @@ async fn blackboard_delta_populated_with_output_writes() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -443,6 +317,8 @@ async fn blackboard_delta_populated_with_output_writes() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -486,6 +362,8 @@ async fn blackboard_delta_empty_when_no_context_change() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -499,6 +377,8 @@ async fn blackboard_delta_empty_when_no_context_change() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -553,6 +433,8 @@ async fn guards_array_populated_with_kind_and_result() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -566,6 +448,8 @@ async fn guards_array_populated_with_kind_and_result() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -583,127 +467,6 @@ async fn guards_array_populated_with_kind_and_result() {
     assert_eq!(guards.len(), 1, "expected one guard entry; got {guards:?}");
     assert_eq!(guards[0]["kind"].as_str(), Some("expr"));
     assert_eq!(guards[0]["result"], json!(true));
-}
-
-#[tokio::test]
-async fn executor_descriptor_carries_kind_ok_and_duration_ms() {
-    // SPEC §7.2: the record's `executor` carries `{ kind, ok, durationMs }`
-    // when the transition's executor actually ran.
-    let cfg = json!({
-        "version": "1.0.0",
-        "workflows": {
-            "wf": {
-                "initialState": "draft",
-                "states": {
-                    "draft": {
-                        "transitions": {
-                            "submit": {
-                                "target": "done",
-                                "actor": "agent",
-                                "executor": { "kind": "noop" }
-                            }
-                        }
-                    },
-                    "done": { "terminal": true }
-                }
-            }
-        }
-    });
-    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
-    let (runtime, _) = build_runtime(cfg, audit.clone());
-    let start = runtime
-        .start(StartWorkflow {
-            definition_id: "wf".into(),
-            input: json!({}),
-            principal: Principal::anonymous(),
-        })
-        .await
-        .unwrap();
-    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
-    let version = start["workflow"]["version"].as_u64().unwrap();
-    runtime
-        .submit(SubmitTransition {
-            workflow_id,
-            expected_version: version,
-            transition: "submit".into(),
-            arguments: json!({}),
-            principal: Principal::anonymous(),
-            summary: None,
-        })
-        .await
-        .unwrap();
-
-    let events = audit.list_events().await.expect("memory sink lists");
-    let record = events
-        .iter()
-        .find(|e| e.event_type == "workflow.transition")
-        .expect("a transition record must be emitted");
-    let executor = record
-        .payload
-        .get("executor")
-        .and_then(Value::as_object)
-        .expect("executor descriptor must be present");
-    assert_eq!(executor.get("kind").and_then(Value::as_str), Some("noop"));
-    assert_eq!(executor.get("ok").and_then(Value::as_bool), Some(true));
-    assert!(
-        executor.get("durationMs").and_then(Value::as_u64).is_some(),
-        "durationMs must be present as a non-negative integer; got: {executor:?}"
-    );
-}
-
-#[tokio::test]
-async fn executor_descriptor_omitted_when_no_executor_runs() {
-    // A transition without an executor declared must NOT emit a partial
-    // descriptor — schema says the field is optional and absent is the
-    // honest signal that nothing ran.
-    let cfg = json!({
-        "version": "1.0.0",
-        "workflows": {
-            "wf": {
-                "initialState": "draft",
-                "states": {
-                    "draft": {
-                        "transitions": { "submit": { "target": "done", "actor": "agent" } }
-                    },
-                    "done": { "terminal": true }
-                }
-            }
-        }
-    });
-    let audit = Arc::new(MemoryAuditSink::new()) as Arc<dyn AuditSink>;
-    let (runtime, _) = build_runtime(cfg, audit.clone());
-    let start = runtime
-        .start(StartWorkflow {
-            definition_id: "wf".into(),
-            input: json!({}),
-            principal: Principal::anonymous(),
-        })
-        .await
-        .unwrap();
-    let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
-    let version = start["workflow"]["version"].as_u64().unwrap();
-    runtime
-        .submit(SubmitTransition {
-            workflow_id,
-            expected_version: version,
-            transition: "submit".into(),
-            arguments: json!({}),
-            principal: Principal::anonymous(),
-            summary: None,
-        })
-        .await
-        .unwrap();
-
-    let events = audit.list_events().await.expect("memory sink lists");
-    let record = events
-        .iter()
-        .find(|e| e.event_type == "workflow.transition")
-        .expect("a transition record must be emitted");
-    assert!(
-        record.payload.get("executor").is_none(),
-        "no executor declared → no executor descriptor on the record; got: {}",
-        record.payload
-    );
 }
 
 #[tokio::test]
@@ -758,6 +521,8 @@ async fn blackboard_delta_chain_hops_have_distinct_deltas() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();

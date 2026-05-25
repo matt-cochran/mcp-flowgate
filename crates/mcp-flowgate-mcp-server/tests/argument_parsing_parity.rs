@@ -87,6 +87,7 @@ fn build_discovery() -> Arc<InMemoryDiscoveryIndex> {
             }],
             verb: None,
             body: None,
+            source: None,
         },
         DiscoveryItem {
             id: "cap.beta".into(),
@@ -100,6 +101,7 @@ fn build_discovery() -> Arc<InMemoryDiscoveryIndex> {
             links: vec![],
             verb: None,
             body: None,
+            source: None,
         },
     ]))
 }
@@ -270,6 +272,7 @@ async fn describe_guidance_uses_flat_wire_format() {
         links: vec![],
         verb: Some("apply".into()),
         body: Some("Lead with the reader's problem.".into()),
+        source: Some("config".into()),
     }]);
     let server = FlowgateServer::new(runtime).with_discovery(Arc::new(discovery));
 

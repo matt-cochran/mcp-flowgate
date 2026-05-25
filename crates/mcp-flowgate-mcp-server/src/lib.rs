@@ -9,39 +9,43 @@
 //!   `workflow.explain` drive a single workflow forward through links in
 //!   each response.
 //!
+//! Module layout:
+//! - `args` — argument structs + JSON Schema helpers (typed `*Args` per tool).
+//! - `tools` — tool-list construction + free-form helpers (`parse_kind`,
+//!   `instructions`).
+//! - `handlers` — per-tool handler bodies (sibling `impl FlowgateServer`).
+//!
 //! Tool input schemas and per-handler argument parsing share one Rust source
-//! of truth: a typed `*Args` struct per tool (see the **Argument structs**
-//! section below). `schemars` derives the published JSON Schema from those
-//! structs; `serde` deserializes incoming arguments into the same shape.
-//! Whatever divergence remains between "what the schema says is required" and
-//! "what the runtime tolerates as missing" is encoded explicitly: lenient
-//! fields stay `Option<T>` and are unwrapped with handler-side defaults,
-//! while strict fields stay `Option<T>` with an explicit `is required`
-//! check so the error message matches what callers (and audit consumers)
-//! already see today.
+//! of truth: the typed `*Args` structs in `args`. `schemars` derives the
+//! published JSON Schema from those structs; `serde` deserializes incoming
+//! arguments into the same shape. Whatever divergence remains between "what
+//! the schema says is required" and "what the runtime tolerates as missing"
+//! is encoded explicitly: lenient fields stay `Option<T>` and are unwrapped
+//! with handler-side defaults, while strict fields stay `Option<T>` with an
+//! explicit `is required` check so the error message matches what callers
+//! (and audit consumers) already see today.
 
-use std::borrow::Cow;
+mod args;
+mod handlers;
+mod tools;
+
 use std::sync::Arc;
 
 use mcp_flowgate_core::audit::AuditEvent;
-use mcp_flowgate_core::discovery::{
-    DiscoveryIndex, DiscoveryKind, InMemoryDiscoveryIndex, SearchRequest,
-};
-use mcp_flowgate_core::model::{GetWorkflow, Principal, StartWorkflow, SubmitTransition};
+use mcp_flowgate_core::discovery::{DiscoveryIndex, InMemoryDiscoveryIndex};
+use mcp_flowgate_core::model::Principal;
 use mcp_flowgate_core::runtime::WorkflowRuntime;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
-    InitializeResult, JsonObject, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+    InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
     ServerCapabilities, ServerInfo, Tool,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer};
 use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
-use schemars::gen::{SchemaGenerator, SchemaSettings};
-use schemars::schema::{InstanceType, Schema, SchemaObject};
-use schemars::JsonSchema;
-use serde::Deserialize;
 use serde_json::{json, Value};
+
+pub use tools::{skills_search_tool_definition, tool_definitions};
 
 pub const TOOL_HOME: &str = "gateway.home";
 pub const TOOL_SEARCH: &str = "gateway.search";
@@ -50,9 +54,14 @@ pub const TOOL_START: &str = "workflow.start";
 pub const TOOL_GET: &str = "workflow.get";
 pub const TOOL_SUBMIT: &str = "workflow.submit";
 pub const TOOL_EXPLAIN: &str = "workflow.explain";
+/// SPEC §17.6 — authoring-time skills discovery. Tool is only advertised when
+/// `FlowgateServer::with_skills_search(true)` is set; default off so runtime
+/// workflows use the push-not-pull guidance surface (§5.4).
+pub const TOOL_SKILLS_SEARCH: &str = "gateway.skills.search";
 
-/// The complete set of MCP tool names this server exposes. Stable across
-/// configs by design — see invariant 9 in the README.
+/// The complete set of MCP tool names this server exposes by default
+/// (without authoring-time flags). Stable across configs by design — see
+/// invariant 9 in the README.
 pub const STABLE_TOOL_NAMES: &[&str] = &[
     TOOL_HOME,
     TOOL_SEARCH,
@@ -65,10 +74,18 @@ pub const STABLE_TOOL_NAMES: &[&str] = &[
 
 #[derive(Clone)]
 pub struct FlowgateServer {
-    runtime: WorkflowRuntime,
-    discovery: Arc<dyn DiscoveryIndex>,
+    pub(crate) runtime: WorkflowRuntime,
+    pub(crate) discovery: Arc<dyn DiscoveryIndex>,
     server_name: String,
     server_version: String,
+    /// SPEC §5.9 — optional store that records `gateway.describe` calls per
+    /// workflow + subject, consumed by the `guidance_acknowledged` guard.
+    /// When `None`, describes still emit audit records but the guard cannot
+    /// be satisfied (returns false).
+    pub(crate) ack_store: Option<Arc<dyn mcp_flowgate_core::ports::GuidanceAcknowledgmentStore>>,
+    /// SPEC §17.6 — when true, the `gateway.skills.search` tool is
+    /// advertised in `list_tools`. Default false; authoring-time only.
+    skills_search_enabled: bool,
 }
 
 impl FlowgateServer {
@@ -80,6 +97,8 @@ impl FlowgateServer {
             discovery: Arc::new(InMemoryDiscoveryIndex::default()),
             server_name: "mcp-flowgate".to_string(),
             server_version: env!("CARGO_PKG_VERSION").to_string(),
+            ack_store: None,
+            skills_search_enabled: false,
         }
     }
 
@@ -94,10 +113,72 @@ impl FlowgateServer {
         self
     }
 
+    /// SPEC §5.9 — wire a guidance-acknowledgment store. Required for
+    /// workflows that use the `guidance_acknowledged` guard.
+    pub fn with_ack_store(
+        mut self,
+        ack_store: Arc<dyn mcp_flowgate_core::ports::GuidanceAcknowledgmentStore>,
+    ) -> Self {
+        self.ack_store = Some(ack_store);
+        self
+    }
+
+    /// SPEC §17.6 — enable the `gateway.skills.search` tool. Default off.
+    /// Authoring-time only — the runtime guidance surface uses push-not-pull
+    /// (§5.4). Enabling this for runtime workflows reintroduces the
+    /// pull-discovery anti-pattern.
+    pub fn with_skills_search(mut self, enabled: bool) -> Self {
+        self.skills_search_enabled = enabled;
+        self
+    }
+
     fn principal(_request: &CallToolRequestParams) -> Principal {
         // MVP: derive principal from transport later (auth headers, identity
         // claims). For now, every caller is the same anonymous principal.
         Principal::anonymous()
+    }
+
+    /// Transport-free entry point that mirrors what `ServerHandler::call_tool`
+    /// does, minus the `CallToolResult` wrapping. Lets parity tests assert on
+    /// per-tool argument parsing and response shape without spinning up an
+    /// rmcp transport. Behaviorally identical to `call_tool` — same dispatch
+    /// table, same error mapping.
+    pub async fn dispatch_call(&self, request: CallToolRequestParams) -> Result<Value, McpError> {
+        let principal = Self::principal(&request);
+        let args: Value = request
+            .arguments
+            .as_ref()
+            .map(|m| Value::Object(m.clone()))
+            .unwrap_or_else(|| json!({}));
+
+        let result = match request.name.as_ref() {
+            TOOL_HOME => self.handle_home().await,
+            TOOL_SEARCH => self.handle_search(args).await,
+            TOOL_DESCRIBE => self.handle_describe(args, principal.clone()).await,
+            TOOL_START => self.handle_start(args, principal).await,
+            TOOL_GET => self.handle_get(args, principal).await,
+            TOOL_SUBMIT => self.handle_submit(args, principal).await,
+            TOOL_EXPLAIN => self.handle_explain(args).await,
+            TOOL_SKILLS_SEARCH => {
+                if !self.skills_search_enabled {
+                    return Err(McpError::invalid_params(
+                        "gateway.skills.search is disabled. Enable with \
+                         FlowgateServer::with_skills_search(true) — authoring-time only."
+                            .to_string(),
+                        None,
+                    ));
+                }
+                self.handle_skills_search(args).await
+            }
+            other => {
+                return Err(McpError::invalid_params(
+                    format!("Unknown tool '{other}'. Use list_tools to discover."),
+                    None,
+                ));
+            }
+        };
+
+        result.map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 }
 
@@ -113,7 +194,7 @@ impl ServerHandler for FlowgateServer {
         info.protocol_version = ProtocolVersion::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server_info;
-        info.instructions = Some(instructions().to_string());
+        info.instructions = Some(tools::instructions().to_string());
         info
     }
 
@@ -141,7 +222,11 @@ impl ServerHandler for FlowgateServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(tool_definitions()))
+        let mut tools = tool_definitions();
+        if self.skills_search_enabled {
+            tools.push(skills_search_tool_definition());
+        }
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
@@ -161,472 +246,4 @@ impl ServerHandler for FlowgateServer {
     async fn on_initialized(&self, _context: NotificationContext<RoleServer>) {
         tracing::info!("mcp-flowgate client initialized");
     }
-}
-
-impl FlowgateServer {
-    /// Transport-free entry point that mirrors what `ServerHandler::call_tool`
-    /// does, minus the `CallToolResult` wrapping. Lets parity tests assert on
-    /// per-tool argument parsing and response shape without spinning up an
-    /// rmcp transport. Behaviorally identical to `call_tool` — same dispatch
-    /// table, same error mapping.
-    pub async fn dispatch_call(&self, request: CallToolRequestParams) -> Result<Value, McpError> {
-        let principal = Self::principal(&request);
-        let args: Value = request
-            .arguments
-            .as_ref()
-            .map(|m| Value::Object(m.clone()))
-            .unwrap_or_else(|| json!({}));
-
-        let result = match request.name.as_ref() {
-            TOOL_HOME => self.handle_home().await,
-            TOOL_SEARCH => self.handle_search(args).await,
-            TOOL_DESCRIBE => self.handle_describe(args).await,
-            TOOL_START => self.handle_start(args, principal).await,
-            TOOL_GET => self.handle_get(args, principal).await,
-            TOOL_SUBMIT => self.handle_submit(args, principal).await,
-            TOOL_EXPLAIN => self.handle_explain(args).await,
-            other => {
-                return Err(McpError::invalid_params(
-                    format!("Unknown tool '{other}'. Use list_tools to discover."),
-                    None,
-                ));
-            }
-        };
-
-        result.map_err(|e| McpError::internal_error(e.to_string(), None))
-    }
-
-    async fn handle_home(&self) -> anyhow::Result<Value> {
-        self.discovery.home().await
-    }
-
-    async fn handle_search(&self, args: Value) -> anyhow::Result<Value> {
-        let parsed: SearchArgs = serde_json::from_value(args)?;
-        let query = parsed.query.unwrap_or_default();
-        let kind = parsed.kind.as_deref().and_then(parse_kind);
-        let limit = parsed.limit as usize;
-
-        let hits = self
-            .discovery
-            .search(SearchRequest {
-                query: query.clone(),
-                kind,
-                limit,
-            })
-            .await?;
-
-        Ok(json!({
-            "query": query,
-            "kind": kind.map(|k| k.as_str()),
-            "items": hits,
-            "links": [
-                { "rel": "home", "method": "gateway.home", "args": {} }
-            ]
-        }))
-    }
-
-    async fn handle_describe(&self, args: Value) -> anyhow::Result<Value> {
-        let parsed: DescribeArgs = serde_json::from_value(args)?;
-        let id = parsed.id.ok_or_else(|| anyhow::anyhow!("id is required"))?;
-
-        // SPEC §8.2: if the caller is acting inside a workflow, resolve
-        // guidance bodies from the instance's pinned snapshot — the live
-        // config could have drifted since `workflow.start`. Falls back to
-        // the live discovery index when no workflowId is given or when the
-        // subject is not in the snapshot (e.g. it's a workflow/capability
-        // lookup, not a guidance fragment).
-        //
-        // Guidance responses use the SPEC §12 flat wire format:
-        //   { kind: "guidance", subject, verb, body }
-        // Workflow / capability / connection lookups keep the existing
-        // `{ id, item, links }` wrapper since they need the HATEOAS links
-        // to drive the next call.
-        if let Some(workflow_id) = parsed.workflow_id.as_deref() {
-            if let Some(mut body) = self
-                .runtime
-                .describe_guidance_for_workflow(workflow_id, &id)
-                .await?
-            {
-                // body is already SPEC §12 shape — just attach next-step
-                // links alongside (preserves HATEOAS without breaking the
-                // top-level shape).
-                if let Some(obj) = body.as_object_mut() {
-                    obj.insert(
-                        "links".into(),
-                        json!([
-                            { "rel": "home", "method": "gateway.home", "args": {} },
-                            {
-                                "rel": "get",
-                                "method": "workflow.get",
-                                "args": { "workflowId": workflow_id }
-                            }
-                        ]),
-                    );
-                }
-                return Ok(body);
-            }
-        }
-
-        let item = self.discovery.describe(&id).await?;
-
-        // If the discovery layer surfaced a guidance fragment, reshape it
-        // to SPEC §12 flat form. `DiscoveryKind::Guidance` items carry
-        // `verb` and `body` directly on the item.
-        if let Some(item) = &item {
-            if matches!(item.kind, DiscoveryKind::Guidance) {
-                return Ok(json!({
-                    "kind": "guidance",
-                    "subject": item.id,
-                    "verb": item.verb.as_deref().unwrap_or_default(),
-                    "body": item.body.as_deref().unwrap_or_default(),
-                    "links": [
-                        { "rel": "home", "method": "gateway.home", "args": {} },
-                        { "rel": "search", "method": "gateway.search", "args": { "query": "" } }
-                    ]
-                }));
-            }
-        }
-
-        Ok(json!({
-            "id": id,
-            "item": item,
-            "links": [
-                { "rel": "home", "method": "gateway.home", "args": {} },
-                { "rel": "search", "method": "gateway.search", "args": { "query": "" } }
-            ]
-        }))
-    }
-
-    async fn handle_start(&self, args: Value, principal: Principal) -> anyhow::Result<Value> {
-        let parsed: StartArgs = serde_json::from_value(args)?;
-        let definition_id = parsed
-            .definition_id
-            .unwrap_or_else(|| mcp_flowgate_core::DEFAULT_PROXY_WORKFLOW_ID.to_string());
-        let input = parsed.input.unwrap_or_else(|| json!({}));
-
-        self.runtime
-            .start(StartWorkflow {
-                definition_id,
-                input,
-                principal,
-            })
-            .await
-    }
-
-    async fn handle_get(&self, args: Value, principal: Principal) -> anyhow::Result<Value> {
-        let parsed: GetArgs = serde_json::from_value(args)?;
-        let workflow_id = parsed
-            .workflow_id
-            .ok_or_else(|| anyhow::anyhow!("workflowId is required"))?;
-
-        self.runtime
-            .get(GetWorkflow {
-                workflow_id,
-                principal,
-            })
-            .await
-    }
-
-    async fn handle_submit(&self, args: Value, principal: Principal) -> anyhow::Result<Value> {
-        let parsed: SubmitArgs = serde_json::from_value(args)?;
-        let workflow_id = parsed
-            .workflow_id
-            .ok_or_else(|| anyhow::anyhow!("workflowId is required"))?;
-        let expected_version = parsed
-            .expected_version
-            .ok_or_else(|| anyhow::anyhow!("expectedVersion is required"))?;
-        let transition = parsed
-            .transition
-            .ok_or_else(|| anyhow::anyhow!("transition is required"))?;
-        let arguments = parsed.arguments.unwrap_or_else(|| json!({}));
-
-        self.runtime
-            .submit(SubmitTransition {
-                workflow_id,
-                expected_version,
-                transition,
-                arguments,
-                principal,
-                summary: parsed.summary,
-            })
-            .await
-    }
-
-    async fn handle_explain(&self, args: Value) -> anyhow::Result<Value> {
-        let parsed: ExplainArgs = serde_json::from_value(args)?;
-        let workflow_id = parsed
-            .workflow_id
-            .ok_or_else(|| anyhow::anyhow!("workflowId is required"))?;
-        let transition = parsed
-            .transition
-            .ok_or_else(|| anyhow::anyhow!("transition is required"))?;
-        self.runtime.explain(&workflow_id, &transition).await
-    }
-}
-
-fn parse_kind(s: &str) -> Option<DiscoveryKind> {
-    match s {
-        "workflow" => Some(DiscoveryKind::Workflow),
-        "capability" => Some(DiscoveryKind::Capability),
-        "connection" => Some(DiscoveryKind::Connection),
-        _ => None,
-    }
-}
-
-// ---------- Argument structs --------------------------------------------
-//
-// One `*Args` struct per tool. Both the published JSON Schema (via
-// `schemars::JsonSchema`) and the per-handler argument extraction (via
-// `serde::Deserialize`) come from these definitions.
-//
-// Required-field policy is encoded twice on purpose: the per-call required
-// list passed to `schema_for_args` controls what the published schema
-// advertises; the handler's `.ok_or_else(... "is required")` controls what
-// the runtime rejects. They're maintained as a pair because the published
-// surface and the runtime have diverged historically (some schema-required
-// fields are silently defaulted by the runtime), and the parity tests fix
-// that contract in place. Every field is `Option<T>` so the deserializer
-// never produces serde's default missing-field error — handlers raise the
-// canonical "<field> is required" message instead.
-//
-// Tool-specific schema shims (`integer_schema`, `object_schema`,
-// `discovery_kind_schema`) override the default schemars output so the
-// published schema matches what callers see today. See those functions for
-// the per-field rationale.
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct SearchArgs {
-    query: Option<String>,
-    #[schemars(schema_with = "discovery_kind_schema")]
-    kind: Option<String>,
-    #[serde(default = "default_limit")]
-    #[schemars(schema_with = "limit_schema")]
-    limit: u64,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct DescribeArgs {
-    id: Option<String>,
-    /// SPEC §8.2 — when present, resolve guidance bodies from this
-    /// workflow's pinned snapshot so an in-flight instance sees the
-    /// body that existed at `workflow.start`, not whatever the live
-    /// config currently says. Workflow / capability lookups ignore it.
-    workflow_id: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct StartArgs {
-    definition_id: Option<String>,
-    #[schemars(schema_with = "object_schema")]
-    input: Option<Value>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct GetArgs {
-    workflow_id: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct SubmitArgs {
-    workflow_id: Option<String>,
-    #[schemars(schema_with = "integer_schema")]
-    expected_version: Option<u64>,
-    transition: Option<String>,
-    #[schemars(schema_with = "object_schema")]
-    arguments: Option<Value>,
-    /// SPEC §6.3 — optional model-authored summary. Stored to
-    /// `context.summary` on commit; surfaced in every response.
-    summary: Option<String>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct ExplainArgs {
-    workflow_id: Option<String>,
-    transition: Option<String>,
-}
-
-fn default_limit() -> u64 {
-    10
-}
-
-// ---------- per-field schema overrides ----------------------------------
-//
-// Schemars's default schemas for `u64`/`Option<Value>` carry extra hints
-// (`format: uint64`, `minimum: 0`, `additionalProperties: true`) that the
-// previous hand-written schemas didn't. These shims keep the published
-// schema byte-equivalent to the pre-refactor surface.
-
-fn integer_schema(_: &mut SchemaGenerator) -> Schema {
-    SchemaObject {
-        instance_type: Some(InstanceType::Integer.into()),
-        ..Default::default()
-    }
-    .into()
-}
-
-fn limit_schema(gen: &mut SchemaGenerator) -> Schema {
-    let mut schema = match integer_schema(gen) {
-        Schema::Object(o) => o,
-        Schema::Bool(_) => unreachable!("integer_schema always returns Schema::Object"),
-    };
-    schema.metadata().default = Some(json!(default_limit()));
-    schema.into()
-}
-
-fn object_schema(_: &mut SchemaGenerator) -> Schema {
-    SchemaObject {
-        instance_type: Some(InstanceType::Object.into()),
-        ..Default::default()
-    }
-    .into()
-}
-
-fn discovery_kind_schema(_: &mut SchemaGenerator) -> Schema {
-    SchemaObject {
-        instance_type: Some(InstanceType::String.into()),
-        enum_values: Some(vec![
-            json!("workflow"),
-            json!("capability"),
-            json!("connection"),
-        ]),
-        ..Default::default()
-    }
-    .into()
-}
-
-// ---------- tool table ---------------------------------------------------
-
-pub fn tool_definitions() -> Vec<Tool> {
-    vec![
-        Tool::new(
-            Cow::Borrowed(TOOL_HOME),
-            Cow::Borrowed(
-                "Get the gateway's discovery home: HATEOAS links to search and list capabilities.",
-            ),
-            empty_object_schema(),
-        ),
-        Tool::new(
-            Cow::Borrowed(TOOL_SEARCH),
-            Cow::Borrowed(
-                "Search workflows and proxy capabilities by free-text query. Returns hits with start_workflow links.",
-            ),
-            schema_for_args::<SearchArgs>(&["query"]),
-        ),
-        Tool::new(
-            Cow::Borrowed(TOOL_DESCRIBE),
-            Cow::Borrowed("Describe a workflow or capability by id, including its inputSchema."),
-            schema_for_args::<DescribeArgs>(&["id"]),
-        ),
-        Tool::new(
-            Cow::Borrowed(TOOL_START),
-            Cow::Borrowed("Start a workflow. Use definitionId 'proxy_default' for proxy mode."),
-            schema_for_args::<StartArgs>(&["definitionId", "input"]),
-        ),
-        Tool::new(
-            Cow::Borrowed(TOOL_GET),
-            Cow::Borrowed("Get current workflow state and valid next HATEOAS actions."),
-            schema_for_args::<GetArgs>(&["workflowId"]),
-        ),
-        Tool::new(
-            Cow::Borrowed(TOOL_SUBMIT),
-            Cow::Borrowed(
-                "Submit one transition listed in the latest links array of a workflow response.",
-            ),
-            schema_for_args::<SubmitArgs>(&[
-                "workflowId",
-                "expectedVersion",
-                "transition",
-                "arguments",
-            ]),
-        ),
-        Tool::new(
-            Cow::Borrowed(TOOL_EXPLAIN),
-            Cow::Borrowed("Explain whether a transition is currently allowed."),
-            schema_for_args::<ExplainArgs>(&["workflowId", "transition"]),
-        ),
-    ]
-}
-
-/// Build the rmcp `Tool.input_schema` for a typed `*Args` struct. The
-/// `required` list is supplied explicitly because some schema-required
-/// fields are silently defaulted by the runtime — see the args-struct
-/// comment block above.
-fn schema_for_args<T: JsonSchema>(required: &[&'static str]) -> Arc<JsonObject> {
-    let generator = SchemaSettings::draft07()
-        .with(|s| {
-            s.option_add_null_type = false;
-            s.inline_subschemas = true;
-            s.meta_schema = None;
-        })
-        .into_generator();
-    let root = generator.into_root_schema_for::<T>();
-    let mut value =
-        serde_json::to_value(&root).expect("schemars produces JSON-serializable schema");
-    let obj = value
-        .as_object_mut()
-        .expect("root schema is always an object");
-    obj.remove("$schema");
-    obj.remove("title");
-    obj.remove("definitions");
-    obj.remove("description");
-
-    if let Some(Value::Object(props)) = obj.get_mut("properties") {
-        for (_, v) in props.iter_mut() {
-            if let Value::Object(field) = v {
-                // Strip schemars hints the legacy hand-written schemas
-                // didn't carry: numeric `format`/`minimum`, the recursive
-                // `additionalProperties: true` schemars stamps on
-                // `Map<String, Value>`, and field doc-comments.
-                field.remove("format");
-                field.remove("minimum");
-                field.remove("additionalProperties");
-                field.remove("description");
-            }
-        }
-    }
-
-    if required.is_empty() {
-        obj.remove("required");
-    } else {
-        obj.insert("required".into(), json!(required));
-    }
-    obj.insert("additionalProperties".into(), Value::Bool(false));
-    Arc::new(value.as_object().cloned().expect("still an object"))
-}
-
-/// Hand-built schema for `gateway.home`, which takes no arguments. Going
-/// through schemars for a struct with zero fields works but emits an empty
-/// `properties` map and no `required` key — same result, but a one-liner
-/// here is cleaner than spelling out a `struct HomeArgs;` derive just to
-/// produce `{}`.
-fn empty_object_schema() -> Arc<JsonObject> {
-    let mut obj = serde_json::Map::new();
-    obj.insert("type".into(), Value::String("object".into()));
-    obj.insert("properties".into(), Value::Object(serde_json::Map::new()));
-    obj.insert("additionalProperties".into(), Value::Bool(false));
-    Arc::new(obj)
-}
-
-fn instructions() -> &'static str {
-    r#"This is the mcp-flowgate gateway.
-
-The tool surface is stable across configs:
-  Discovery — gateway.home, gateway.search, gateway.describe
-  Workflow  — workflow.start, workflow.get, workflow.submit, workflow.explain
-
-Typical flow:
-1. Call gateway.home to find search and list-capabilities links.
-2. Call gateway.search with a free-text query to find workflows or proxy capabilities.
-3. Pick a hit, follow its `start` or `start_proxy_session` link to call workflow.start.
-4. Read the workflow response's `links` array — each is a legal next transition.
-5. Use workflow.submit with the link's args plus your arguments. Repeat.
-6. Stop when result.status is 'completed'.
-
-Invalid calls always return the current legal links so you can recover."#
 }

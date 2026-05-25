@@ -24,6 +24,7 @@ pub struct UnsetSlotError {
 /// for tests).
 pub struct DefaultGuardEvaluator {
     evidence: Option<Arc<dyn EvidenceStore>>,
+    ack_store: Option<Arc<dyn crate::ports::GuidanceAcknowledgmentStore>>,
 }
 
 impl Default for DefaultGuardEvaluator {
@@ -34,13 +35,25 @@ impl Default for DefaultGuardEvaluator {
 
 impl DefaultGuardEvaluator {
     pub fn new() -> Self {
-        Self { evidence: None }
+        Self {
+            evidence: None,
+            ack_store: None,
+        }
     }
 
     pub fn with_evidence(evidence: Arc<dyn EvidenceStore>) -> Self {
         Self {
             evidence: Some(evidence),
+            ack_store: None,
         }
+    }
+
+    pub fn with_ack_store(
+        mut self,
+        ack_store: Arc<dyn crate::ports::GuidanceAcknowledgmentStore>,
+    ) -> Self {
+        self.ack_store = Some(ack_store);
+        self
     }
 }
 
@@ -136,39 +149,176 @@ impl GuardEvaluator for DefaultGuardEvaluator {
                 Ok(!pass)
             }
 
-            "evidence" => {
-                // `requires` accepts either a string (count >= 1) or
-                // `{ kind: foo, count: N }` for quorums.
-                let requirements: Vec<(String, usize)> = guard
-                    .get("requires")
-                    .and_then(Value::as_array)
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(parse_evidence_requirement)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+            "guidance_acknowledged" => {
+                // SPEC §5.9 + §17.4 — pass iff `gateway.describe` was called
+                // for `subject` against this workflow AND the recorded
+                // body-hash matches the current snapshot's hash for the
+                // subject. Hash flip invalidates the ack (TRIZ-bounded
+                // semantic teeth, FMECA FM-4).
+                let subject = guard
+                    .get("subject")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow::anyhow!("guidance_acknowledged guard needs `subject`"))?;
 
-                // No store wired? Permissive — useful for unit tests that
-                // only care about non-evidence guards.
-                let Some(store) = &self.evidence else {
-                    return Ok(true);
+                // Look up the expected hash from the per-instance skill
+                // library snapshot. If the subject isn't in the snapshot
+                // we fail explicitly with GUIDANCE_SUBJECT_UNKNOWN rather
+                // than a generic false — surfaces author errors loudly.
+                let expected_hash = instance
+                    .definition
+                    .pointer("/_skillsLibrary")
+                    .and_then(Value::as_object)
+                    .and_then(|lib| lib.get(subject))
+                    .and_then(|entry| entry.get("hash"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "GUIDANCE_SUBJECT_UNKNOWN: subject '{subject}' not present in workflow snapshot"
+                        )
+                    })?;
+
+                let Some(store) = self.ack_store.as_ref() else {
+                    // No ack store wired? The guard cannot be satisfied —
+                    // fail rather than silently pass. Authoring workflows
+                    // that use this guard MUST wire an ack store.
+                    return Ok(false);
                 };
+                let recorded = store.last_acknowledged_hash(&instance.id, subject).await?;
+                Ok(recorded.as_deref() == Some(expected_hash))
+            }
 
-                let recorded = store.list(&instance.id).await?;
-                Ok(requirements.iter().all(|(kind, count)| {
-                    recorded.iter().filter(|e| &e.kind == kind).count() >= *count
-                }))
+            "evidence" => {
+                let (pass, _diag) = self.evaluate_evidence(guard, instance).await?;
+                Ok(pass)
             }
 
             _ => Ok(false),
         }
     }
+
+    /// SPEC §20.1 + §20.4 — alongside the pass/fail bool, surface the
+    /// specific filter that caused a rejection so callers can render
+    /// `EVIDENCE_DIGEST_REQUIRED` / `EVIDENCE_CONFIDENCE_BELOW_THRESHOLD`
+    /// in `error.code` instead of generic `GUARD_REJECTED`.
+    async fn evaluate_with_diagnostic(
+        &self,
+        guard: &Value,
+        instance: &WorkflowInstance,
+        arguments: &Value,
+        principal: &Principal,
+    ) -> anyhow::Result<(bool, Option<String>)> {
+        match guard.get("kind").and_then(Value::as_str).unwrap_or("") {
+            "evidence" => self.evaluate_evidence(guard, instance).await,
+            _ => {
+                let pass = self.evaluate(guard, instance, arguments, principal).await?;
+                Ok((pass, None))
+            }
+        }
+    }
 }
 
-fn parse_evidence_requirement(v: &Value) -> Option<(String, usize)> {
+impl DefaultGuardEvaluator {
+    /// SPEC §20.1 — evidence-guard evaluation with §20.4 diagnostic.
+    /// Returns `(pass, Some(code))` when a §20.1 filter blocked a record
+    /// that would otherwise have satisfied the quorum. Only emits the
+    /// diagnostic when the filter-rejection is the *cause* of the failure;
+    /// a missing record entirely (wrong kind) returns `(false, None)` so
+    /// the caller stays on the generic `GUARD_REJECTED` path.
+    async fn evaluate_evidence(
+        &self,
+        guard: &Value,
+        instance: &WorkflowInstance,
+    ) -> anyhow::Result<(bool, Option<String>)> {
+        let requirements: Vec<EvidenceRequirement> = guard
+            .get("requires")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(parse_evidence_requirement)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        // No store wired? Permissive — useful for unit tests that
+        // only care about non-evidence guards.
+        let Some(store) = &self.evidence else {
+            return Ok((true, None));
+        };
+
+        let recorded = store.list(&instance.id).await?;
+        for req in &requirements {
+            // Count three buckets so we can attribute a quorum failure:
+            //   - matching_full: passes both filters → counts
+            //   - dropped_digest: right kind, missing digest under require_digest
+            //   - dropped_confidence: right kind, fails min_confidence
+            let mut matching_full = 0usize;
+            let mut dropped_digest = 0usize;
+            let mut dropped_confidence = 0usize;
+            for e in &recorded {
+                if e.kind != req.kind {
+                    continue;
+                }
+                if req.require_digest && e.digest.is_none() {
+                    dropped_digest += 1;
+                    continue;
+                }
+                if let Some(threshold) = req.min_confidence {
+                    match e.confidence {
+                        Some(c) if c >= threshold => matching_full += 1,
+                        _ => {
+                            dropped_confidence += 1;
+                            continue;
+                        }
+                    }
+                } else {
+                    matching_full += 1;
+                }
+            }
+            if matching_full >= req.count {
+                continue;
+            }
+            // Quorum failed. Attribute to a §20.4 code only if a §20.1
+            // filter is *why* it failed — i.e. without the filter we'd
+            // have had enough records. Otherwise (no relevant records at
+            // all) stay on the generic path.
+            let would_pass_without_digest_filter =
+                req.require_digest && matching_full + dropped_digest >= req.count;
+            let would_pass_without_confidence_filter =
+                req.min_confidence.is_some()
+                    && matching_full + dropped_confidence >= req.count;
+            if would_pass_without_digest_filter {
+                return Ok((false, Some("EVIDENCE_DIGEST_REQUIRED".to_string())));
+            }
+            if would_pass_without_confidence_filter {
+                return Ok((false, Some("EVIDENCE_CONFIDENCE_BELOW_THRESHOLD".to_string())));
+            }
+            // No filter-attributable cause. Generic quorum-miss.
+            return Ok((false, None));
+        }
+        Ok((true, None))
+    }
+}
+
+/// SPEC §9 + §20.1 — one requirement entry on an `evidence` guard's
+/// `requires:` list. Carries the optional §20.1 filters.
+struct EvidenceRequirement {
+    kind: String,
+    count: usize,
+    /// SPEC §20.1 — minimum `Evidence.confidence` for a record to count.
+    /// Records with no confidence are excluded when this is set.
+    min_confidence: Option<f32>,
+    /// SPEC §20.1 — when true, records without a `digest` are excluded.
+    require_digest: bool,
+}
+
+fn parse_evidence_requirement(v: &Value) -> Option<EvidenceRequirement> {
     if let Some(s) = v.as_str() {
-        return Some((s.to_string(), 1));
+        return Some(EvidenceRequirement {
+            kind: s.to_string(),
+            count: 1,
+            min_confidence: None,
+            require_digest: false,
+        });
     }
     if let Some(obj) = v.as_object() {
         let kind = obj.get("kind").and_then(Value::as_str)?.to_string();
@@ -177,7 +327,20 @@ fn parse_evidence_requirement(v: &Value) -> Option<(String, usize)> {
             .and_then(Value::as_u64)
             .map(|n| n as usize)
             .unwrap_or(1);
-        return Some((kind, count));
+        let min_confidence = obj
+            .get("min_confidence")
+            .and_then(Value::as_f64)
+            .map(|n| n as f32);
+        let require_digest = obj
+            .get("require_digest")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return Some(EvidenceRequirement {
+            kind,
+            count,
+            min_confidence,
+            require_digest,
+        });
     }
     None
 }

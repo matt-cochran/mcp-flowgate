@@ -346,7 +346,12 @@ fn migrate(config_path: PathBuf) -> anyhow::Result<()> {
 }
 
 fn check(config_path: PathBuf) -> anyhow::Result<()> {
-    let config = load_config(&config_path)?;
+    // SPEC §5.4.2 / audit-resolution C.2 — `check` is the surface where
+    // soft diagnostics (e.g. non-strict-mode unblessed subject roots)
+    // become visible. Use the diagnostics-returning variant.
+    let (config, soft_diagnostics) =
+        mcp_flowgate_core::config::load_resolved_with_diagnostics(&config_path)
+            .with_context(|| format!("loading config {}", config_path.display()))?;
 
     let version = config
         .pointer("/version")
@@ -388,13 +393,40 @@ fn check(config_path: PathBuf) -> anyhow::Result<()> {
     let diagnostics = mcp_flowgate_core::validate::validate_workflows(&config);
     let errors = diagnostics.iter().filter(|d| d.is_error()).count();
     let warnings = diagnostics.iter().filter(|d| !d.is_error()).count();
+    let soft_warnings = soft_diagnostics.len();
+
     if !diagnostics.is_empty() {
         println!();
         for d in &diagnostics {
             println!("  {d}");
         }
+    }
+    // SPEC §5.4.2 / audit-resolution C.2 — print soft diagnostics under
+    // their own banner so operators see them even when the rest of
+    // validation succeeds.
+    if !soft_diagnostics.is_empty() {
         println!();
-        println!("validation: {} error(s), {} warning(s)", errors, warnings);
+        println!("soft warnings (resolve-time):");
+        for d in &soft_diagnostics {
+            let loc = d
+                .location
+                .as_deref()
+                .map(|l| format!(" at {l}"))
+                .unwrap_or_default();
+            let suggestion = d
+                .suggestion
+                .as_deref()
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            println!("  warn[{}]{loc}: {}{suggestion}", d.code, d.message);
+        }
+    }
+    if !diagnostics.is_empty() || !soft_diagnostics.is_empty() {
+        println!();
+        println!(
+            "validation: {} error(s), {} warning(s), {} soft warning(s)",
+            errors, warnings, soft_warnings
+        );
     } else if !ids.is_empty() {
         println!("validation: ok");
     }

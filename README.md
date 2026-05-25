@@ -325,6 +325,105 @@ model has no path to skip the gate.
 | [`expense-approval/`](examples/expense-approval/) | Multi-tenant: two-tier approval, quorum evidence, idempotent payment. |
 | [`tdd/`](examples/tdd/) | Discipline: enforced red → green → refactor with cheat detection. [Dogfooded in CI](examples/tdd/dogfood-drive.py). |
 | [`deploy-pipeline/`](examples/deploy-pipeline/) | Deterministic chaining: lint → test → build auto-execute; LLM only sees the deploy decision. |
+| [`authoring-workflow.yaml`](examples/authoring-workflow.yaml) | Meta: the LLM authors new workflows and skill fragments, gated by structural analysis, dry-run, and the `guidance_acknowledged` rubric check. |
+
+---
+
+## Coding-agent recipe (commodity LLM ≥ frontier model)
+
+See [`RESEARCH.md`](RESEARCH.md) for the full thesis: with a deterministic
+gateway, a cheap or open-weight model can match or beat a frontier model
+on real software-engineering work. The architecture is six Flowgate
+states (planning → retrieving → editing → verifying → critiquing →
+human_review), each backed by a guidance skill fragment, plus three
+**external** tools that plug in via Flowgate's existing `connections:`
+block. The Flowgate runtime stays unchanged.
+
+### Three external tools (run as separate processes)
+
+| Tool | Transport | Purpose |
+|------|-----------|---------|
+| **`scip-mcp`** *(community / write-your-own)* | MCP server | SCIP symbol queries, call/import graphs, CODEOWNERS lookup, test coverage mapping. Wraps the [SCIP indexers](https://github.com/sourcegraph/scip) for whichever languages your repos use. |
+| **`constrained-edit`** *(write-your-own — small)* | CLI | Accept typed edit operations on stdin, validate paths against `constraints.forbiddenPaths`, apply atomically, emit unified diff on stdout. ~200 lines in your language of choice. |
+| **`verifier-harness-mcp`** *(write-your-own)* | MCP server | Orchestrate containerised build → lint → fail-to-pass → pass-to-pass → coverage delta → mutation → security stages. Returns per-stage `{passed, artifacts}`. Wraps whatever build system your repo uses. |
+
+Why external? Process isolation (a crashing linter doesn't crash the
+workflow runtime), language freedom (each tool can be written in
+whatever fits the domain), independent versioning (the verifier can
+iterate without Flowgate releases), and a real security boundary
+(a compromised editor tool cannot write transition records).
+
+### Wiring it up
+
+Once the three tools exist, declare them as connections and reference
+them from the workflow:
+
+```yaml
+connections:
+  codebase_graph:
+    type: mcp
+    transport: { kind: streamable_http, url: "http://localhost:7100/mcp" }
+  verifier_harness:
+    type: mcp
+    transport: { kind: streamable_http, url: "http://localhost:7200/mcp" }
+  constrained_edit:
+    type: cli
+    command: ["constrained-edit"]
+
+workflows:
+  swe_agent:
+    initialState: planning
+    states:
+      retrieving:
+        executor: { kind: mcp, connection: codebase_graph, tool: assemble_evidence_pack }
+      editing:
+        executor: { kind: cli, connection: constrained_edit }
+      verifying:
+        executor: { kind: mcp, connection: verifier_harness, tool: run_harness }
+      # …critiquing, human_review states with the standard skills+guards…
+```
+
+The complete workflow YAML, the five skill fragments, and the
+escalation guard expressions (cheap-first routing, retry budget,
+risk-based human gating) live in [`RESEARCH.md`](RESEARCH.md) §"Reference
+workflow (Flowgate YAML)". Copy-paste runnable.
+
+### Setup checklist
+
+1. **Pick or build the three external tools.** None ship with Flowgate.
+   Build them in the language and runtime that fit your codebase. The
+   SCIP server is the only one with substantive prior art; the other
+   two are intentionally small.
+2. **Run them locally** on the ports your config references. For a CI
+   integration, run them as sidecar containers in the same pod.
+3. **Author the SWE-agent YAML** under `examples/swe-agent.yaml` (or
+   wherever your config tree puts it) following the
+   [`RESEARCH.md`](RESEARCH.md) reference.
+4. **Author the five guidance skills** (`plan.specify.change-request`,
+   `diagnose.codebase.search`, `implement.edit.constrained`,
+   `review.code.adversarial`, `review.code.final-approval`) — markdown
+   blobs with `verb` and `lifecycle` per [SPEC §5](SPEC.md).
+5. **Wire the LLM client** to call `workflow.start` on `swe_agent`
+   with the incoming ticket, then drive the returned HATEOAS links
+   until completion. The LLM sees only the seven Flowgate tools at any
+   time; the workflow's state surfaces the next legal moves.
+
+### What you get
+
+- **Audit log of every coding session** — `tail -f audit.log | jq …`
+  gives you the SWE-agent scorecard (resolved rate, cost per fix,
+  retry count, etc.) per [SPEC §20.3](SPEC.md).
+- **Cheap-first routing as guard expressions** — escalate to a more
+  capable model only when `retryCount`, `risk`, or verifier failure
+  evidence justifies it. The LLM client reads the audit log to decide
+  which tier to use next.
+- **Human-in-the-loop for high-risk changes** — any change touching
+  auth, secrets, schemas, or cross-repo contracts routes to a
+  `human_review` state via a simple guard on `$.context.risk`.
+
+The point: you're not buying Flowgate to run a coding agent. You're
+buying the gateway your existing coding agent infrastructure needs to
+become governable, replayable, and cheap.
 
 ---
 

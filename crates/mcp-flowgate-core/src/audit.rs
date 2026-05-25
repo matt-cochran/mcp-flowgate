@@ -20,6 +20,16 @@ pub struct AuditEvent {
     pub actor: Option<String>,
     pub event_type: String,
     pub payload: Value,
+    /// SPEC §20.2 — caller-supplied trace id spanning multiple workflows in
+    /// one logical operation (e.g. a CI build that launches N sub-workflows).
+    /// Opaque to the gateway: written through unchanged. Default `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
+    /// SPEC §20.2 — caller-supplied id for grouping related workflow
+    /// instances (e.g. one model-evaluation run that exercises N workflows).
+    /// Opaque to the gateway. Default `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 impl AuditEvent {
@@ -32,6 +42,8 @@ impl AuditEvent {
             actor: None,
             event_type: event_type.into(),
             payload: json!({}),
+            trace_id: None,
+            run_id: None,
         }
     }
 
@@ -52,6 +64,20 @@ impl AuditEvent {
 
     pub fn with_payload(mut self, payload: Value) -> Self {
         self.payload = payload;
+        self
+    }
+
+    /// SPEC §20.2 — set the optional `trace_id` for hierarchical
+    /// observability. Sinks include it when present, omit when None.
+    pub fn with_trace_id(mut self, trace_id: impl Into<String>) -> Self {
+        self.trace_id = Some(trace_id.into());
+        self
+    }
+
+    /// SPEC §20.2 — set the optional `run_id` for grouping related
+    /// workflow instances.
+    pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
+        self.run_id = Some(run_id.into());
         self
     }
 }

@@ -73,6 +73,8 @@ async fn guidance_string_interpolates_context() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -135,6 +137,8 @@ async fn unresolved_placeholder_renders_stub_not_error() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("response must be produced even with unresolved placeholder");
@@ -193,6 +197,8 @@ async fn template_value_not_re_expanded() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -234,23 +240,25 @@ async fn response_surfaces_guidance_refs() {
     let cfg = json!({
         "version": "1.0.0",
         "skills": {
-            "house-voice": {
-                "verb": "apply",
+            "review.style.house-voice": {
+                "verb": "review",
+                "lifecycle": "stable",
                 "body": "Lead with the reader's problem. Short sentences."
             },
-            "editorial-checklist": {
-                "verb": "follow",
+            "review.editorial.checklist": {
+                "verb": "review",
+                "lifecycle": "stable",
                 "body": "1. Verify facts. 2. Cite sources."
             }
         },
         "workflows": {
             "wf": {
                 "initialState": "draft",
-                "skills": ["house-voice"],
+                "skills": ["review.style.house-voice"],
                 "states": {
                     "draft": {
                         "goal": "Write the draft",
-                        "skills": ["editorial-checklist"],
+                        "skills": ["review.editorial.checklist"],
                         "transitions": {
                             "submit": { "target": "done", "actor": "agent" }
                         }
@@ -271,6 +279,8 @@ async fn response_surfaces_guidance_refs() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -284,11 +294,11 @@ async fn response_surfaces_guidance_refs() {
         .filter_map(|r| r["subject"].as_str())
         .collect();
     assert!(
-        subjects.contains(&"house-voice"),
+        subjects.contains(&"review.style.house-voice"),
         "workflow-scope ref must be surfaced; got: {subjects:?}"
     );
     assert!(
-        subjects.contains(&"editorial-checklist"),
+        subjects.contains(&"review.editorial.checklist"),
         "state-scope ref must be surfaced; got: {subjects:?}"
     );
 
@@ -299,8 +309,8 @@ async fn response_surfaces_guidance_refs() {
             .as_str()
             .unwrap_or_else(|| panic!("ref must carry verb; got {r}"));
         match subj {
-            "house-voice" => assert_eq!(verb, "apply"),
-            "editorial-checklist" => assert_eq!(verb, "follow"),
+            "review.style.house-voice" => assert_eq!(verb, "review"),
+            "review.editorial.checklist" => assert_eq!(verb, "review"),
             other => panic!("unexpected ref subject: {other}"),
         }
     }
@@ -308,17 +318,17 @@ async fn response_surfaces_guidance_refs() {
     // `gateway.describe(subject)` returns the body via the discovery layer.
     let discovery = InMemoryDiscoveryIndex::from_config(&resolved);
     let item = discovery
-        .describe("house-voice")
+        .describe("review.style.house-voice")
         .await
         .unwrap()
-        .expect("house-voice should be discoverable");
+        .expect("review.style.house-voice should be discoverable");
     let body = serde_json::to_value(&item).unwrap();
     let body_str = body["body"].as_str().expect("describe must return body");
     assert!(
         body_str.contains("reader's problem"),
         "body should be surfaced; got: {body_str}"
     );
-    assert_eq!(body["verb"].as_str(), Some("apply"));
+    assert_eq!(body["verb"].as_str(), Some("review"));
 }
 
 // ── test 5 ────────────────────────────────────────────────────────────────────
@@ -331,8 +341,9 @@ async fn transition_scope_refs_ride_on_link() {
     let cfg = json!({
         "version": "1.0.0",
         "skills": {
-            "tone-for-review": {
-                "verb": "apply",
+            "review.style.tone-for-review": {
+                "verb": "review",
+                "lifecycle": "stable",
                 "body": "Be terse. Lead with the change, not the rationale."
             }
         },
@@ -346,7 +357,7 @@ async fn transition_scope_refs_ride_on_link() {
                             "submit_draft": {
                                 "target": "review",
                                 "actor": "agent",
-                                "skills": ["tone-for-review"]
+                                "skills": ["review.style.tone-for-review"]
                             }
                         }
                     },
@@ -363,6 +374,8 @@ async fn transition_scope_refs_ride_on_link() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -375,7 +388,7 @@ async fn transition_scope_refs_ride_on_link() {
         .unwrap_or_default();
     let top_subjects: Vec<&str> = top_refs.iter().filter_map(|r| r["subject"].as_str()).collect();
     assert!(
-        !top_subjects.contains(&"tone-for-review"),
+        !top_subjects.contains(&"review.style.tone-for-review"),
         "transition-scope ref leaked into guidance.refs (workflow/state-only): {top_subjects:?}"
     );
 
@@ -391,6 +404,6 @@ async fn transition_scope_refs_ride_on_link() {
         .and_then(|r| r.as_array())
         .expect("link must carry guidance.refs for transition-scope skills");
     assert_eq!(link_refs.len(), 1, "expected one ref on link; got {link_refs:?}");
-    assert_eq!(link_refs[0]["verb"].as_str(), Some("apply"));
-    assert_eq!(link_refs[0]["subject"].as_str(), Some("tone-for-review"));
+    assert_eq!(link_refs[0]["verb"].as_str(), Some("review"));
+    assert_eq!(link_refs[0]["subject"].as_str(), Some("review.style.tone-for-review"));
 }

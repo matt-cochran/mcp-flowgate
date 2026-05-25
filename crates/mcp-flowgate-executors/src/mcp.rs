@@ -228,6 +228,8 @@ impl Executor for McpExecutor {
                 id: Uuid::new_v4().to_string(),
                 uri: None,
                 summary: Some(format!("Called {connection}.{tool}")),
+                digest: None,
+                confidence: None,
             }],
             child_workflow_id: None,
         })

@@ -220,6 +220,8 @@ impl Executor for RestExecutor {
                 id: Uuid::new_v4().to_string(),
                 uri: Some(url),
                 summary: Some(summary),
+                digest: None,
+                confidence: None,
             }],
             child_workflow_id: None,
         })

@@ -8,9 +8,122 @@ on the cargo crate version. The **config schema** is versioned
 separately — see [`STABILITY.md`](STABILITY.md) for what is and isn't
 covered by a stability commitment.
 
-## [Unreleased]
+## [0.2.0] - 2026-05-25
+
+A substantial additive release. Adds the skills / typed-blackboard /
+versioned-definitions surfaces from SPEC §5 and §17–§20, ships the
+`mcp-flowgate-tui` crate, and closes the v0.2 audit punch list. No
+breaking changes to the v0.1 wire surface; every existing config
+loads and every existing workflow runs unchanged.
 
 ### Added
+
+- **Typed skills surface (SPEC §5).** Workflows can declare a
+  `skills:` block of guidance fragments addressable by
+  `verb`/`subject` (e.g. `verb: review, subject: review.style.house-voice`).
+  Subjects are stamped into each running workflow snapshot
+  (`_skillsLibrary`) so an in-flight instance sees the body that
+  existed at `workflow.start`, not whatever the live config
+  currently says. Bodies are fetched on demand via
+  `gateway.describe(id, workflowId)` — progressive disclosure (§5.4).
+- **`gateway.skills.search`** (SPEC §17.6) — authoring-time tool that
+  returns guidance refs (never bodies) filterable by
+  `verb` / `subject_root` / `source`. Advertised only when
+  `FlowgateServer::with_skills_search(true)` is set; default off so
+  runtime workflows use the push-not-pull guidance surface (§5.4).
+- **`guidance_acknowledged` guard** (SPEC §5.9). Optional
+  `GuidanceAcknowledgmentStore` records which subjects a workflow
+  has `gateway.describe`d. The guard returns true iff the current
+  body's hash matches what was acknowledged — hash-flip
+  invalidation means a future edit to the body silently expires
+  the acknowledgment.
+- **Trace/run id plumbing** (SPEC §20.2). `workflow.start`,
+  `workflow.get`, and `workflow.submit` accept `traceId` /
+  `runId`. The instance persists trace id on first set; every
+  audit record for that workflow propagates the values. Run id can
+  override per-call.
+- **§20.4 error codes** from the `evidence` guard. Filter rejections
+  now surface as `EVIDENCE_DIGEST_REQUIRED` and
+  `EVIDENCE_CONFIDENCE_BELOW_THRESHOLD` instead of the generic
+  `GUARD_REJECTED`. `Evidence::validate_confidence()` raises
+  `INVALID_CONFIDENCE` at submit time for out-of-range
+  `confidence` values.
+- **§20.1 evidence enrichment.** `Evidence` carries optional
+  `summary`, `digest`, and `confidence` fields; gateway preserves
+  and propagates them through transition records.
+- **`audit.write_failed` self-events** (SPEC §5.8). Non-critical
+  audit sites that previously swallowed sink errors now emit an
+  observable self-event when the primary record fails. Critical
+  audit sites (record-first emissions per §7.3) continue to fail
+  fast — chain auto-execution sites at `runtime_chain.rs` are
+  classified per criticality table.
+- **`mcp-flowgate-tui` crate** — terminal UI that spawns
+  `mcp-flowgate` as a child MCP server and drives a workflow
+  interactively. Installs two binary aliases: `flowgate` (primary)
+  and `flowgate-tui` (long-form). Log directory defaults to
+  `dirs::cache_dir().join("flowgate/logs")` with
+  `FLOWGATE_LOG_DIR` override; binary discovery honors
+  `MCP_FLOWGATE_PATH` env var and falls back through sibling +
+  PATH lookup with actionable error messages.
+- **`CONFIG_FLAG_NOT_RUNTIME_MUTABLE` validator.** Config load
+  rejects nested `flowgate.*` keys inside `workflows.*` /
+  `states.*` / `transitions.*` scope — those flags are gateway
+  defaults only and can't be overridden per workflow.
+- **`strict_namespacing` soft warnings** via new
+  `config::resolve_with_diagnostics()` /
+  `load_resolved_with_diagnostics()`. Unblessed subject roots
+  produce `Diagnostic { severity: warn, code: INVALID_SUBJECT_ROOT, … }`
+  with closest-blessed-root suggestion; surfaced via
+  `mcp-flowgate check`.
+- **Authoring-time `RegistryExecutor`** (SPEC §17.2 + §8.4). Behind
+  the `flowgate.authoring.write_enabled` flag, registers workflow
+  definitions through the `InMemoryWritableDefinitionStore`.
+- **CI doctest gate** (`cargo test --workspace --doc`) with seeded
+  examples on `Evidence::validate_confidence`,
+  `normalize_for_hash`, and `compute_skill_hash` — any future
+  spec/code drift in API examples breaks the build.
+- **`examples/swe-agent.yaml`** — reference workflow demonstrating
+  the skills surface with three external connections, six states,
+  and use-before-def-validated planning.
+
+### Changed
+
+- Discovery `DiscoveryItem` carries an optional `source` field
+  (SPEC §5.3). Config-declared fragments default to `"config"`;
+  ingested fragments carry their provenance (e.g.
+  `git+https://github.com/org/repo@sha`). Used by the
+  `gateway.skills.search` source filter.
+- Blessed-subject-root set expanded from 7 to 13 to include verb
+  mirrors (`triage`, `diagnose`, `implement`, `refactor`,
+  `explain`, `compose`) so the eight cognitive-verb mirrors of a
+  subject are all valid roots.
+- `mcp-flowgate check` prints soft diagnostics under their own
+  banner when the resolved config carries warnings.
+- Workspace structurally rebalanced: `mcp-flowgate-mcp-server/src/lib.rs`
+  split into `lib.rs` (250 LOC) + `handlers.rs` + `tools.rs` +
+  `args.rs` (multi-file `impl FlowgateServer` pattern matching the
+  existing `runtime_*.rs` split). Three god integration test
+  files (`deterministic_chain.rs`, `invariants.rs`,
+  `transition_records.rs`, ~2.6k LOC total) split into 8 sibling
+  files using the `tests/common/` shared-harness pattern.
+- Workspace-wide unused-imports and dead-code sweep.
+
+### Fixed
+
+- Guard expressions can now reference `$.workflow.{id,state,version}`
+  per SPEC §5.2.
+- Guards fail fast on unset slots instead of silently evaluating to
+  false (SPEC §9).
+- Transition records carry executor descriptor `{ kind, ok,
+  durationMs }` per SPEC §7.2.
+
+### Deprecated
+
+- The `fg` shell alias was considered for `mcp-flowgate-tui` and
+  rejected — it collides with the bash `fg` (foreground) builtin.
+  Use `flowgate` (primary) or `flowgate-tui` (long-form) instead.
+
+### Added (continued — deterministic execution + discovery + hot-reload)
 
 - **Deterministic chaining.** Transitions tagged `actor: "deterministic"`
   auto-execute without LLM involvement. When a state has only

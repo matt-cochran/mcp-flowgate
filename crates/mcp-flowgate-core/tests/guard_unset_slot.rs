@@ -64,6 +64,8 @@ async fn guard_reading_unset_slot_returns_guard_unset_slot_rejection() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -78,6 +80,8 @@ async fn guard_reading_unset_slot_returns_guard_unset_slot_rejection() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -141,6 +145,8 @@ async fn explicitly_null_slot_is_not_unset() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -155,6 +161,8 @@ async fn explicitly_null_slot_is_not_unset() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -206,6 +214,8 @@ async fn any_of_with_unset_sibling_passes_if_another_clause_satisfies() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -220,6 +230,8 @@ async fn any_of_with_unset_sibling_passes_if_another_clause_satisfies() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -266,6 +278,8 @@ async fn guard_can_read_workflow_state_id_and_version() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -280,6 +294,8 @@ async fn guard_can_read_workflow_state_id_and_version() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -331,6 +347,8 @@ async fn any_of_with_only_unset_clauses_surfaces_unset_error() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -345,6 +363,8 @@ async fn any_of_with_only_unset_clauses_surfaces_unset_error() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();

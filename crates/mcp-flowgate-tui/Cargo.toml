@@ -1,0 +1,48 @@
+[package]
+name = "mcp-flowgate-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Flowgate governed agent runtime — Aether agent framework routed through mcp-flowgate as its sole MCP server"
+
+[dependencies]
+# Aether agent framework — full feature set
+aether_cli = { version = "0.7", package = "aether-agent-cli" }
+wisp = { version = "0.4", package = "aether-wisp" }
+tui = { version = "0.2", package = "aether-tui", features = ["syntax"] }
+aether_core = { version = "0.6", package = "aether-agent-core" }
+
+# Note: no Cargo-level dependency on `mcp-flowgate`. The TUI spawns the
+# mcp-flowgate binary as a child process at runtime; binary discovery is
+# handled by `find_flowgate_binary` in src/flowgate_mcp.rs (sibling of
+# current_exe, then PATH, then MCP_FLOWGATE_PATH env override).
+# Adding a path-dep would be silently ignored anyway because mcp-flowgate
+# is a binary-only crate (no `[lib]` target).
+
+# Shared
+clap.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+crossterm = { version = "0.29", features = ["event-stream"] }
+# SPEC §20.6 (audit recommendation) — platform-standard cache/log dir
+# resolution for the TUI's log output. See B.4 in the audit-resolution
+# plan; replaces the previously hardcoded /tmp path.
+dirs = "5"
+
+# SPEC §B.1 — two `[[bin]]` entries pointing at the same source. `flowgate`
+# is the primary alias users type; `flowgate-tui` is the discoverable
+# long-form. The `fg` alias was deliberately NOT shipped — it collides
+# with the bash builtin for resuming backgrounded jobs.
+[[bin]]
+name = "flowgate"
+path = "src/main.rs"
+
+[[bin]]
+name = "flowgate-tui"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = "3"

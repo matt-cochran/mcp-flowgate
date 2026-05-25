@@ -37,6 +37,136 @@ impl DiscoveryKind {
     }
 }
 
+/// SPEC §5.4.1 — the eight closed cognitive-operation verbs that may tag a
+/// guidance fragment. This is a closed enum on purpose: no `Other(String)`
+/// escape variant, no `#[serde(other)]`. Authoring a new verb requires a
+/// deliberate spec amendment, not a config-time string. Unknown verbs fail
+/// config-load with `INVALID_VERB` (see [`Verb::from_token`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verb {
+    /// Classify, prioritize, route.
+    Triage,
+    /// Find root cause.
+    Diagnose,
+    /// Design approach before acting.
+    Plan,
+    /// Produce / generate the artifact.
+    Implement,
+    /// Evaluate against criteria.
+    Review,
+    /// Restructure preserving behavior.
+    Refactor,
+    /// Build understanding (self-explain or teach others).
+    Explain,
+    /// Assemble parts into a whole.
+    Compose,
+}
+
+impl Verb {
+    /// The closed set of allowed verb tokens, in spec order. Returned as
+    /// `&'static [&'static str]` so error messages can list them verbatim
+    /// without per-call allocation.
+    pub const ALL_TOKENS: &'static [&'static str] = &[
+        "triage", "diagnose", "plan", "implement", "review", "refactor", "explain", "compose",
+    ];
+
+    pub fn as_token(self) -> &'static str {
+        match self {
+            Verb::Triage => "triage",
+            Verb::Diagnose => "diagnose",
+            Verb::Plan => "plan",
+            Verb::Implement => "implement",
+            Verb::Review => "review",
+            Verb::Refactor => "refactor",
+            Verb::Explain => "explain",
+            Verb::Compose => "compose",
+        }
+    }
+
+    /// Parse a verb token, case-sensitively. Returns `None` for any string not
+    /// in the closed set. Whitespace, uppercase, hyphen, dot, or any other
+    /// deviation rejects.
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "triage" => Some(Verb::Triage),
+            "diagnose" => Some(Verb::Diagnose),
+            "plan" => Some(Verb::Plan),
+            "implement" => Some(Verb::Implement),
+            "review" => Some(Verb::Review),
+            "refactor" => Some(Verb::Refactor),
+            "explain" => Some(Verb::Explain),
+            "compose" => Some(Verb::Compose),
+            _ => None,
+        }
+    }
+}
+
+/// SPEC §5.3 — required lifecycle marker on every guidance fragment. Closed
+/// enum; no silent default. A fragment without `lifecycle` fails config-load
+/// with `MISSING_LIFECYCLE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lifecycle {
+    Experimental,
+    Stable,
+    Deprecated,
+}
+
+impl Lifecycle {
+    pub const ALL_TOKENS: &'static [&'static str] = &["experimental", "stable", "deprecated"];
+
+    pub fn as_token(self) -> &'static str {
+        match self {
+            Lifecycle::Experimental => "experimental",
+            Lifecycle::Stable => "stable",
+            Lifecycle::Deprecated => "deprecated",
+        }
+    }
+
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "experimental" => Some(Lifecycle::Experimental),
+            "stable" => Some(Lifecycle::Stable),
+            "deprecated" => Some(Lifecycle::Deprecated),
+            _ => None,
+        }
+    }
+}
+
+/// SPEC §5.4.2 — the blessed top-level segments for guidance fragment
+/// subjects. A subject's first dotted segment MUST be one of these, or the
+/// config produces an `INVALID_SUBJECT_ROOT` diagnostic (error under
+/// `strict_namespacing: true`, warning otherwise).
+///
+/// The list combines:
+/// - Six domain-themed roots (`authoring`, `debug`, `deploy`, `import`,
+///   `lifecycle`, `review`) that group guidance by topic regardless of
+///   which verb is appropriate.
+/// - Eight verb-mirror roots — one per closed verb in [`Verb::ALL_TOKENS`] —
+///   so authors can group guidance by the cognitive operation it primes
+///   (e.g. `implement.edit.constrained`, `diagnose.codebase.search`).
+///
+/// Two roots (`plan` and `review`) appear in BOTH categories; they are
+/// listed once. Total: 12 blessed roots.
+pub const BLESSED_SUBJECT_ROOTS: &[&str] = &[
+    // Domain-themed (groups guidance by topic).
+    "authoring",
+    "debug",
+    "deploy",
+    "import",
+    "lifecycle",
+    // Verb-mirror (groups guidance by cognitive operation).
+    "triage",
+    "diagnose",
+    "plan",       // also a verb
+    "implement",
+    "review",     // also a verb
+    "refactor",
+    "explain",
+    "compose",
+];
+
 /// A single thing that can be discovered: a workflow, a proxy capability, or
 /// a configured connection. Everything carries enough metadata to score it
 /// against a query and to render a HATEOAS link template that lets the caller
@@ -72,6 +202,12 @@ pub struct DiscoveryItem {
     /// by `gateway.describe`. `None` for non-guidance items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// SPEC §5.3 — fragment provenance. Examples: `config` (declared inline
+    /// in workflow YAML), `git+https://github.com/org/repo@sha`. Used by the
+    /// `gateway.skills.search` `source` filter (§17.6). `None` for
+    /// non-guidance items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// A pre-built HATEOAS link attached to a `DiscoveryItem`. These are

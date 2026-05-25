@@ -70,6 +70,15 @@ fn guidance_item(subject: &str, entry: &Value) -> DiscoveryItem {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // SPEC §5.3 — surface the fragment's provenance string. Default is
+    // `config` (declared inline). Git-ingested fragments override this
+    // when the config loader stamps a `source: "git+https://…"` value
+    // onto the entry.
+    let source = entry
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("config")
+        .to_string();
     DiscoveryItem {
         id: subject.to_string(),
         kind: DiscoveryKind::Guidance,
@@ -82,6 +91,7 @@ fn guidance_item(subject: &str, entry: &Value) -> DiscoveryItem {
         links: vec![],
         verb: Some(verb),
         body: Some(body),
+        source: Some(source),
     }
 }
 
@@ -152,6 +162,7 @@ fn workflow_item(id: &str, def: &Value) -> DiscoveryItem {
         }],
         verb: None,
         body: None,
+        source: None,
     }
 }
 
@@ -200,6 +211,7 @@ fn capability_item(exposure: &Value) -> Option<DiscoveryItem> {
         }],
         verb: None,
         body: None,
+        source: None,
     })
 }
 
@@ -221,6 +233,7 @@ fn connection_item(name: &str, conn: &Value) -> DiscoveryItem {
         links: vec![],
         verb: None,
         body: None,
+        source: None,
     }
 }
 

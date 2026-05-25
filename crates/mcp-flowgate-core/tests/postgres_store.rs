@@ -41,6 +41,8 @@ fn make_instance(id: &str, version: u64, state: &str) -> WorkflowInstance {
         input: json!({"key": "value"}),
         context: json!({"count": 0}),
         started_at: chrono::Utc::now(),
+        trace_id: None,
+        run_id: None,
     }
 }
 

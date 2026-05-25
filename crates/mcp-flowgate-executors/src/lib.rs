@@ -1,21 +1,29 @@
 //! Default executors for mcp-flowgate.
 
 pub mod cli;
+pub mod dry_run;
 pub mod human;
 pub mod import;
+pub mod ingest;
 pub mod mcp;
 pub mod noop;
 pub mod registry;
+pub mod registry_executor;
 pub mod rest;
+pub mod structural_analysis;
 pub mod workflow;
 
 pub use cli::{CliConnection, CliConnections, CliExecutor};
+pub use dry_run::DryRunExecutor;
 pub use human::HumanExecutor;
 pub use import::import_capabilities;
+pub use ingest::IngestExecutor;
 pub use mcp::{McpConnection, McpConnections, McpExecutor};
 pub use noop::NoopExecutor;
 pub use registry::HashMapExecutorRegistry;
+pub use registry_executor::RegistryExecutor;
 pub use rest::{RestConnection, RestConnections, RestExecutor};
+pub use structural_analysis::{StructuralAnalysisExecutor, REQUIRED_RULES};
 pub use workflow::WorkflowExecutor;
 
 use std::sync::Arc;

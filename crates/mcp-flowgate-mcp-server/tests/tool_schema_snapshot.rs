@@ -84,7 +84,10 @@ fn start_schema_snapshot() {
             "type": "object",
             "properties": {
                 "definitionId": { "type": "string" },
-                "input": { "type": "object" }
+                "input": { "type": "object" },
+                // SPEC §20.2 — optional hierarchical-identity fields.
+                "traceId": { "type": "string" },
+                "runId":   { "type": "string" }
             },
             "required": ["definitionId", "input"],
             "additionalProperties": false
@@ -98,7 +101,11 @@ fn get_schema_snapshot() {
         schema_of(TOOL_GET),
         json!({
             "type": "object",
-            "properties": { "workflowId": { "type": "string" } },
+            "properties": {
+                "workflowId": { "type": "string" },
+                "traceId":    { "type": "string" },
+                "runId":      { "type": "string" }
+            },
             "required": ["workflowId"],
             "additionalProperties": false
         })
@@ -116,7 +123,9 @@ fn submit_schema_snapshot() {
                 "expectedVersion": { "type": "integer" },
                 "transition": { "type": "string" },
                 "arguments": { "type": "object" },
-                "summary": { "type": "string" }
+                "summary": { "type": "string" },
+                "traceId": { "type": "string" },
+                "runId":   { "type": "string" }
             },
             "required": ["workflowId", "expectedVersion", "transition", "arguments"],
             "additionalProperties": false

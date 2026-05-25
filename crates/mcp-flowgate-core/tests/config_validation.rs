@@ -259,17 +259,20 @@ workflows:
 #[test]
 fn verb_with_space_rejected_at_load() {
     // A `verb` containing whitespace must fail config load — not lint-time.
+    // The base token is a valid cognitive verb (`review`) so the failure is
+    // unambiguously about the whitespace, not the verb value.
     let yaml = r##"
 version: "1.0.0"
 skills:
-  house-voice:
-    verb: "apply now"
+  review.style.house-voice:
+    verb: "review now"
+    lifecycle: stable
     body: "House voice body"
 "##;
     let err = config::resolve_str(yaml).expect_err("verb with space must be rejected at load");
     let msg = format!("{err}");
     assert!(
-        msg.contains("apply now") && msg.contains("verb"),
+        msg.contains("review now") && msg.contains("verb"),
         "error should name the offending verb; got: {msg}"
     );
 }
@@ -280,7 +283,8 @@ fn skills_key_with_uppercase_rejected_at_load() {
 version: "1.0.0"
 skills:
   HouseVoice:
-    verb: apply
+    verb: review
+    lifecycle: stable
     body: "House voice body"
 "##;
     let err = config::resolve_str(yaml).expect_err("uppercase skills key must be rejected at load");
@@ -616,12 +620,12 @@ fn dangling_skills_ref_errors() {
     // A `skills:` reference to a subject not in the top-level library → error.
     let config = json!({
         "skills": {
-            "house-voice": { "verb": "apply", "body": "..." }
+            "review.style.house-voice": { "verb": "review", "lifecycle": "stable", "body": "..." }
         },
         "workflows": {
             "demo": {
                 "initialState": "start",
-                "skills": ["does-not-exist"],
+                "skills": ["review.style.does-not-exist"],
                 "states": {
                     "start": { "terminal": true }
                 }
@@ -631,7 +635,7 @@ fn dangling_skills_ref_errors() {
     let diags = validate_workflows(&config);
     let errors: Vec<_> = diags
         .iter()
-        .filter(|d| d.is_error() && d.message().contains("does-not-exist"))
+        .filter(|d| d.is_error() && d.message().contains("review.style.does-not-exist"))
         .collect();
     assert!(
         !errors.is_empty(),
@@ -645,16 +649,16 @@ fn many_skills_refs_at_one_scope_warns() {
     // payload). SPEC §11.
     let config = json!({
         "skills": {
-            "a": { "verb": "apply", "body": "..." },
-            "b": { "verb": "apply", "body": "..." },
-            "c": { "verb": "apply", "body": "..." },
-            "d": { "verb": "apply", "body": "..." },
-            "e": { "verb": "apply", "body": "..." }
+            "review.style.a": { "verb": "review", "lifecycle": "stable", "body": "..." },
+            "review.style.b": { "verb": "review", "lifecycle": "stable", "body": "..." },
+            "review.style.c": { "verb": "review", "lifecycle": "stable", "body": "..." },
+            "review.style.d": { "verb": "review", "lifecycle": "stable", "body": "..." },
+            "review.style.e": { "verb": "review", "lifecycle": "stable", "body": "..." }
         },
         "workflows": {
             "demo": {
                 "initialState": "start",
-                "skills": ["a", "b", "c", "d", "e"],
+                "skills": ["review.style.a", "review.style.b", "review.style.c", "review.style.d", "review.style.e"],
                 "states": {
                     "start": { "terminal": true }
                 }
@@ -677,17 +681,19 @@ fn well_formed_skills_load_clean() {
     let yaml = r##"
 version: "1.0.0"
 skills:
-  house-voice:
-    verb: apply
+  review.style.house-voice:
+    verb: review
+    lifecycle: stable
     body: "House voice body"
-  deploy-safety:
-    verb: check
+  deploy.safety.checklist:
+    verb: review
+    lifecycle: stable
     body: "Deploy safety body"
 "##;
     let resolved = config::resolve_str(yaml).expect("well-formed skills should load");
     let verb = resolved
-        .pointer("/skills/house-voice/verb")
+        .pointer("/skills/review.style.house-voice/verb")
         .and_then(Value::as_str)
         .expect("verb should round-trip through resolve");
-    assert_eq!(verb, "apply");
+    assert_eq!(verb, "review");
 }

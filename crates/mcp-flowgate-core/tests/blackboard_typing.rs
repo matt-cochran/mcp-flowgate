@@ -109,6 +109,8 @@ async fn typed_slot_mismatch_aborts_with_blackboard_type_error() {
             definition_id: "ci".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -123,6 +125,8 @@ async fn typed_slot_mismatch_aborts_with_blackboard_type_error() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -186,6 +190,8 @@ async fn typed_slot_conforming_value_advances_transition() {
             definition_id: "ci".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -200,6 +206,8 @@ async fn typed_slot_conforming_value_advances_transition() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -250,6 +258,8 @@ async fn bare_name_slot_accepts_any_value() {
             definition_id: "ci".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -261,6 +271,8 @@ async fn bare_name_slot_accepts_any_value() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();

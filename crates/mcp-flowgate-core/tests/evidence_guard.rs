@@ -29,6 +29,8 @@ impl Executor for EmitsEvidence {
                 id: format!("ev_{}", self.0),
                 uri: None,
                 summary: None,
+                digest: None,
+                confidence: None,
             }],
             child_workflow_id: None,
         })
@@ -123,6 +125,8 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -143,6 +147,8 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -156,6 +162,8 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -182,6 +190,8 @@ async fn evidence_guard_rejects_without_required_kind() {
                     id: "ev_lint".into(),
                     uri: None,
                     summary: None,
+                    digest: None,
+                    confidence: None,
                 }],
                 child_workflow_id: None,
             })
@@ -223,6 +233,8 @@ async fn evidence_guard_rejects_without_required_kind() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -237,6 +249,8 @@ async fn evidence_guard_rejects_without_required_kind() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -250,6 +264,8 @@ async fn evidence_guard_rejects_without_required_kind() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();

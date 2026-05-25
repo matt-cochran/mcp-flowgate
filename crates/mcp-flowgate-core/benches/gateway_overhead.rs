@@ -33,6 +33,8 @@ fn bench_in_memory_store(c: &mut Criterion) {
                     input: json!({"key": "value"}),
                     context: json!({"count": 0}),
                     started_at: chrono::Utc::now(),
+                    trace_id: None,
+                    run_id: None,
                 };
                 (store, instance)
             },
@@ -60,6 +62,8 @@ fn bench_sqlite_store(c: &mut Criterion) {
                 input: json!({"key": "value"}),
                 context: json!({"count": 0}),
                 started_at: chrono::Utc::now(),
+                trace_id: None,
+                run_id: None,
             },
             |instance| {
                 rt.block_on(store.create(instance)).unwrap();

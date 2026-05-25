@@ -166,6 +166,8 @@ async fn instance_carries_definition_snapshot() {
             definition_id: "wf".to_string(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("workflow starts");
@@ -204,6 +206,8 @@ async fn config_edit_does_not_disturb_inflight_instance() {
             definition_id: "wf".to_string(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("workflow starts");
@@ -220,6 +224,8 @@ async fn config_edit_does_not_disturb_inflight_instance() {
         .get(GetWorkflow {
             workflow_id: id.clone(),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("get resolves against the carried snapshot");
@@ -242,6 +248,8 @@ async fn config_edit_does_not_disturb_inflight_instance() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("submit resolves against the carried snapshot");
@@ -260,6 +268,8 @@ async fn config_edit_does_not_disturb_inflight_instance() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .expect("the carried definition drives the instance to completion");

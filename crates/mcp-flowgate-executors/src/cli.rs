@@ -172,6 +172,8 @@ impl Executor for CliExecutor {
                 id: Uuid::new_v4().to_string(),
                 uri: None,
                 summary: Some(format!("Executed '{}'", command)),
+                digest: None,
+                confidence: None,
             }],
             child_workflow_id: None,
         })

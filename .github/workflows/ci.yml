@@ -35,6 +35,12 @@ jobs:
             - name: cargo test
               run: cargo test --workspace
 
+            - name: cargo doctest
+              # Doctest scaffold: any future docstring example becomes a
+              # compile/run check. Today's count is small but the gate is
+              # in place so spec/code drift in API examples breaks the build.
+              run: cargo test --workspace --doc
+
             - name: Benchmark (check only)
               run: cargo bench --bench gateway_overhead -- --warm-up-time 1 --measurement-time 5 --sample-size 50
 

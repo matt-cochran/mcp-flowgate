@@ -247,7 +247,7 @@ async fn guidance_excluded_from_default_search_but_describable() {
     let cfg = json!({
         "version": "1.0.0",
         "skills": {
-            "house-voice": { "verb": "apply", "body": "Lead with the reader's problem." }
+            "review.style.house-voice": { "verb": "review", "lifecycle": "stable", "body": "Lead with the reader's problem." }
         },
         "workflows": {
             "demo": { "initialState": "s", "states": { "s": { "terminal": true } } }
@@ -276,12 +276,12 @@ async fn guidance_excluded_from_default_search_but_describable() {
         .await
         .unwrap();
     assert!(
-        targeted.iter().any(|h| h.item.id == "house-voice"),
+        targeted.iter().any(|h| h.item.id == "review.style.house-voice"),
         "explicit kind=guidance search must include the fragment"
     );
 
     // Describe must always find it regardless of kind filtering.
-    let described = idx.describe("house-voice").await.unwrap();
+    let described = idx.describe("review.style.house-voice").await.unwrap();
     assert!(described.is_some(), "describe must always resolve a declared subject");
 
     // list(None) must also exclude guidance.

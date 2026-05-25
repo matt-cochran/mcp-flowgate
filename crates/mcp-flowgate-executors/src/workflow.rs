@@ -71,6 +71,11 @@ impl Executor for WorkflowExecutor {
                 definition_id: definition_id.to_string(),
                 input: resolved_input,
                 principal: Principal::anonymous(),
+                // Sub-workflows inherit the parent's trace/run via the
+                // calling context if the parent runtime sets them; this
+                // direct API call defaults to None.
+                trace_id: None,
+                run_id: None,
             })
             .await
             .map_err(|e| ExecutorError::Permanent(format!("failed to start sub-workflow: {e}")))?;
@@ -120,6 +125,8 @@ impl Executor for WorkflowExecutor {
                 .get(GetWorkflow {
                     workflow_id: sub_workflow_id.to_string(),
                     principal: Principal::anonymous(),
+                    trace_id: None,
+                    run_id: None,
                 })
                 .await
                 .map_err(|e| {

@@ -99,6 +99,7 @@ async fn start_workflow(runtime: &WorkflowRuntime) -> (String, u64) {
             definition_id: "bench".into(),
             input: json!({"key": "value"}),
             principal: Principal::anonymous(),
+            ..Default::default()
         })
         .await
         .expect("start should succeed");
@@ -125,6 +126,7 @@ fn bench_start(c: &mut Criterion) {
                     definition_id: "bench".into(),
                     input: json!({"key": "value"}),
                     principal: Principal::anonymous(),
+                    ..Default::default()
                 })
                 .await
                 .expect("start should succeed");
@@ -153,6 +155,7 @@ fn bench_submit(c: &mut Criterion) {
                     arguments: json!({"reason": "benchmark"}),
                     principal: Principal::anonymous(),
                     summary: None,
+                    ..Default::default()
                 })
                 .await
                 .expect("submit should succeed");
@@ -174,6 +177,7 @@ fn bench_get(c: &mut Criterion) {
                 .get(mcp_flowgate_core::model::GetWorkflow {
                     workflow_id: id.clone(),
                     principal: Principal::anonymous(),
+                    ..Default::default()
                 })
                 .await
                 .expect("get should succeed");

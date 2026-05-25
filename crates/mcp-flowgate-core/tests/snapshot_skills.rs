@@ -41,15 +41,16 @@ async fn instance_describe_returns_snapshot_body_not_live_config() {
     let original = json!({
         "version": "1.0.0",
         "skills": {
-            "house-voice": {
-                "verb": "apply",
+            "review.style.house-voice": {
+                "verb": "review",
+                "lifecycle": "stable",
                 "body": "ORIGINAL: lead with the reader's problem."
             }
         },
         "workflows": {
             "wf": {
                 "initialState": "draft",
-                "skills": ["house-voice"],
+                "skills": ["review.style.house-voice"],
                 "states": { "draft": { "terminal": true } }
             }
         }
@@ -63,6 +64,8 @@ async fn instance_describe_returns_snapshot_body_not_live_config() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -70,13 +73,13 @@ async fn instance_describe_returns_snapshot_body_not_live_config() {
 
     // Sanity: snapshot describe sees the ORIGINAL body.
     let described = runtime
-        .describe_guidance_for_workflow(&workflow_id, "house-voice")
+        .describe_guidance_for_workflow(&workflow_id, "review.style.house-voice")
         .await
         .unwrap()
         .expect("subject must resolve from snapshot");
     assert_eq!(described["kind"].as_str(), Some("guidance"));
-    assert_eq!(described["subject"].as_str(), Some("house-voice"));
-    assert_eq!(described["verb"].as_str(), Some("apply"));
+    assert_eq!(described["subject"].as_str(), Some("review.style.house-voice"));
+    assert_eq!(described["verb"].as_str(), Some("review"));
     assert!(
         described["body"]
             .as_str()
@@ -90,11 +93,11 @@ async fn instance_describe_returns_snapshot_body_not_live_config() {
 async fn unknown_workflow_returns_none() {
     let cfg = json!({
         "version": "1.0.0",
-        "skills": { "x": { "verb": "apply", "body": "..." } },
+        "skills": { "review.style.x": { "verb": "review", "lifecycle": "stable", "body": "..." } },
         "workflows": {
             "wf": {
                 "initialState": "s",
-                "skills": ["x"],
+                "skills": ["review.style.x"],
                 "states": { "s": { "terminal": true } }
             }
         }
@@ -112,11 +115,11 @@ async fn unknown_workflow_returns_none() {
 async fn unknown_subject_returns_none() {
     let cfg = json!({
         "version": "1.0.0",
-        "skills": { "x": { "verb": "apply", "body": "..." } },
+        "skills": { "review.style.x": { "verb": "review", "lifecycle": "stable", "body": "..." } },
         "workflows": {
             "wf": {
                 "initialState": "s",
-                "skills": ["x"],
+                "skills": ["review.style.x"],
                 "states": { "s": { "terminal": true } }
             }
         }
@@ -129,6 +132,8 @@ async fn unknown_subject_returns_none() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();

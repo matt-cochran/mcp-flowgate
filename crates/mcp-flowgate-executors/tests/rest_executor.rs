@@ -40,6 +40,8 @@ fn make_request(
             input: json!({}),
             context: json!({}),
             started_at: chrono::Utc::now(),
+                    trace_id: None,
+            run_id: None,
         },
         transition: None,
         arguments,

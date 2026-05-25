@@ -87,6 +87,8 @@ async fn submit_with_summary_stores_and_surfaces() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -101,6 +103,8 @@ async fn submit_with_summary_stores_and_surfaces() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: Some("Drafted with house voice; awaiting editor review.".into()),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -128,6 +132,8 @@ async fn get_after_summary_submit_returns_summary() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -142,6 +148,8 @@ async fn get_after_summary_submit_returns_summary() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: Some("Cold-resumeable note.".into()),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -150,6 +158,8 @@ async fn get_after_summary_submit_returns_summary() {
         .get(GetWorkflow {
             workflow_id,
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -173,6 +183,8 @@ async fn summary_persists_when_omitted_on_subsequent_submit() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -188,6 +200,8 @@ async fn summary_persists_when_omitted_on_subsequent_submit() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: Some("first".into()),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -202,6 +216,8 @@ async fn summary_persists_when_omitted_on_subsequent_submit() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -224,6 +240,8 @@ async fn later_summary_overwrites_earlier() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -238,6 +256,8 @@ async fn later_summary_overwrites_earlier() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: Some("first".into()),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -251,6 +271,8 @@ async fn later_summary_overwrites_earlier() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: Some("second".into()),
+                    trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
