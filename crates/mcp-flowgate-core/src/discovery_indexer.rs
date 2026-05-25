@@ -56,7 +56,64 @@ pub fn index_from_config(config: &Value) -> Vec<DiscoveryItem> {
         }
     }
 
+    // SPEC §22 — scripts are always indexed when present, same opt-in
+    // reasoning as skills. The DiscoveryKind::Script variant keeps them
+    // distinct from guidance in search results (and lets gateway.describe
+    // route correctly based on kind).
+    if let Some(scripts) = config.pointer("/scripts").and_then(Value::as_object) {
+        for (subject, entry) in scripts {
+            items.push(script_item(subject, entry));
+        }
+    }
+
     items
+}
+
+/// SPEC §22 — convert a `scripts:` entry into a DiscoveryItem. Mirror of
+/// [`guidance_item`] with two differences: kind is `Script` and the body
+/// may come from either inline `body:` or external `uri:` (already
+/// materialized into a `body` field by [`stamp_scripts_library`] at load
+/// time — so by the time the indexer runs, every script has an inline
+/// body in the snapshot).
+///
+/// Note: this indexer reads from the TOP-LEVEL `scripts:` block (which
+/// still carries the original inline vs uri shape, NOT from the stamped
+/// `_scriptsLibrary` on workflow snapshots). For uri-sourced scripts, the
+/// inline body isn't present in the top-level entry — only in the
+/// stamped library. We surface the `verb` + `source` regardless; `body`
+/// is only populated when inline, and `gateway.describe(subject,
+/// workflowId)` is the path to get a uri-sourced body (it reads from the
+/// instance's stamped library, mirroring how guidance bodies are
+/// resolved).
+fn script_item(subject: &str, entry: &Value) -> DiscoveryItem {
+    let verb = entry
+        .get("verb")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let body = entry
+        .get("body")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let source = entry
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("config")
+        .to_string();
+    DiscoveryItem {
+        id: subject.to_string(),
+        kind: DiscoveryKind::Script,
+        title: subject.to_string(),
+        description: format!("Curated script '{subject}' (verb: {verb})."),
+        tags: vec![],
+        examples: vec![],
+        aliases: vec![],
+        text: format!("{subject} {verb}"),
+        links: vec![],
+        verb: Some(verb),
+        body,
+        source: Some(source),
+    }
 }
 
 fn guidance_item(subject: &str, entry: &Value) -> DiscoveryItem {

@@ -156,6 +156,17 @@ impl WorkflowRuntime {
                     json!(render_template(g, instance)),
                 );
             }
+            // SPEC §21 — `delegate` is a pass-through pointer to an agent
+            // config name. The gateway never branches on it; the TUI
+            // interpreter consumes it to spawn an isolated sub-agent.
+            // Empty/non-string entries are rejected at config load by
+            // `INVALID_DELEGATE`, so any value reaching this code is a
+            // non-empty string.
+            if let Some(d) = state_def.get("delegate").and_then(Value::as_str) {
+                if !d.is_empty() {
+                    body["delegate"] = Value::String(d.to_string());
+                }
+            }
         }
 
         // Skills refs: surface workflow-scope + active-state-scope refs

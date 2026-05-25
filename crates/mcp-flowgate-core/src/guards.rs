@@ -25,6 +25,7 @@ pub struct UnsetSlotError {
 pub struct DefaultGuardEvaluator {
     evidence: Option<Arc<dyn EvidenceStore>>,
     ack_store: Option<Arc<dyn crate::ports::GuidanceAcknowledgmentStore>>,
+    script_ack_store: Option<Arc<dyn crate::ports::ScriptAcknowledgmentStore>>,
 }
 
 impl Default for DefaultGuardEvaluator {
@@ -38,6 +39,7 @@ impl DefaultGuardEvaluator {
         Self {
             evidence: None,
             ack_store: None,
+            script_ack_store: None,
         }
     }
 
@@ -45,6 +47,7 @@ impl DefaultGuardEvaluator {
         Self {
             evidence: Some(evidence),
             ack_store: None,
+            script_ack_store: None,
         }
     }
 
@@ -53,6 +56,17 @@ impl DefaultGuardEvaluator {
         ack_store: Arc<dyn crate::ports::GuidanceAcknowledgmentStore>,
     ) -> Self {
         self.ack_store = Some(ack_store);
+        self
+    }
+
+    /// SPEC §22 — wire a script-acknowledgment store. Required for
+    /// workflows that use the `script_acknowledged` guard (e.g.
+    /// review-before-execute gates on destructive scripts).
+    pub fn with_script_ack_store(
+        mut self,
+        store: Arc<dyn crate::ports::ScriptAcknowledgmentStore>,
+    ) -> Self {
+        self.script_ack_store = Some(store);
         self
     }
 }
@@ -184,6 +198,45 @@ impl GuardEvaluator for DefaultGuardEvaluator {
                     return Ok(false);
                 };
                 let recorded = store.last_acknowledged_hash(&instance.id, subject).await?;
+                Ok(recorded.as_deref() == Some(expected_hash))
+            }
+
+            "script_acknowledged" => {
+                // SPEC §22 — same shape as `guidance_acknowledged` but
+                // operates on the SCRIPT library snapshot. Use case:
+                // require operator/critic to have called gateway.describe
+                // on a destructive script (e.g. `deploy.production.rollout`)
+                // before the workflow may invoke it. Hash flip invalidates
+                // the ack — editing the script body forces re-review.
+                let subject = guard
+                    .get("subject")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("script_acknowledged guard needs `subject`")
+                    })?;
+
+                let expected_hash = instance
+                    .definition
+                    .pointer("/_scriptsLibrary")
+                    .and_then(Value::as_object)
+                    .and_then(|lib| lib.get(subject))
+                    .and_then(|entry| entry.get("hash"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "SCRIPT_SUBJECT_UNKNOWN: subject '{subject}' not present \
+                             in this workflow's _scriptsLibrary snapshot"
+                        )
+                    })?;
+
+                let Some(store) = self.script_ack_store.as_ref() else {
+                    // No script ack store wired? Guard cannot pass.
+                    // Workflows that use this guard MUST wire one.
+                    return Ok(false);
+                };
+                let recorded = store
+                    .last_acknowledged_hash(&instance.id, subject)
+                    .await?;
                 Ok(recorded.as_deref() == Some(expected_hash))
             }
 

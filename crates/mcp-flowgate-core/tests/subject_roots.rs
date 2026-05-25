@@ -71,6 +71,20 @@ fn blessed_root_plan_execute_subpath_accepted() {
         .expect("plan.execute.* must accept");
 }
 
+// ── SPEC §5.4.1 v0.3 expansion: research + summarize roots ─────────────────
+
+#[test]
+fn blessed_root_research_accepted() {
+    config::resolve_str(&skills_yaml("research.context.assemble", None))
+        .expect("research.* must accept");
+}
+
+#[test]
+fn blessed_root_summarize_accepted() {
+    config::resolve_str(&skills_yaml("summarize.session.delta", None))
+        .expect("summarize.* must accept");
+}
+
 // ── Negative under strict (default): unblessed root rejected ─────────────────
 
 #[test]

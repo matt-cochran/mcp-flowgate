@@ -45,7 +45,7 @@ use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
 use serde_json::{json, Value};
 
-pub use tools::{skills_search_tool_definition, tool_definitions};
+pub use tools::{scripts_search_tool_definition, skills_search_tool_definition, tool_definitions};
 
 pub const TOOL_HOME: &str = "gateway.home";
 pub const TOOL_SEARCH: &str = "gateway.search";
@@ -58,6 +58,11 @@ pub const TOOL_EXPLAIN: &str = "workflow.explain";
 /// `FlowgateServer::with_skills_search(true)` is set; default off so runtime
 /// workflows use the push-not-pull guidance surface (§5.4).
 pub const TOOL_SKILLS_SEARCH: &str = "gateway.skills.search";
+/// SPEC §22 — authoring-time scripts discovery. Mirror of
+/// `gateway.skills.search` for the scripts library. Advertised only when
+/// `FlowgateServer::with_scripts_search(true)` is set; default off (same
+/// reasoning as skills).
+pub const TOOL_SCRIPTS_SEARCH: &str = "gateway.scripts.search";
 
 /// The complete set of MCP tool names this server exposes by default
 /// (without authoring-time flags). Stable across configs by design — see
@@ -86,6 +91,16 @@ pub struct FlowgateServer {
     /// SPEC §17.6 — when true, the `gateway.skills.search` tool is
     /// advertised in `list_tools`. Default false; authoring-time only.
     skills_search_enabled: bool,
+    /// SPEC §22 — when true, `gateway.scripts.search` is advertised in
+    /// `list_tools`. Default false; authoring-time only. Same rationale
+    /// as skills_search_enabled.
+    scripts_search_enabled: bool,
+    /// SPEC §22 — optional store that records `gateway.describe` calls
+    /// for SCRIPT subjects per workflow, consumed by the
+    /// `script_acknowledged` guard. When `None`, describes still emit
+    /// audit records but the guard cannot be satisfied (returns false).
+    pub(crate) script_ack_store:
+        Option<Arc<dyn mcp_flowgate_core::ports::ScriptAcknowledgmentStore>>,
 }
 
 impl FlowgateServer {
@@ -99,6 +114,8 @@ impl FlowgateServer {
             server_version: env!("CARGO_PKG_VERSION").to_string(),
             ack_store: None,
             skills_search_enabled: false,
+            scripts_search_enabled: false,
+            script_ack_store: None,
         }
     }
 
@@ -129,6 +146,23 @@ impl FlowgateServer {
     /// pull-discovery anti-pattern.
     pub fn with_skills_search(mut self, enabled: bool) -> Self {
         self.skills_search_enabled = enabled;
+        self
+    }
+
+    /// SPEC §22 — enable the `gateway.scripts.search` tool. Default off,
+    /// same authoring-time-only rationale as `with_skills_search`.
+    pub fn with_scripts_search(mut self, enabled: bool) -> Self {
+        self.scripts_search_enabled = enabled;
+        self
+    }
+
+    /// SPEC §22 — wire a script-acknowledgment store. Required for
+    /// workflows that use the `script_acknowledged` guard.
+    pub fn with_script_ack_store(
+        mut self,
+        store: Arc<dyn mcp_flowgate_core::ports::ScriptAcknowledgmentStore>,
+    ) -> Self {
+        self.script_ack_store = Some(store);
         self
     }
 
@@ -169,6 +203,17 @@ impl FlowgateServer {
                     ));
                 }
                 self.handle_skills_search(args).await
+            }
+            TOOL_SCRIPTS_SEARCH => {
+                if !self.scripts_search_enabled {
+                    return Err(McpError::invalid_params(
+                        "gateway.scripts.search is disabled. Enable with \
+                         FlowgateServer::with_scripts_search(true) — authoring-time only."
+                            .to_string(),
+                        None,
+                    ));
+                }
+                self.handle_scripts_search(args).await
             }
             other => {
                 return Err(McpError::invalid_params(
@@ -225,6 +270,9 @@ impl ServerHandler for FlowgateServer {
         let mut tools = tool_definitions();
         if self.skills_search_enabled {
             tools.push(skills_search_tool_definition());
+        }
+        if self.scripts_search_enabled {
+            tools.push(scripts_search_tool_definition());
         }
         Ok(ListToolsResult::with_all_items(tools))
     }

@@ -72,6 +72,48 @@ impl FlowgateServer {
         // `{ id, item, links }` wrapper since they need the HATEOAS links
         // to drive the next call.
         if let Some(workflow_id) = parsed.workflow_id.as_deref() {
+            // SPEC §22 — try scripts library first. If the subject lives
+            // there, record the script-ack and return early. This is
+            // checked BEFORE guidance because the two namespaces are
+            // disjoint by design (skills use cognitive verbs, scripts use
+            // action verbs); a subject in scripts can't also be in
+            // skills, so the order is a clean fast path, not a precedence
+            // decision.
+            if let Some(mut body) = self
+                .runtime
+                .describe_script_for_workflow(workflow_id, &id)
+                .await?
+            {
+                if let Some(ack) = self.script_ack_store.as_ref() {
+                    if let Some(h) = body.get("hash").and_then(Value::as_str) {
+                        let _ = ack.record(workflow_id, &id, h).await;
+                    }
+                }
+                self.emit_describe_audit(
+                    &id,
+                    body.get("verb").and_then(Value::as_str),
+                    workflow_id_for_audit.as_deref(),
+                    &principal,
+                    "ok",
+                    None,
+                )
+                .await;
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert(
+                        "links".into(),
+                        json!([
+                            { "rel": "home", "method": "gateway.home", "args": {} },
+                            {
+                                "rel": "get",
+                                "method": "workflow.get",
+                                "args": { "workflowId": workflow_id }
+                            }
+                        ]),
+                    );
+                }
+                return Ok(body);
+            }
+
             if let Some(mut body) = self
                 .runtime
                 .describe_guidance_for_workflow(workflow_id, &id)
@@ -157,6 +199,31 @@ impl FlowgateServer {
                     ]
                 }));
             }
+            // SPEC §22 — non-workflow-context script describe: surface
+            // body from the live indexer. (For workflow-context script
+            // describes, the snapshot path above is used and an ack
+            // recorded.)
+            if matches!(item.kind, DiscoveryKind::Script) {
+                self.emit_describe_audit(
+                    &id,
+                    item.verb.as_deref(),
+                    workflow_id_for_audit.as_deref(),
+                    &principal,
+                    "ok",
+                    None,
+                )
+                .await;
+                return Ok(json!({
+                    "kind": "script",
+                    "subject": item.id,
+                    "verb": item.verb.as_deref().unwrap_or_default(),
+                    "body": item.body.as_deref().unwrap_or_default(),
+                    "links": [
+                        { "rel": "home", "method": "gateway.home", "args": {} },
+                        { "rel": "search", "method": "gateway.search", "args": { "query": "" } }
+                    ]
+                }));
+            }
         }
 
         // Non-guidance describe (workflow/capability/connection) — audit as
@@ -229,6 +296,61 @@ impl FlowgateServer {
                 );
             }
         }
+    }
+
+    /// SPEC §22 — gateway.scripts.search. Mirror of [`handle_skills_search`]
+    /// but lists DiscoveryKind::Script items. Same progressive-disclosure
+    /// invariant: returns refs (verb, subject, source), never bodies.
+    /// Bodies are fetched on demand via gateway.describe.
+    pub(crate) async fn handle_scripts_search(&self, args: Value) -> anyhow::Result<Value> {
+        let verb_filter = args.get("verb").and_then(Value::as_str).map(str::to_string);
+        let subject_root_filter = args
+            .get("subject_root")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let source_filter = args
+            .get("source")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let limit = args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(50)
+            .min(200) as usize;
+
+        let items = self.discovery.list(Some(DiscoveryKind::Script)).await?;
+
+        let mut refs: Vec<Value> = Vec::with_capacity(items.len());
+        for item in items {
+            if let Some(want) = &verb_filter {
+                if item.verb.as_deref() != Some(want.as_str()) {
+                    continue;
+                }
+            }
+            if let Some(want_root) = &subject_root_filter {
+                let root = item.id.split('.').next().unwrap_or("");
+                if root != want_root {
+                    continue;
+                }
+            }
+            if let Some(want_src) = &source_filter {
+                if item.source.as_deref() != Some(want_src.as_str()) {
+                    continue;
+                }
+            }
+            // Progressive disclosure: never emit `body`.
+            refs.push(json!({
+                "verb":    item.verb,
+                "subject": item.id,
+                "title":   if item.title.is_empty() { Value::Null } else { Value::String(item.title) },
+                "source":  item.source,
+            }));
+            if refs.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(json!({ "items": refs }))
     }
 
     /// SPEC §17.6 — gateway.skills.search. Returns refs (`{verb, subject,

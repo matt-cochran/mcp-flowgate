@@ -392,6 +392,39 @@ impl WorkflowRuntime {
         })))
     }
 
+    /// SPEC §22 — mirror of [`describe_guidance_for_workflow`] but reads
+    /// from the instance's `_scriptsLibrary` snapshot. Returns `None` when
+    /// the subject isn't in the snapshot (caller can then fall back to
+    /// the live discovery index, but typically a script subject either
+    /// belongs to a workflow's library or isn't visible to that workflow).
+    pub async fn describe_script_for_workflow(
+        &self,
+        workflow_id: &str,
+        subject: &str,
+    ) -> anyhow::Result<Option<Value>> {
+        let instance = self.store.load(workflow_id).await?;
+        let Some(entry) = instance
+            .definition
+            .pointer("/_scriptsLibrary")
+            .and_then(Value::as_object)
+            .and_then(|lib| lib.get(subject))
+        else {
+            return Ok(None);
+        };
+        let verb = entry.get("verb").and_then(Value::as_str).unwrap_or_default();
+        let body = entry.get("body").and_then(Value::as_str).unwrap_or_default();
+        let lifecycle = entry.get("lifecycle").and_then(Value::as_str).unwrap_or_default();
+        let hash = entry.get("hash").and_then(Value::as_str).unwrap_or_default();
+        Ok(Some(json!({
+            "kind":      "script",
+            "subject":   subject,
+            "verb":      verb,
+            "lifecycle": lifecycle,
+            "hash":      hash,
+            "body":      body,
+        })))
+    }
+
     pub async fn explain(&self, workflow_id: &str, transition: &str) -> anyhow::Result<Value> {
         let instance = self.store.load(workflow_id).await?;
         // In-flight: resolve the definition from the instance's carried
@@ -450,16 +483,38 @@ impl WorkflowRuntime {
         // from the caller's wall-clock around `execute_with_reliability`.
         // For transitions without an executor (or paths like onTimeout)
         // the descriptor is omitted entirely.
-        let executor = params
-            .transition_def
-            .get("executor")
-            .and_then(|e| e.get("kind"))
-            .and_then(Value::as_str)
-            .map(|kind| {
+        //
+        // SPEC §22.6 (v0.3) — for `kind: script` executors, the descriptor
+        // additionally carries `subject` (the curated script subject) and
+        // `hash` (the body hash from the workflow's pinned _scriptsLibrary
+        // snapshot). Together they let audit replay pull the exact bytes
+        // that ran by content-identity. Fields are additive + optional;
+        // non-script executors get the legacy 3-field shape unchanged.
+        let executor_cfg = params.transition_def.get("executor");
+        let executor = executor_cfg
+            .and_then(|e| e.get("kind").and_then(Value::as_str).map(|k| (k, e)))
+            .map(|(kind, exec_cfg)| {
                 let mut desc = json!({ "kind": kind });
                 if let Some((ok, duration_ms)) = params.executor_outcome {
                     desc["ok"] = Value::Bool(ok);
                     desc["durationMs"] = json!(duration_ms);
+                }
+                if kind == "script" {
+                    if let Some(subject) = exec_cfg.get("subject").and_then(Value::as_str) {
+                        desc["subject"] = Value::String(subject.to_string());
+                        // Snapshot lookup — JSON-pointer escape for `~` / `/`
+                        // per RFC 6901. Subjects use `.` so escapes don't
+                        // normally trigger; do it correctly anyway.
+                        let escaped = subject.replace('~', "~0").replace('/', "~1");
+                        if let Some(hash) = params
+                            .instance
+                            .definition
+                            .pointer(&format!("/_scriptsLibrary/{escaped}/hash"))
+                            .and_then(Value::as_str)
+                        {
+                            desc["hash"] = Value::String(hash.to_string());
+                        }
+                    }
                 }
                 desc
             });

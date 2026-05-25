@@ -24,6 +24,13 @@ pub enum DiscoveryKind {
     /// A reusable guidance fragment ("skill"). The lookup id is the fragment's
     /// `subject`; `gateway.describe(subject)` returns its `verb` + `body`.
     Guidance,
+    /// SPEC §22 — a curated, hash-pinned script body invokable by a workflow's
+    /// `script` executor. The lookup id is the script's `subject`;
+    /// `gateway.describe(subject)` returns its `verb` + `body` (the executable
+    /// content). Distinct from `Guidance` because scripts have stricter
+    /// hash normalization (whitespace matters in shell) and a separate verb
+    /// vocabulary (build/test/deploy/... vs triage/diagnose/plan/...).
+    Script,
 }
 
 impl DiscoveryKind {
@@ -33,6 +40,7 @@ impl DiscoveryKind {
             DiscoveryKind::Capability => "capability",
             DiscoveryKind::Connection => "connection",
             DiscoveryKind::Guidance => "guidance",
+            DiscoveryKind::Script => "script",
         }
     }
 }
@@ -61,6 +69,14 @@ pub enum Verb {
     Explain,
     /// Assemble parts into a whole.
     Compose,
+    /// SPEC §5.4.1 — Gather context from sources (web, local, docs).
+    /// Distinct from `diagnose` (root-cause) — `research` is open-ended
+    /// information-gathering; `diagnose` answers a specific "why" question.
+    Research,
+    /// SPEC §5.4.1 — Condense. Distinct from `explain` (which builds
+    /// understanding via expansion) — `summarize` compresses what is
+    /// already understood.
+    Summarize,
 }
 
 impl Verb {
@@ -69,6 +85,7 @@ impl Verb {
     /// without per-call allocation.
     pub const ALL_TOKENS: &'static [&'static str] = &[
         "triage", "diagnose", "plan", "implement", "review", "refactor", "explain", "compose",
+        "research", "summarize",
     ];
 
     pub fn as_token(self) -> &'static str {
@@ -81,6 +98,8 @@ impl Verb {
             Verb::Refactor => "refactor",
             Verb::Explain => "explain",
             Verb::Compose => "compose",
+            Verb::Research => "research",
+            Verb::Summarize => "summarize",
         }
     }
 
@@ -97,6 +116,8 @@ impl Verb {
             "refactor" => Some(Verb::Refactor),
             "explain" => Some(Verb::Explain),
             "compose" => Some(Verb::Compose),
+            "research" => Some(Verb::Research),
+            "summarize" => Some(Verb::Summarize),
             _ => None,
         }
     }
@@ -165,6 +186,124 @@ pub const BLESSED_SUBJECT_ROOTS: &[&str] = &[
     "refactor",
     "explain",
     "compose",
+    // SPEC §5.4.1 expansion (v0.3) — verb-mirror roots for the
+    // reconnaissance + condensation verbs.
+    "research",
+    "summarize",
+];
+
+/// SPEC §22.3 — the eight closed action verbs that may tag a curated script.
+/// Distinct from [`Verb`] (cognitive verbs) because scripts perform actions,
+/// not cognition: a Bash script doesn't `triage` or `explain`, it builds,
+/// tests, deploys, etc. Closed enum on purpose; new verbs require a spec
+/// amendment. Unknown verbs fail config-load with `INVALID_SCRIPT_VERB`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScriptVerb {
+    /// Compile, package, generate artifacts.
+    Build,
+    /// Exercise the system against assertions (unit / integration / e2e).
+    Test,
+    /// Promote artifacts to an environment.
+    Deploy,
+    /// Apply style transformations (write changes; not check).
+    Format,
+    /// Inspect for static issues (read-only; report don't fix).
+    Lint,
+    /// Provision dependencies, toolchains, runtimes.
+    Install,
+    /// Confirm an externally-asserted property (hash match, signature, contract).
+    Verify,
+    /// Catch-all for runnable operations that don't fit the above (smoke
+    /// runs, ad-hoc helpers). Use sparingly — prefer a more specific verb.
+    Run,
+    /// SPEC §22.3 expansion (v0.3) — read-only local introspection.
+    /// System state, dep trees, symbol exports, env. Distinct from `lint`
+    /// (binary pass/fail on issues) and `run` (loses semantic info).
+    Inspect,
+    /// SPEC §22.3 expansion (v0.3) — content discovery: codebase grep,
+    /// web search, doc search. Distinct from `fetch` (known resource by
+    /// id) and `inspect` (system state, not content).
+    Search,
+    /// SPEC §22.3 expansion (v0.3) — retrieve a specific known resource
+    /// by URL or path. Distinct from `search` (discovery vs known
+    /// retrieval).
+    Fetch,
+    /// SPEC §22.3 expansion (v0.3) — graded compliance / security /
+    /// quality scan. Emits structured findings. Distinct from `lint`
+    /// (binary pass/fail) — `audit` is a report.
+    Audit,
+}
+
+impl ScriptVerb {
+    pub const ALL_TOKENS: &'static [&'static str] = &[
+        "build", "test", "deploy", "format", "lint", "install", "verify", "run",
+        "inspect", "search", "fetch", "audit",
+    ];
+
+    pub fn as_token(self) -> &'static str {
+        match self {
+            ScriptVerb::Build => "build",
+            ScriptVerb::Test => "test",
+            ScriptVerb::Deploy => "deploy",
+            ScriptVerb::Format => "format",
+            ScriptVerb::Lint => "lint",
+            ScriptVerb::Install => "install",
+            ScriptVerb::Verify => "verify",
+            ScriptVerb::Run => "run",
+            ScriptVerb::Inspect => "inspect",
+            ScriptVerb::Search => "search",
+            ScriptVerb::Fetch => "fetch",
+            ScriptVerb::Audit => "audit",
+        }
+    }
+
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "build" => Some(ScriptVerb::Build),
+            "test" => Some(ScriptVerb::Test),
+            "deploy" => Some(ScriptVerb::Deploy),
+            "format" => Some(ScriptVerb::Format),
+            "lint" => Some(ScriptVerb::Lint),
+            "install" => Some(ScriptVerb::Install),
+            "verify" => Some(ScriptVerb::Verify),
+            "run" => Some(ScriptVerb::Run),
+            "inspect" => Some(ScriptVerb::Inspect),
+            "search" => Some(ScriptVerb::Search),
+            "fetch" => Some(ScriptVerb::Fetch),
+            "audit" => Some(ScriptVerb::Audit),
+            _ => None,
+        }
+    }
+}
+
+/// SPEC §22.4 — blessed top-level segments for script subjects. Mirrors
+/// [`BLESSED_SUBJECT_ROOTS`] but the vocabulary is action-flavored. Combines
+/// the eight [`ScriptVerb`] tokens as verb-mirror roots with three
+/// domain-themed extensions (`release`, `migrate`, `ci`) for common
+/// operational categories. `strict_namespacing: true` (default) rejects
+/// unblessed roots with `INVALID_SCRIPT_SUBJECT_ROOT`; lenient mode warns
+/// with the closest-blessed-root suggestion.
+pub const BLESSED_SCRIPT_ROOTS: &[&str] = &[
+    // Verb-mirror (action category).
+    "build",
+    "test",
+    "deploy",
+    "format",
+    "lint",
+    "install",
+    "verify",
+    "run",
+    // SPEC §22.3 expansion (v0.3) — verb-mirror roots for the
+    // reconnaissance + graded-findings verbs.
+    "inspect",
+    "search",
+    "fetch",
+    "audit",
+    // Domain-themed (operational category).
+    "release",
+    "migrate",
+    "ci",
 ];
 
 /// A single thing that can be discovered: a workflow, a proxy capability, or

@@ -203,6 +203,50 @@ impl crate::ports::GuidanceAcknowledgmentStore for InMemoryGuidanceAcknowledgmen
     }
 }
 
+/// SPEC §22 — in-memory implementation of `ScriptAcknowledgmentStore`.
+/// Same shape as [`InMemoryGuidanceAcknowledgmentStore`] but in a distinct
+/// keyspace so script acks don't pollute guidance acks (the two surfaces
+/// can be wired independently).
+#[derive(Default, Clone)]
+pub struct InMemoryScriptAcknowledgmentStore {
+    inner: Arc<RwLock<HashMap<(String, String), String>>>,
+}
+
+impl InMemoryScriptAcknowledgmentStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl crate::ports::ScriptAcknowledgmentStore for InMemoryScriptAcknowledgmentStore {
+    async fn record(
+        &self,
+        workflow_id: &str,
+        subject: &str,
+        body_hash: &str,
+    ) -> anyhow::Result<()> {
+        self.inner.write().unwrap().insert(
+            (workflow_id.to_string(), subject.to_string()),
+            body_hash.to_string(),
+        );
+        Ok(())
+    }
+
+    async fn last_acknowledged_hash(
+        &self,
+        workflow_id: &str,
+        subject: &str,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(self
+            .inner
+            .read()
+            .unwrap()
+            .get(&(workflow_id.to_string(), subject.to_string()))
+            .cloned())
+    }
+}
+
 #[async_trait]
 impl crate::ports::DefinitionStoreWritable for InMemoryWritableDefinitionStore {
     async fn register(&self, definition_id: &str, definition: Value) -> anyhow::Result<()> {

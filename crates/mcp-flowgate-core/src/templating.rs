@@ -9,11 +9,20 @@ use serde_json::Value;
 /// optional-whitespace `}}`.
 ///
 /// Resolvable path prefixes:
-/// - `$.context.*`        → `instance.context`
-/// - `$.workflow.input.*` → `instance.input`
-/// - `$.workflow.id`      → `instance.id`
-/// - `$.workflow.state`   → `instance.state`
-/// - `$.workflow.version` → `instance.definition_version`
+/// - `$.context.*`                   → `instance.context`
+/// - `$.workflow.input.*`             → `instance.input`
+/// - `$.workflow.id`                  → `instance.id`
+/// - `$.workflow.state`               → `instance.state`
+/// - `$.workflow.version`             → `instance.definition_version`
+/// - `$.flowgate.authoring.*`         → operator's authoring preferences,
+///                                      stamped onto the snapshot at
+///                                      config-resolve time (SPEC §17.x).
+///                                      Advisory only — typical use:
+///                                      `{{$.flowgate.authoring.preferred_script_language}}`
+///                                      inside a skill body so the LLM
+///                                      sees the operator's preferred
+///                                      language when generating new
+///                                      scripts.
 ///
 /// **Single-pass, non-recursive.** A substituted value that itself contains
 /// `{{ … }}` is written verbatim into the output and is NOT re-scanned.
@@ -69,10 +78,21 @@ pub(crate) fn resolve_template_path(path: &str, instance: &WorkflowInstance) -> 
         return instance.definition_version.clone();
     }
 
+    // SPEC §17.x — `$.flowgate.authoring.*` resolves against the snapshot's
+    // stamped `_authoringPrefs`. This is gateway-level operator preferences
+    // (e.g. `preferred_script_language`), pinned at workflow.start time.
     let (root, tail) = if let Some(t) = path.strip_prefix("$.context.") {
         (&instance.context, t)
     } else if let Some(t) = path.strip_prefix("$.workflow.input.") {
         (&instance.input, t)
+    } else if let Some(t) = path.strip_prefix("$.flowgate.authoring.") {
+        match instance.definition.pointer("/_authoringPrefs") {
+            Some(prefs) => (prefs, t),
+            None => {
+                let last = path.rsplit('.').next().unwrap_or(path);
+                return format!("({last}: unset)");
+            }
+        }
     } else {
         // Unrecognised prefix → stub using last segment of the path.
         let last = path.rsplit('.').next().unwrap_or(path);

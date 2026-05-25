@@ -97,6 +97,57 @@ fn swe_agent_skill_subjects_all_have_library_entries() {
     }
 }
 
+// ── SPEC §21 — delegate fields on the 4 model-driven states ────────────────
+
+#[test]
+fn swe_agent_delegate_fields_present_on_four_model_driven_states() {
+    let resolved = resolve_example("swe-agent.yaml");
+    let states = resolved
+        .pointer("/workflows/swe_agent/states")
+        .and_then(serde_json::Value::as_object)
+        .expect("states");
+    // These four states delegate to TUI sub-agents per WIP.md Phase 3.
+    let delegated = &[
+        ("planning", "planning-agent"),
+        ("retrieving", "retrieval-agent"),
+        ("editing", "editing-agent"),
+        ("critiquing", "critique-agent"),
+    ];
+    for (state_name, expected_agent) in delegated {
+        let state = states
+            .get(*state_name)
+            .unwrap_or_else(|| panic!("missing state '{state_name}'"));
+        let actual = state
+            .get("delegate")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| {
+                panic!("state '{state_name}' missing delegate field; got: {state}")
+            });
+        assert_eq!(actual, *expected_agent, "wrong delegate for '{state_name}'");
+    }
+}
+
+#[test]
+fn swe_agent_delegate_absent_on_deterministic_and_human_states() {
+    let resolved = resolve_example("swe-agent.yaml");
+    let states = resolved
+        .pointer("/workflows/swe_agent/states")
+        .and_then(serde_json::Value::as_object)
+        .expect("states");
+    // Verifying = deterministic executor (no LLM); human_review = actor:human.
+    // Neither should carry a `delegate` — that field is for sub-agent-driven
+    // states only (SPEC §21).
+    for state_name in &["verifying", "human_review", "completed"] {
+        let state = states
+            .get(*state_name)
+            .unwrap_or_else(|| panic!("missing state '{state_name}'"));
+        assert!(
+            state.get("delegate").is_none(),
+            "state '{state_name}' MUST NOT carry a delegate; got: {state}"
+        );
+    }
+}
+
 // ── Other shipped examples must continue to validate ───────────────────────
 
 #[test]

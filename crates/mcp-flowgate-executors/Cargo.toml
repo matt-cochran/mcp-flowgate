@@ -24,6 +24,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+# SPEC §22 — script executor materializes the snapshot's stamped body to
+# a per-invocation temp file (chmod 0700) before exec.
+tempfile = "3"
 
 [dev-dependencies]
 chrono = { workspace = true }

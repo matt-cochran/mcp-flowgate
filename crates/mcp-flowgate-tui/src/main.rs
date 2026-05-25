@@ -18,6 +18,10 @@
 mod flowgate_mcp;
 mod theme;
 
+// Library surface (interpreter, agent_config, tui_config, sub_agent)
+// lives in src/lib.rs so integration tests can `use mcp_flowgate_tui::…`.
+use mcp_flowgate_tui::{agent_config, tui_config};
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -56,6 +60,46 @@ enum Command {
     /// Manage agent configurations
     #[command(subcommand)]
     Agent(aether_cli::agent::AgentCommand),
+    /// Walk a Flowgate workflow to completion using the deterministic
+    /// interpreter (SPEC §21). Spawns isolated sub-agents per delegate
+    /// state; auto-advances states with no delegate.
+    Walk(WalkArgs),
+}
+
+/// CLI args for `flowgate walk` — drives a workflow end-to-end through
+/// the deterministic interpreter.
+#[derive(clap::Args, Debug)]
+pub struct WalkArgs {
+    /// Workflow id to start (e.g. `swe_agent`). Must match a workflow
+    /// declared in the Flowgate config.
+    #[arg(long)]
+    pub workflow: String,
+
+    /// JSON object passed as `input` to `workflow.start`.
+    #[arg(long, default_value = "{}")]
+    pub input: String,
+
+    /// Agent config in `name=provider/model` form. Repeat for each
+    /// sub-agent referenced by `delegate:` fields in the workflow.
+    /// Example: `--agent planning=anthropic/claude-sonnet-4 --agent editing=anthropic/claude-haiku-4-5-20251001`
+    #[arg(long = "agent")]
+    pub agents: Vec<String>,
+
+    /// Hard ceiling on wall-clock seconds per sub-agent. No default by
+    /// design — operators must declare their tolerance for orphan
+    /// sub-agents.
+    #[arg(long)]
+    pub max_sub_agent_seconds: Option<u64>,
+
+    /// Hard ceiling on tool calls per sub-agent. No default by design.
+    #[arg(long)]
+    pub max_sub_agent_steps: Option<usize>,
+
+    /// Warning threshold for blackboard size (serialized JSON bytes).
+    /// Defaults to 16 KiB. Exceeding this logs a warning but does not
+    /// block the spawn.
+    #[arg(long)]
+    pub max_blackboard_bytes: Option<usize>,
 }
 
 #[tokio::main]
@@ -67,7 +111,39 @@ async fn main() -> Result<ExitCode> {
         Some(Command::Headless(args)) => run_headless(args).await,
         Some(Command::Acp(args)) => run_acp(args).await,
         Some(Command::Agent(cmd)) => run_agent(cmd).await,
+        Some(Command::Walk(args)) => run_walk(args).await,
     }
+}
+
+/// Walk a workflow to completion via the deterministic interpreter
+/// (SPEC §21). Resolves agent configs from `--agent` flags, validates
+/// timeout poka-yoke, then drives `walk_workflow`. Sub-agent spawning
+/// uses the production `AetherSubAgentSpawner` (presently a stub that
+/// surfaces SubAgentTimeout — see `sub_agent.rs` for the integration
+/// note).
+async fn run_walk(args: WalkArgs) -> Result<ExitCode> {
+    let tui_cfg = tui_config::TuiConfig::from_cli(
+        args.max_sub_agent_seconds,
+        args.max_sub_agent_steps,
+        args.max_blackboard_bytes,
+    )?;
+
+    let agents = agent_config::build_registry(&args.agents)
+        .map_err(|e| anyhow::anyhow!("agent config parse error: {e}"))?;
+
+    let _ = (tui_cfg, agents, args.workflow, args.input);
+    // The McpToolCaller production impl (rmcp child-process client) is
+    // wired in the same shape as `flowgate_mcp::set_as_sole_mcp` —
+    // creating that client + spawning `walk_workflow` is mechanical
+    // wiring follow-on (separate commit). The interpreter itself is
+    // exercised end-to-end via the mock in `tests/interpreter.rs`.
+    eprintln!(
+        "flowgate walk: CLI args parsed and validated. The runtime wiring \
+         (rmcp child-process client + AetherSubAgentSpawner) is a follow-on \
+         commit — for now, exercise the interpreter via `cargo test -p \
+         mcp-flowgate-tui --test interpreter`."
+    );
+    Ok(ExitCode::SUCCESS)
 }
 
 /// TUI mode (default) — interactive terminal with Flowgate branding.

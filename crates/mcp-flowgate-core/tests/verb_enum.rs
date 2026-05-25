@@ -19,7 +19,7 @@ skills:
     )
 }
 
-// ── Positive: each of the 8 blessed verbs loads cleanly. ─────────────────────
+// ── Positive: each of the 10 blessed verbs loads cleanly. ─────────────────────
 
 #[test]
 fn verb_triage_loads() {
@@ -61,6 +61,35 @@ fn verb_compose_loads() {
     config::resolve_str(&skills_yaml("compose")).expect("compose must load");
 }
 
+#[test]
+fn verb_research_loads() {
+    // SPEC §5.4.1 v0.3 — reconnaissance verb. Use a research.* subject so
+    // strict-namespacing also accepts it (BLESSED_SUBJECT_ROOTS has
+    // `research`).
+    let yaml = r##"
+version: "1.0.0"
+skills:
+  research.context.assemble:
+    verb: research
+    lifecycle: stable
+    body: "fixture body"
+"##;
+    config::resolve_str(yaml).expect("research must load");
+}
+
+#[test]
+fn verb_summarize_loads() {
+    let yaml = r##"
+version: "1.0.0"
+skills:
+  summarize.session.delta:
+    verb: summarize
+    lifecycle: stable
+    body: "fixture body"
+"##;
+    config::resolve_str(yaml).expect("summarize must load");
+}
+
 // ── Negative: legacy verbs are rejected with explicit migration signal. ──────
 
 #[test]
@@ -91,10 +120,10 @@ fn legacy_verb_follow_rejected() {
     assert!(format!("{err}").contains("INVALID_VERB"));
 }
 
-// ── Negative: error message lists all 8 allowed verbs. ───────────────────────
+// ── Negative: error message lists all 10 allowed verbs. ──────────────────────
 
 #[test]
-fn invalid_verb_error_lists_all_eight() {
+fn invalid_verb_error_lists_all_ten() {
     let err = config::resolve_str(&skills_yaml("nonsense")).expect_err("nonsense must reject");
     let msg = format!("{err}");
     for v in Verb::ALL_TOKENS {

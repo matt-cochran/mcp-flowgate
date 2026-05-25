@@ -25,7 +25,9 @@ use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::discovery::{Lifecycle, Verb, BLESSED_SUBJECT_ROOTS};
+use crate::discovery::{
+    Lifecycle, ScriptVerb, Verb, BLESSED_SCRIPT_ROOTS, BLESSED_SUBJECT_ROOTS,
+};
 
 /// Recursively load `path` as YAML and merge any `include:` files into it.
 /// Includes resolve relative to the file that lists them.
@@ -48,6 +50,14 @@ fn load_yaml_inner(path: &Path, visited: &mut HashSet<PathBuf>) -> anyhow::Resul
         .with_context(|| format!("parsing YAML {}", canonical.display()))?;
 
     let parent = canonical.parent().unwrap_or_else(|| Path::new("."));
+
+    // SPEC §22.2 — rewrite any `file://` URIs in `scripts:` entries to
+    // absolute paths now, while we still know the config file's directory.
+    // `resolve()` is path-agnostic by design; doing this here keeps the
+    // pure-value abstraction downstream and gives sensible relative-path
+    // semantics (file:// URIs resolve relative to the YAML they were
+    // declared in, not the gateway's CWD).
+    rewrite_script_uris_to_absolute(&mut value, parent);
 
     if let Some(includes) = value.get("include").and_then(Value::as_array).cloned() {
         // Each include is loaded in declaration order, then the current file's
@@ -186,6 +196,12 @@ pub fn resolve_with_diagnostics(mut config: Value) -> anyhow::Result<(Value, Vec
     //    rather than only linted.
     validate_skills(&config, &mut diagnostics)?;
 
+    // 6a-bis. SPEC §22 — `scripts:` block validates next to `skills:`. Same
+    //         strict-vs-lenient blessed-root semantics. Distinct verb enum
+    //         (action verbs vs cognitive verbs) and stricter hash
+    //         normalization (whitespace is load-bearing in shell).
+    validate_scripts(&config, &mut diagnostics)?;
+
     // 6b. SPEC §8.4 + §20.2 — reject runtime-only `flowgate.*` flags when
     //     they appear inside any `workflows:` block. The flags are read at
     //     gateway startup only; allowing them at workflow scope would let
@@ -193,12 +209,35 @@ pub fn resolve_with_diagnostics(mut config: Value) -> anyhow::Result<(Value, Vec
     //     flag on for itself.
     validate_workflow_flag_scope(&config)?;
 
+    // 6c. SPEC §21 — `delegate` is a TUI pass-through string. It MUST be
+    //     a non-empty string when present. Validating shape here means the
+    //     runtime never has to defend against `delegate: ""` or `delegate: 42`
+    //     reaching the response surface.
+    validate_state_delegate(&config)?;
+
+    // 6d. SPEC §17.x (v0.3) — `flowgate.authoring.*` preferences are
+    //     advisory strings surfaced to LLM-driven authoring workflows via
+    //     template substitution. Shape-validated here; nothing rejects a
+    //     workflow for ignoring the preference.
+    validate_authoring_preferences(&config)?;
+
     // 7. Stamp each workflow definition with `_skillsLibrary: { subject: verb }`
     //    drawn from the top-level `skills:` map (subjects only — verb, no body;
     //    body is fetched on demand via `gateway.describe`). Lets the runtime
     //    decorate `guidance.refs` from the per-instance snapshot alone without
     //    needing a side channel to the top-level config.
     stamp_skills_library(&mut config);
+
+    // 7-bis. SPEC §22 — stamp `_scriptsLibrary` onto each workflow that
+    //        references a curated script. Resolves file:// URIs and verifies
+    //        hashes; `SCRIPT_HASH_MISMATCH` here means the external script
+    //        body drifted since the workflow was authored.
+    stamp_scripts_library(&mut config)?;
+
+    // 7-ter. SPEC §17.x (v0.3) — stamp `_authoringPrefs` onto every workflow
+    //        snapshot so authoring skills can reach the operator's
+    //        preferences via template substitution `{{$.flowgate.authoring.*}}`.
+    stamp_authoring_preferences(&mut config);
 
     Ok((config, diagnostics))
 }
@@ -226,6 +265,117 @@ fn closest_blessed_root(candidate: &str) -> Option<&'static str> {
         }
     }
     best.map(|(_, r)| r)
+}
+
+/// SPEC §17.x (v0.3) — Validate `flowgate.authoring.*` preferences. v1
+/// surface is one optional field, `preferred_script_language`. Adding
+/// more authoring preferences later means adding more checks here.
+/// All authoring preferences are advisory — surfaced to LLMs via
+/// template substitution, never enforced.
+fn validate_authoring_preferences(config: &Value) -> anyhow::Result<()> {
+    let Some(authoring) = config.pointer("/flowgate/authoring") else {
+        return Ok(());
+    };
+    let Some(obj) = authoring.as_object() else {
+        bail!(
+            "INVALID_AUTHORING_PREFERENCE: `flowgate.authoring` must be an object \
+             ({})",
+            short_value_kind(authoring)
+        );
+    };
+    if let Some(lang) = obj.get("preferred_script_language") {
+        match lang {
+            Value::String(s) if !s.is_empty() => {}
+            Value::String(_) => bail!(
+                "INVALID_AUTHORING_PREFERENCE: `flowgate.authoring.preferred_script_language` \
+                 is empty. Either set a non-empty string (e.g. `bash`, `python3`, `powershell`) \
+                 or omit the key entirely."
+            ),
+            other => bail!(
+                "INVALID_AUTHORING_PREFERENCE: `flowgate.authoring.preferred_script_language` \
+                 must be a string ({})",
+                short_value_kind(other)
+            ),
+        }
+    }
+    Ok(())
+}
+
+/// SPEC §17.x (v0.3) — Stamp `flowgate.authoring` onto every workflow
+/// snapshot as `_authoringPrefs` so template substitution can reach the
+/// preferences at render time via `{{$.flowgate.authoring.*}}`. The
+/// snapshot is self-contained (SPEC §8.2): an in-flight instance sees
+/// the preferences that existed at `workflow.start`, not whatever the
+/// live config currently says.
+///
+/// Cheap by design: the authoring block is typically a small map
+/// (one or a few key/value pairs). The duplication cost across workflows
+/// is negligible; the alternative — plumbing the live config Arc
+/// through the template resolver — would add far more surface than this
+/// saves.
+fn stamp_authoring_preferences(config: &mut Value) {
+    let prefs = match config.pointer("/flowgate/authoring") {
+        Some(p) if !p.as_object().map(|m| m.is_empty()).unwrap_or(true) => p.clone(),
+        _ => return,
+    };
+    let Some(workflows) = config
+        .pointer_mut("/workflows")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for def in workflows.values_mut() {
+        let Some(obj) = def.as_object_mut() else { continue };
+        obj.insert("_authoringPrefs".into(), prefs.clone());
+    }
+}
+
+/// SPEC §21 — Validate that every `states.<name>.delegate` value (when
+/// present) is a non-empty string. The runtime treats the field as a
+/// pass-through pointer; shape-validation here means `runtime_response.rs`
+/// never has to defend against `null`/`""`/numeric values reaching the
+/// response surface. Returns `INVALID_DELEGATE` naming the workflow + state.
+fn validate_state_delegate(config: &Value) -> anyhow::Result<()> {
+    let Some(workflows) = config.pointer("/workflows").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for (wf_id, wf_def) in workflows {
+        let Some(states) = wf_def.pointer("/states").and_then(Value::as_object) else {
+            continue;
+        };
+        for (state_name, state_def) in states {
+            let Some(value) = state_def.get("delegate") else {
+                continue;
+            };
+            match value {
+                Value::String(s) if !s.is_empty() => {}
+                Value::String(_) => bail!(
+                    "INVALID_DELEGATE: workflow '{wf_id}' state '{state_name}' \
+                     has empty `delegate`. Must be a non-empty agent-config name (SPEC §21)."
+                ),
+                _ => bail!(
+                    "INVALID_DELEGATE: workflow '{wf_id}' state '{state_name}' \
+                     has non-string `delegate` ({}). Must be a non-empty string naming \
+                     an agent config (SPEC §21).",
+                    short_value_kind(value)
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Short human-readable name for a JSON value's kind. Used by error messages
+/// that quote a config-shape mismatch.
+fn short_value_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 /// SPEC §8.4 + §20.2 — `flowgate.*` flags (e.g. `flowgate.authoring.write_enabled`,
@@ -378,6 +528,262 @@ fn validate_skills(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow:
         }
     }
     Ok(())
+}
+
+/// SPEC §22 — validate the top-level `scripts:` block. Mirrors
+/// [`validate_skills`] in shape with three key differences:
+///
+/// 1. **Verb vocabulary** is the [`ScriptVerb`] closed enum (build/test/
+///    deploy/format/lint/install/verify/run), not [`Verb`].
+/// 2. **Blessed roots** come from [`BLESSED_SCRIPT_ROOTS`], not
+///    [`BLESSED_SUBJECT_ROOTS`].
+/// 3. **Body source is XOR**: either inline `body: string` OR external
+///    `{ uri: string, hash: string }`. v1 supports `file://` URIs only.
+fn validate_scripts(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow::Result<()> {
+    let Some(scripts) = config.pointer("/scripts").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let strict_ns = strict_namespacing(config);
+    for (subject, entry) in scripts {
+        // Subject shape — same pattern as skills.
+        if subject.trim().is_empty() {
+            bail!("EMPTY_SCRIPT_SUBJECT: scripts key is empty after trim");
+        }
+        if !is_subject_pattern(subject) {
+            bail!(
+                "scripts key '{subject}' must match ^[a-z][a-z0-9-]+(\\.[a-z][a-z0-9-]+)+$ \
+                 — lowercase, kebab, dotted, at least two segments, no whitespace (SPEC §22.4)"
+            );
+        }
+        let root = subject.split('.').next().unwrap_or("");
+        if !BLESSED_SCRIPT_ROOTS.contains(&root) {
+            if strict_ns {
+                bail!(
+                    "INVALID_SCRIPT_SUBJECT_ROOT: scripts key '{subject}' has unblessed root '{root}'; \
+                     blessed roots are {:?} (SPEC §22.4). Disable with `flowgate.strict_namespacing: false`.",
+                    BLESSED_SCRIPT_ROOTS
+                );
+            } else {
+                let suggestion = closest_blessed_script_root(root).map(|sugg| {
+                    format!("did you mean '{sugg}'?")
+                });
+                diagnostics.push(Diagnostic {
+                    severity: DiagnosticSeverity::Warn,
+                    code: "INVALID_SCRIPT_SUBJECT_ROOT".to_string(),
+                    message: format!(
+                        "scripts key '{subject}' has unblessed root '{root}'; \
+                         blessed roots are {:?}",
+                        BLESSED_SCRIPT_ROOTS
+                    ),
+                    location: Some(format!("/scripts/{subject}")),
+                    suggestion,
+                });
+            }
+        }
+
+        // SPEC §22.3 — `verb` is a closed enum, distinct from cognitive Verb.
+        let verb_str = entry
+            .get("verb")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow!("MISSING_SCRIPT_VERB: scripts entry '{subject}' is missing a `verb`")
+            })?;
+        if ScriptVerb::from_token(verb_str).is_none() {
+            bail!(
+                "INVALID_SCRIPT_VERB: scripts entry '{subject}' has verb '{verb_str}'; \
+                 allowed verbs are {:?} (SPEC §22.3)",
+                ScriptVerb::ALL_TOKENS
+            );
+        }
+
+        // Lifecycle — same shape as skills; the Lifecycle enum is shared.
+        let lifecycle_str = entry
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                anyhow!(
+                    "MISSING_SCRIPT_LIFECYCLE: scripts entry '{subject}' is missing a `lifecycle` field; \
+                     allowed values are {:?} (SPEC §22)",
+                    Lifecycle::ALL_TOKENS
+                )
+            })?;
+        if Lifecycle::from_token(lifecycle_str).is_none() {
+            bail!(
+                "INVALID_SCRIPT_LIFECYCLE: scripts entry '{subject}' has lifecycle '{lifecycle_str}'; \
+                 allowed values are {:?} (SPEC §22)",
+                Lifecycle::ALL_TOKENS
+            );
+        }
+
+        // SPEC §22.2 — body source XOR: inline body OR external uri+hash.
+        let body_inline = entry.get("body").and_then(Value::as_str);
+        let uri = entry.get("uri").and_then(Value::as_str);
+        match (body_inline, uri) {
+            (Some(_), Some(_)) => bail!(
+                "SCRIPT_BODY_SOURCE_AMBIGUOUS: scripts entry '{subject}' declares both \
+                 `body` and `uri` — exactly one is required (SPEC §22.2)"
+            ),
+            (None, None) => bail!(
+                "SCRIPT_BODY_SOURCE_AMBIGUOUS: scripts entry '{subject}' declares neither \
+                 `body` nor `uri` — exactly one is required (SPEC §22.2)"
+            ),
+            (Some(body), None) => {
+                // Inline body: hash is OPTIONAL (computed at stamp time).
+                // If author provided one, it must match.
+                if let Some(stored_hash) = entry.get("hash").and_then(Value::as_str) {
+                    validate_hash_format(stored_hash, subject)?;
+                    let computed = compute_script_hash(body);
+                    if stored_hash != computed {
+                        bail!(
+                            "SCRIPT_HASH_MISMATCH: scripts entry '{subject}' has stored hash \
+                             '{stored_hash}' but normalize_for_script_hash(body) produced \
+                             '{computed}' (SPEC §22.2). Script hashing collapses trailing \
+                             newlines only; internal whitespace is preserved."
+                        );
+                    }
+                }
+            }
+            (None, Some(uri_str)) => {
+                // External body: hash is REQUIRED (we verify at stamp time).
+                let stored_hash = entry
+                    .get("hash")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "MISSING_SCRIPT_HASH: scripts entry '{subject}' uses an external \
+                             `uri` but has no `hash`. Hash is required for uri-sourced bodies \
+                             so the runtime can verify content-identity at load time (SPEC §22.2)."
+                        )
+                    })?;
+                validate_hash_format(stored_hash, subject)?;
+                if !uri_str.starts_with("file://") {
+                    let scheme = uri_str.split("://").next().unwrap_or(uri_str);
+                    bail!(
+                        "UNSUPPORTED_SCRIPT_URI_SCHEME: scripts entry '{subject}' uri \
+                         '{uri_str}' uses scheme '{scheme}://' — v1 supports `file://` only. \
+                         `https://` and `git+https://...@<ref>` are deferred to v2 (SPEC §22.2)."
+                    );
+                }
+                // file:// resolution + hash verification happens at
+                // stamp_scripts_library time (Tranche N) — needs the config
+                // file path for relative-path resolution, which validate
+                // doesn't have. Shape is locked here; integrity is enforced
+                // there.
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate that `s` matches `^sha256:[0-9a-f]{64}$` — the only hash format
+/// the script library accepts. Future-proofed by making this a check, not a
+/// hard parser: if we add `sha512:` later we update this in one place.
+fn validate_hash_format(s: &str, subject: &str) -> anyhow::Result<()> {
+    if !s.starts_with("sha256:") {
+        bail!(
+            "INVALID_SCRIPT_HASH_FORMAT: scripts entry '{subject}' hash '{s}' is missing \
+             the `sha256:` prefix. Expected `sha256:<64-hex-chars>` (SPEC §22.2)."
+        );
+    }
+    let hex = &s["sha256:".len()..];
+    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+        bail!(
+            "INVALID_SCRIPT_HASH_FORMAT: scripts entry '{subject}' hash '{s}' has malformed \
+             digest. Expected `sha256:<64 lowercase hex chars>` (SPEC §22.2)."
+        );
+    }
+    Ok(())
+}
+
+/// SPEC §22.2 — closest-blessed-script-root suggestion for the lenient
+/// namespacing diagnostic. Mirror of [`closest_blessed_root`].
+fn closest_blessed_script_root(candidate: &str) -> Option<&'static str> {
+    if candidate.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, &'static str)> = None;
+    for root in BLESSED_SCRIPT_ROOTS {
+        let shared = candidate
+            .chars()
+            .zip(root.chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if shared == 0 {
+            continue;
+        }
+        if best.map(|(b, _)| shared > b).unwrap_or(true) {
+            best = Some((shared, root));
+        }
+    }
+    best.map(|(_, r)| r)
+}
+
+/// SPEC §22.2 — script body normalization. **Stricter than
+/// [`normalize_for_hash`]** because shell scripts treat whitespace as
+/// load-bearing: `if [[ $x == "y" ]]` and `if [[ $x  ==  "y" ]]` are
+/// different programs, and `\t` vs spaces matters for heredocs.
+///
+/// Rules:
+/// 1. Preserve all internal whitespace exactly (no collapse).
+/// 2. Collapse trailing newlines to exactly one terminal newline (so
+///    `script\n` and `script\n\n\n` hash identically — editor-dependent
+///    trailing-newline drift shouldn't break content-identity).
+/// 3. No leading-whitespace trim (scripts may legitimately start with `#!`
+///    on column 0 or with whitespace for indentation).
+///
+/// This stricter rule means inline `body: |` YAML scripts are hashed
+/// verbatim modulo trailing newlines. Authors who edit a script body in
+/// place (changing a tab to spaces, say) WILL get a SCRIPT_HASH_MISMATCH
+/// when a uri-source script references that body — by design.
+///
+/// ```
+/// use mcp_flowgate_core::config::normalize_for_script_hash;
+///
+/// // Internal whitespace preserved.
+/// assert_eq!(normalize_for_script_hash("if [[  x ]]"), "if [[  x ]]\n");
+/// // Trailing newlines collapsed to one.
+/// assert_eq!(normalize_for_script_hash("echo hi\n\n\n"), "echo hi\n");
+/// // Single trailing newline preserved.
+/// assert_eq!(normalize_for_script_hash("echo hi\n"), "echo hi\n");
+/// // No trailing newline -> one added.
+/// assert_eq!(normalize_for_script_hash("echo hi"), "echo hi\n");
+/// ```
+pub fn normalize_for_script_hash(body: &str) -> String {
+    // Strip all trailing newlines first.
+    let mut s = body.to_string();
+    while s.ends_with('\n') {
+        s.pop();
+    }
+    // Re-append exactly one terminal newline.
+    s.push('\n');
+    s
+}
+
+/// SPEC §22.2 — content-identity hash for a script body. Pair with
+/// [`normalize_for_script_hash`] always; never hash raw bytes.
+///
+/// ```
+/// use mcp_flowgate_core::config::compute_script_hash;
+///
+/// // Trailing-newline drift produces identical hashes.
+/// assert_eq!(
+///     compute_script_hash("echo hi\n"),
+///     compute_script_hash("echo hi\n\n\n"),
+/// );
+/// // But internal whitespace changes produce different hashes (unlike skill hash).
+/// assert_ne!(
+///     compute_script_hash("if [[ x ]]"),
+///     compute_script_hash("if [[  x  ]]"),
+/// );
+/// // Hash carries algorithm prefix + lowercase-hex digest.
+/// let h = compute_script_hash("echo hi");
+/// assert!(h.starts_with("sha256:"));
+/// assert_eq!(h.len(), "sha256:".len() + 64);
+/// ```
+pub fn compute_script_hash(body: &str) -> String {
+    let normalized = normalize_for_script_hash(body);
+    let digest = Sha256::digest(normalized.as_bytes());
+    format!("sha256:{:x}", digest)
 }
 
 /// SPEC §5.4.2 — subject pattern: dotted, lowercase-kebab segments, at least
@@ -536,6 +942,200 @@ fn stamp_skills_library(config: &mut Value) {
                 obj.insert("_skillsLibrary".into(), Value::Object(scoped));
             }
         }
+    }
+}
+
+/// SPEC §22 — stamp `_scriptsLibrary` onto each workflow that references a
+/// curated script, mirroring [`stamp_skills_library`]. Resolution policy:
+///
+/// - Inline `body:` scripts → body stamped verbatim; hash computed.
+/// - `uri:` scripts → file:// URIs resolved at load time (path is already
+///   absolute by the time we get here, courtesy of [`rewrite_script_uris_to_absolute`]).
+///   Body materialized into the snapshot; the declared `hash` is verified
+///   against `compute_script_hash(resolved_body)`. Mismatch → `SCRIPT_HASH_MISMATCH`.
+///
+/// The instance-snapshot invariant (SPEC §8.2) holds for scripts the same way
+/// it does for skills: editing the top-level `scripts:` block — or the
+/// external file — after `workflow.start` cannot mutate what an in-flight
+/// instance sees.
+fn stamp_scripts_library(config: &mut Value) -> anyhow::Result<()> {
+    let scripts = match config.pointer("/scripts").and_then(Value::as_object) {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => return Ok(()),
+    };
+    let mut full_library: Map<String, Value> = Map::new();
+    for (subject, entry) in &scripts {
+        // validate_scripts has already enforced shape; re-read defensively.
+        let Some(verb) = entry.get("verb").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(lifecycle) = entry.get("lifecycle").and_then(Value::as_str) else {
+            continue;
+        };
+        let source = entry
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("config")
+            .to_string();
+
+        // Materialize body (inline or uri). Hash verification on uri path.
+        let (body, hash) = match (
+            entry.get("body").and_then(Value::as_str),
+            entry.get("uri").and_then(Value::as_str),
+        ) {
+            (Some(b), None) => (b.to_string(), compute_script_hash(b)),
+            (None, Some(uri)) => {
+                let declared_hash = entry
+                    .get("hash")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "scripts entry '{subject}' uri-source without hash reached \
+                             stamp_scripts_library — validate_scripts should have caught this"
+                        )
+                    })?
+                    .to_string();
+                let body = read_file_uri(uri, subject)?;
+                let computed = compute_script_hash(&body);
+                if computed != declared_hash {
+                    bail!(
+                        "SCRIPT_HASH_MISMATCH: scripts entry '{subject}' uri '{uri}' \
+                         resolved to a body whose content-hash is '{computed}' but the \
+                         declared hash is '{declared_hash}'. Either the external file has \
+                         drifted since the workflow was authored, or the declared hash is \
+                         wrong (SPEC §22.2)."
+                    );
+                }
+                (body, declared_hash)
+            }
+            // Both / neither — validate_scripts has already errored.
+            _ => continue,
+        };
+
+        full_library.insert(
+            subject.clone(),
+            json!({
+                "verb":      verb,
+                "lifecycle": lifecycle,
+                "body":      body,
+                "hash":      hash,
+                "source":    source,
+            }),
+        );
+    }
+
+    if let Some(workflows) = config
+        .pointer_mut("/workflows")
+        .and_then(Value::as_object_mut)
+    {
+        for def in workflows.values_mut() {
+            let Some(obj) = def.as_object_mut() else { continue };
+            let referenced = collect_referenced_script_subjects(obj);
+            if referenced.is_empty() {
+                continue;
+            }
+            let mut scoped = Map::new();
+            for subject in &referenced {
+                if let Some(entry) = full_library.get(subject) {
+                    scoped.insert(subject.clone(), entry.clone());
+                }
+            }
+            if !scoped.is_empty() {
+                obj.insert("_scriptsLibrary".into(), Value::Object(scoped));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Walk a workflow definition and collect every subject named by a
+/// `script` executor — workflow-level `onEnter`, state-level `onEnter`,
+/// and every transition's `executor`. Parallel to
+/// [`collect_referenced_subjects`] but the harvest point is
+/// `executor: { kind: script, subject: <name> }` rather than `skills: [...]`.
+fn collect_referenced_script_subjects(workflow: &Map<String, Value>) -> HashSet<String> {
+    let mut out = HashSet::new();
+    collect_script_subject_from(workflow.get("onEnter"), &mut out);
+    let Some(states) = workflow.get("states").and_then(Value::as_object) else {
+        return out;
+    };
+    for state in states.values() {
+        collect_script_subject_from(state.get("onEnter"), &mut out);
+        let Some(transitions) = state.get("transitions").and_then(Value::as_object) else {
+            continue;
+        };
+        for t in transitions.values() {
+            collect_script_subject_from(t.get("executor"), &mut out);
+        }
+    }
+    out
+}
+
+/// If `scope` is an executor block (or an action wrapping one) with
+/// `kind: script`, push its `subject` into `out`. Tolerant of either
+/// `{ kind, subject, ... }` directly or `{ executor: { kind, subject, ... } }`
+/// nesting (the onEnter shape).
+fn collect_script_subject_from(scope: Option<&Value>, out: &mut HashSet<String>) {
+    let Some(v) = scope else { return };
+    // Unwrap onEnter action wrapper.
+    let executor = v
+        .get("executor")
+        .filter(|inner| inner.is_object())
+        .unwrap_or(v);
+    if executor.get("kind").and_then(Value::as_str) == Some("script") {
+        if let Some(subj) = executor.get("subject").and_then(Value::as_str) {
+            out.insert(subj.to_string());
+        }
+    }
+}
+
+/// SPEC §22.2 — read a `file://` URI's contents. The URI must be absolute
+/// by the time this is called ([`rewrite_script_uris_to_absolute`] runs at
+/// load time). Surfaces a clear error naming the subject + path for
+/// missing-file / permission failures.
+fn read_file_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
+    let path = uri
+        .strip_prefix("file://")
+        .ok_or_else(|| anyhow!(
+            "scripts entry '{subject}' uri '{uri}' missing file:// prefix — \
+             validate_scripts should have caught this"
+        ))?;
+    std::fs::read_to_string(path).with_context(|| {
+        format!(
+            "reading scripts entry '{subject}' from {uri} (resolved path: {path})"
+        )
+    })
+}
+
+/// SPEC §22.2 — rewrite relative `file://` URIs in `scripts:` entries to
+/// absolute paths, relative to `base_dir`. Called by `load_yaml_inner`
+/// after parsing each YAML file so `resolve()` can stay path-agnostic.
+///
+/// Idempotent: an already-absolute `file:///etc/foo.sh` is left alone.
+/// Non-`file://` URIs are left alone (the validator will reject them).
+fn rewrite_script_uris_to_absolute(value: &mut Value, base_dir: &Path) {
+    let Some(scripts) = value
+        .pointer_mut("/scripts")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for entry in scripts.values_mut() {
+        let Some(obj) = entry.as_object_mut() else { continue };
+        let Some(uri_val) = obj.get_mut("uri") else { continue };
+        let Some(uri_str) = uri_val.as_str() else { continue };
+        let Some(rest) = uri_str.strip_prefix("file://") else { continue };
+        if rest.starts_with('/') {
+            // Already absolute.
+            continue;
+        }
+        let abs = base_dir.join(rest);
+        // Canonicalize when possible (cleans up `./` etc.); fall back to
+        // join result for not-yet-existing paths so the load-time
+        // file-read produces a clear NotFound rather than a canonicalize
+        // error here.
+        let final_path = abs.canonicalize().unwrap_or(abs);
+        *uri_val = Value::String(format!("file://{}", final_path.display()));
     }
 }
 

@@ -14,8 +14,8 @@ use crate::args::{
     StartArgs, SubmitArgs,
 };
 use crate::{
-    TOOL_DESCRIBE, TOOL_EXPLAIN, TOOL_GET, TOOL_HOME, TOOL_SEARCH, TOOL_SKILLS_SEARCH, TOOL_START,
-    TOOL_SUBMIT,
+    TOOL_DESCRIBE, TOOL_EXPLAIN, TOOL_GET, TOOL_HOME, TOOL_SCRIPTS_SEARCH, TOOL_SEARCH,
+    TOOL_SKILLS_SEARCH, TOOL_START, TOOL_SUBMIT,
 };
 
 pub(crate) fn parse_kind(s: &str) -> Option<DiscoveryKind> {
@@ -76,6 +76,35 @@ pub fn tool_definitions() -> Vec<Tool> {
             schema_for_args::<ExplainArgs>(&["workflowId", "transition"]),
         ),
     ]
+}
+
+/// SPEC §22 — definition for the authoring-time `gateway.scripts.search`
+/// tool. Appended to the tool list only when
+/// `FlowgateServer::with_scripts_search(true)` is configured. Mirrors the
+/// skills-search tool: returns refs only, never bodies. Filterable by
+/// verb / subject_root / source.
+pub fn scripts_search_tool_definition() -> Tool {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "verb":         { "type": "string", "description": "one of the eight closed script verbs: build, test, deploy, format, lint, install, verify, run" },
+            "subject_root": { "type": "string", "description": "first dotted segment of a subject (e.g. `build`, `test`, `ci`)" },
+            "source":       { "type": "string", "description": "provenance filter (e.g. config, cognitive-architectures@v0.1.0)" },
+            "limit":        { "type": "integer", "description": "max items (default 50, max 200)" }
+        }
+    });
+    let schema_obj: JsonObject = schema
+        .as_object()
+        .cloned()
+        .expect("scripts_search schema is an object");
+    Tool::new(
+        Cow::Borrowed(TOOL_SCRIPTS_SEARCH),
+        Cow::Borrowed(
+            "Authoring-time script search. Returns script refs filterable by verb/subject_root/source. \
+             Bodies are fetched separately via gateway.describe.",
+        ),
+        Arc::new(schema_obj),
+    )
 }
 
 /// SPEC §17.6 — definition for the authoring-time `gateway.skills.search`

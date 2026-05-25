@@ -10,6 +10,7 @@ pub mod noop;
 pub mod registry;
 pub mod registry_executor;
 pub mod rest;
+pub mod script;
 pub mod structural_analysis;
 pub mod workflow;
 
@@ -23,6 +24,7 @@ pub use noop::NoopExecutor;
 pub use registry::HashMapExecutorRegistry;
 pub use registry_executor::RegistryExecutor;
 pub use rest::{RestConnection, RestConnections, RestExecutor};
+pub use script::ScriptExecutor;
 pub use structural_analysis::{StructuralAnalysisExecutor, REQUIRED_RULES};
 pub use workflow::WorkflowExecutor;
 
@@ -65,7 +67,8 @@ pub fn default_registry_with_mcp(
         )
         .with("rest", Arc::new(RestExecutor::new(rest_connections)))
         .with("human", Arc::new(HumanExecutor::with_audit(audit)))
-        .with("noop", Arc::new(NoopExecutor));
+        .with("noop", Arc::new(NoopExecutor))
+        .with("script", Arc::new(ScriptExecutor::new()));
 
     Arc::new(registry)
 }
@@ -89,6 +92,7 @@ pub fn default_registry_with_workflow(
         .with("rest", Arc::new(RestExecutor::new(rest_connections)))
         .with("human", Arc::new(HumanExecutor::with_audit(audit.clone())))
         .with("noop", Arc::new(NoopExecutor))
+        .with("script", Arc::new(ScriptExecutor::new()))
         .with("workflow", Arc::new(WorkflowExecutor::new(runtime, audit)));
 
     Arc::new(registry)

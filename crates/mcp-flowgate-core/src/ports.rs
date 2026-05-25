@@ -113,3 +113,24 @@ pub trait GuidanceAcknowledgmentStore: Send + Sync {
         subject: &str,
     ) -> anyhow::Result<Option<String>>;
 }
+
+/// SPEC §22 — same shape as [`GuidanceAcknowledgmentStore`] but tracks
+/// SCRIPT subject acknowledgments separately. Distinct trait so a
+/// gateway can wire one without the other (e.g. authoring-time gateway
+/// gets both; runtime gateway gets only the script one for destructive-
+/// script guards). Hash-flip invalidation is the same semantic.
+#[async_trait]
+pub trait ScriptAcknowledgmentStore: Send + Sync {
+    async fn record(
+        &self,
+        workflow_id: &str,
+        subject: &str,
+        body_hash: &str,
+    ) -> anyhow::Result<()>;
+
+    async fn last_acknowledged_hash(
+        &self,
+        workflow_id: &str,
+        subject: &str,
+    ) -> anyhow::Result<Option<String>>;
+}
