@@ -427,6 +427,104 @@ become governable, replayable, and cheap.
 
 ---
 
+## Curated scripts: deterministic actions, hash-pinned
+
+Skills tell the LLM what to think. Scripts tell the workflow what to
+do — deterministically, with no model involvement. A `scripts:` block
+declares a library of curated script bodies that workflows invoke
+through the `script` executor:
+
+```yaml
+scripts:
+  build.cargo.release:
+    verb: build
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo build --release --locked "$@"
+
+workflows:
+  ci:
+    states:
+      building:
+        transitions:
+          done:
+            target: testing
+            executor: { kind: script, subject: build.cargo.release }
+```
+
+Each script is **content-identified by hash** — workflows reference
+them by subject, and the runtime materializes the body from the
+workflow's pinned snapshot (SPEC §8.2 invariant). Editing the script
+body after `workflow.start` is invisible to in-flight instances. An
+audit replay can pull the exact body that ran by hash from cold
+storage.
+
+External bodies work too: a script can declare `uri: file://...` +
+`hash: sha256:...` to source from disk, with load-time hash
+verification. Hash drift fails the load with `SCRIPT_HASH_MISMATCH`.
+
+For destructive scripts (deploys, migrations), pair the `script`
+executor with a `script_acknowledged` guard — the workflow refuses to
+run until an operator has called `gateway.describe` on the current
+body (review-before-execute, hash-flip-invalidated).
+
+The curated library lives in the sibling
+[`cognitive-architectures`](https://github.com/matt-cochran/cognitive-architectures)
+repo with its own `scripts/` directory — copy-paste-ready scripts for
+the common verbs (build/test/deploy/format/lint/install/verify/run).
+
+## The TUI agent — commodity models outperform frontier
+
+The `flowgate-tui` binary (also installed as `flowgate`) walks a
+workflow end-to-end through a **deterministic graph-walking interpreter**.
+Where conventional agent loops let one orchestrator-LLM accumulate the
+full conversation, the interpreter spawns **isolated sub-agent sessions**
+per workflow state. Each sub-agent sees only its scoped guidance + the
+blackboard at its phase — no accumulated context from previous phases.
+
+```bash
+flowgate walk \
+  --workflow swe_agent \
+  --input '{"issue": "Add timeout to RegistryExecutor"}' \
+  --agent planning=anthropic/claude-sonnet-4 \
+  --agent retrieval=openrouter/qwen-2.5-coder-7b \
+  --agent editing=openrouter/qwen-2.5-coder-7b \
+  --agent critique=anthropic/claude-opus-4 \
+  --max-sub-agent-seconds 120 \
+  --max-sub-agent-steps 20
+```
+
+What the interpreter does:
+
+- **States with `delegate:`** spawn an isolated session running the
+  named agent config. Returns when the sub-agent calls
+  `workflow.submit` (advancing the workflow) or hits its timeout /
+  step limit.
+- **States with a single non-deterministic actionable link** auto-advance
+  without any LLM involvement. No tokens spent on decisions that
+  guards can make.
+- **States with multiple links remaining** pick the first
+  non-`escalate` link. The critic + retry cycle on the next workflow
+  iteration corrects wrong picks automatically.
+- **Sub-agent timeouts** retry up to 3 times, then submit the
+  `escalate` transition if one is declared, else propagate.
+
+`--max-sub-agent-seconds` and `--max-sub-agent-steps` are **required by
+design** — an unbounded sub-agent is a foot-gun. The TUI rejects
+startup if either is missing.
+
+The result: a Qwen 7B editor directed by Sonnet-grade planning and
+reviewed by an Opus-grade critic costs a fraction of running Opus for
+the whole session — and produces better results because each model does
+only the task it's best at, with only the context it needs.
+
+See [`docs/TUI-AGENT.md`](docs/TUI-AGENT.md) for the full algorithm,
+sub-agent lifecycle, and the cognitive-architecture thesis.
+
+---
+
 ## Is this for you?
 
 **Use it when** you have multiple tools and any of these matter:

@@ -28,6 +28,10 @@ these without pinning a specific version.
 | Audit event taxonomy | Event type names and the shape of their payload. New event types may appear; existing ones don't change shape. |
 | `WorkflowStore` trait | Implementations may be added; the trait's method signatures won't change incompatibly. |
 | `Executor` and `ExecutorRegistry` traits | As above. |
+| Intent-layer invariant (SPEC §23.6) | Verb taxonomy lives only on `skills` and `scripts`. The access layer (`connections`, `capabilities`, `executors`) is kind-typed. Workflows compose. Audit events describe. This is an architecture rule, not an implementation choice — breaking it requires a SPEC §23 amendment, not just an API deprecation. |
+| Closed cognitive verb enum (SPEC §5.4.1) | 10 verbs as of v0.3: `triage`, `diagnose`, `plan`, `implement`, `review`, `refactor`, `explain`, `compose`, `research`, `summarize`. Adding a verb requires SPEC §23.7 amendment criteria. Removing one requires a deprecation cycle. |
+| Closed script verb enum (SPEC §22.3) | 12 verbs as of v0.3: `build`, `test`, `deploy`, `format`, `lint`, `install`, `verify`, `run`, `inspect`, `search`, `fetch`, `audit`. Same amendment policy as cognitive verbs. |
+| SPEC ↔ Rust enum drift detection | The `spec_enum_drift.rs` test asserts byte-equality between SPEC verb/root tables, JSON schema enums, and Rust closed enums. Drift fails build. Any change to the verb/root vocabularies must propagate to all three sources simultaneously. |
 
 ## Tier 2 — Deprecation cycle
 
@@ -47,6 +51,14 @@ we believe in but want room to refine based on real use.
 | Link-filter semantics | The `byGuards` filter's exact behaviour may be refined. |
 | Stress-test scenarios | Test scenarios in `crates/mcp-flowgate-core/tests/stress_scenarios.rs` — they document concurrency properties we commit to, but the exact scenario list may grow or shrink. |
 | Examples | `examples/*` — illustrative and dogfooded, but the exact directory layout and filenames may change. |
+| `delegate` on workflow states (SPEC §21) | Pass-through string surfaced on every workflow response. The shape (non-empty string) and the response surfacing are stable; the set of consumers (TUI today; future harnesses) may grow. |
+| `scripts:` top-level block (SPEC §22) | Script library shape (verb / lifecycle / body \| uri+hash / source) is stable. The closed verb enum (12 values as of v0.3) is committed; adding verbs requires a spec amendment per SPEC §23.7. The blessed-script-roots set (15 values) may grow with the same strict-vs-lenient flag treatment as skill roots. |
+| `script` executor kind (SPEC §22.6) | Subject lookup, temp-file materialization (chmod 0700), shebang-or-bash invocation, `script_output` Evidence emission with body hash. Output schema (`exitCode`/`success`/`stdout`/`stderr`/`json`/`scriptSubject`/`scriptHash`) is committed. Transition record's executor descriptor carries `subject`+`hash` for script executors (additive, optional, serde-`skip_serializing_if`-bypassed for non-script kinds). |
+| `gateway.scripts.search` (SPEC §22.7) | Authoring-time discovery tool. Refs-only response (verb / subject / source); progressive disclosure invariant committed. Filter set may grow. |
+| `script_acknowledged` guard (SPEC §22.8) | Hash-flip-invalidated review-before-execute gate. Distinct keyspace from `guidance_acknowledged`. |
+| `file://` URI scheme for script bodies | v1 only scheme. `https://` and `git+https://...@<ref>` are planned for v2 and will be ADDITIVE (file:// stays valid). |
+| TUI interpreter behavior | Sub-agent spawn / timeout / retry / escalation policies. The algorithm shape is stable; the retry budget (3) and the multi-link tiebreaker (first non-`escalate`) may be refined based on usage. |
+| Agent config CLI format | `--agent name=provider/model` syntax. v2 will add TOML config files; the CLI form stays valid for one minor-version cycle minimum after that lands. |
 
 ## Tier 3 — Internal
 

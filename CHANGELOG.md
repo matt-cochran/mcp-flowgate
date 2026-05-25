@@ -8,6 +8,171 @@ on the cargo crate version. The **config schema** is versioned
 separately — see [`STABILITY.md`](STABILITY.md) for what is and isn't
 covered by a stability commitment.
 
+## [Unreleased]
+
+## [0.3.0] - 2026-05-25
+
+A substantial additive release adding the scripts surface (SPEC §22),
+the verb taxonomy expansion (skills 8 → 10, scripts 8 → 12), the
+intent-layer architectural invariant (SPEC §23), authoring preferences
+for LLM-driven script generation, and SPEC ↔ Rust drift detection.
+
+Three changelog sections below cover the three feature areas, in
+reverse order of landing (authoring → verb expansion → scripts) so the
+most-recent context is on top.
+
+### Added — Authoring preferences (SPEC §23.8)
+
+- **`flowgate.authoring.preferred_script_language`** config — advisory
+  signal for LLM-driven authoring workflows that generate new scripts.
+  Operator declares their preferred runtime (`bash`, `python3`,
+  `powershell`, `node`, anything that makes sense for their env).
+  Value is free-form, not a closed enum.
+- **Template substitution gains `$.flowgate.authoring.*` root.**
+  Authoring skills can reference `{{$.flowgate.authoring.preferred_script_language}}`
+  in their body; the resolver substitutes the operator's preference at
+  render time. Missing preference → standard `(unset)` stub (same shape
+  as other unresolved templates).
+- **Snapshot stamping**: `flowgate.authoring` is copied onto each
+  workflow's snapshot as `_authoringPrefs` at config-resolve time. SPEC
+  §8.2 invariant holds — in-flight authoring workflows see the
+  preferences that existed at `workflow.start`, not whatever the live
+  config currently says.
+- **Validation** at config load: `preferred_script_language` must be a
+  non-empty string when present (`INVALID_AUTHORING_PREFERENCE` error
+  code names the offending field). Absence is fine — preferences are
+  optional.
+
+### Added — Verb taxonomy expansion + intent-layer invariant (SPEC §23)
+
+- **Two new cognitive verbs** (SPEC §5.4.1, closed enum 8 → 10):
+  `research` (gather context from sources — web, local, docs) and
+  `summarize` (condense). Both close the reconnaissance/condensation
+  gap the original eight verbs forced into awkward fits with
+  `diagnose`/`explain`.
+- **Four new script verbs** (SPEC §22.3, closed enum 8 → 12):
+  `inspect` (read-only local introspection), `search` (content
+  discovery), `fetch` (retrieve known resource), `audit` (graded
+  compliance/security/quality scan). All previously misused `run` or
+  `lint`.
+- **Six new blessed subject roots**: `research`, `summarize` (skills);
+  `inspect`, `search`, `fetch`, `audit` (scripts). Verb-mirror pattern
+  preserved.
+- **SPEC §23 — Intent-layer invariant** locks the architectural rule:
+  *verb taxonomy lives only on skills and scripts. The access layer
+  (connections / capabilities / executors) is kind-typed. Workflows
+  compose. Audit events describe. No surface gets two of these
+  classifications at once.* Includes §23.7 amendment criterion for
+  future closed-enum additions: documented gap, distinct semantic
+  category, ≥2 example subjects.
+- **SPEC ↔ Rust drift-detection test** (`spec_enum_drift.rs`) parses
+  SPEC §5.4.1/§22.3/§22.4 verb and root tables, parses JSON schema
+  enums, and asserts byte-equality with `Verb::ALL_TOKENS` /
+  `ScriptVerb::ALL_TOKENS` / `BLESSED_*_ROOTS`. Drift between SPEC and
+  Rust now fails build, naming the diverged token.
+- **Tightened skill verb JSON schema** from free-form pattern to
+  closed enum (the scripts schema was already closed). Schema-checking
+  tools (jsonschema linters, IDEs) now catch unknown verbs at author
+  time instead of waiting for config-load.
+
+### Added — Audit descriptor enrichment for scripts (SPEC §22.6)
+
+- **Transition record executor descriptor** now carries `subject` and
+  `hash` fields when the executor is `kind: script`. Closes a gap from
+  the v0.2 scripts surface plan: `scriptSubject`/`scriptHash` were
+  landing only in the executor output JSON. Replay-by-hash tooling can
+  now read the body identity directly from the descriptor.
+- **Round-trip preserved for non-script executors**: cli/mcp/rest/noop
+  descriptors stay at the legacy `{kind, ok, durationMs}` shape — the
+  new fields are additive + serde `skip_serializing_if = "Option::is_none"`,
+  so legacy audit consumers see no schema noise.
+
+### Added — Scripts surface (SPEC §22)
+
+- **Top-level `scripts:` block** — curated, hash-pinned script library
+  alongside `skills:`. Each entry has `verb` (closed enum:
+  build/test/deploy/format/lint/install/verify/run), `lifecycle`,
+  optional `source`, and either inline `body:` OR external
+  `uri + hash`. v1 supports `file://` URIs only; `https://` and
+  `git+https://...@<ref>` deferred to v2.
+- **`script` executor kind** — materializes the snapshot's stamped
+  body to a `chmod 0700` temp file, execs via shebang (or bash
+  fallback). Captures stdout/stderr/exit; emits `script_output`
+  Evidence with the body hash. Output JSON carries `scriptSubject` +
+  `scriptHash` for audit replay.
+- **`gateway.scripts.search`** (SPEC §22.7) — authoring-time tool
+  returning script refs filterable by verb/subject_root/source.
+  Progressive disclosure: bodies are fetched separately via
+  `gateway.describe`. Advertised behind
+  `FlowgateServer::with_scripts_search(true)`.
+- **`script_acknowledged` guard** — review-before-execute gate for
+  destructive scripts. Passes iff `gateway.describe` was called for
+  the subject AND the recorded body hash matches the current snapshot.
+  Hash flip invalidates the prior ack. Backed by
+  `ScriptAcknowledgmentStore` trait + `InMemoryScriptAcknowledgmentStore`.
+- **8 new error codes** (SPEC §22.9): `INVALID_SCRIPT_VERB`,
+  `MISSING_SCRIPT_VERB`, `INVALID_SCRIPT_SUBJECT_ROOT`,
+  `EMPTY_SCRIPT_SUBJECT`, `MISSING_SCRIPT_LIFECYCLE`,
+  `INVALID_SCRIPT_LIFECYCLE`, `SCRIPT_BODY_SOURCE_AMBIGUOUS`,
+  `MISSING_SCRIPT_HASH`, `UNSUPPORTED_SCRIPT_URI_SCHEME`,
+  `INVALID_SCRIPT_HASH_FORMAT`, `SCRIPT_HASH_MISMATCH`,
+  `SCRIPT_NOT_IN_SNAPSHOT`, `INVALID_SCRIPT_INVOCATION`,
+  `SCRIPT_SUBJECT_UNKNOWN`.
+- **`FLOWGATE_SCRIPT_SUBJECT` + `FLOWGATE_SCRIPT_HASH` env vars**
+  exposed to script bodies so scripts can self-identify in logs/metrics
+  without parsing argv.
+- **Stricter normalization for script hashing** —
+  `normalize_for_script_hash` preserves internal whitespace exactly
+  (collapses only trailing newlines), distinct from
+  `normalize_for_hash` (skills, whitespace-collapsing). Shell scripts
+  treat whitespace as load-bearing; the script hash respects that.
+
+### Added — TUI runtime + sub-agent orchestration (SPEC §21)
+
+- **`delegate` field on workflow states** (SPEC §21). Optional non-empty
+  string surfaced verbatim at the top level of every workflow response.
+  The gateway treats it as pass-through — never reads it, never branches
+  on it, never validates against any registry. The sole consumer is the
+  TUI interpreter. Configs without `delegate` are unchanged.
+- **`INVALID_DELEGATE` error code.** Raised at config load when a state
+  declares `delegate` as an empty string or non-string. Names the
+  offending workflow + state in the message.
+- **TUI deterministic interpreter** (`crates/mcp-flowgate-tui/src/interpreter.rs`).
+  `walk_workflow` drives a workflow to completion: auto-advances states
+  whose only actionable link is non-deterministic, picks the first
+  non-`escalate` link when several remain, and hands off to
+  `SubAgentSpawner` for `delegate` states. Retry budget of 3 on
+  sub-agent timeouts; submits `escalate` transition if declared, else
+  propagates.
+- **TUI sub-agent spawner abstraction** (`SubAgentSpawner` trait + stub
+  `AetherSubAgentSpawner` impl). The trait is the integration seam for
+  Aether headless sessions; the impl currently surfaces
+  `SubAgentTimeout` so the integration with `aether_cli::headless::run_headless`
+  is observably scoped to a follow-on commit while the interpreter
+  itself ships fully tested via the scripted-double pattern.
+- **`flowgate walk` CLI subcommand** with required-no-default poka-yoke
+  on `--max-sub-agent-seconds` and `--max-sub-agent-steps`. Both
+  rejected at startup if missing; rationale: an unbounded sub-agent is a
+  foot-gun (orphan tasks, runaway cost, looping critic).
+- **`--agent name=provider/model` CLI flag** (repeated) for wiring
+  sub-agent configurations. Resolved against `delegate` field at spawn
+  time; unknown name → `InterpreterError::UnknownAgent` naming the
+  state + agent.
+- **examples/swe-agent.yaml** — added `delegate:` fields on the four
+  model-driven states (planning → planning-agent, retrieving →
+  retrieval-agent, editing → editing-agent, critiquing → critique-agent).
+  `verifying` (deterministic executor) and `human_review` (actor:human)
+  intentionally do not delegate.
+
+### Documentation
+
+- New `docs/TUI-AGENT.md` covers the interpreter algorithm, sub-agent
+  lifecycle, timeout poka-yoke rationale, and the cognitive-architecture
+  rationale for "commodity models directed by precise architecture
+  outperform frontier models without structure."
+- README adds a `## The TUI agent — commodity models outperform frontier`
+  section after the "What the model sees" walkthrough.
+
 ## [0.2.0] - 2026-05-25
 
 A substantial additive release. Adds the skills / typed-blackboard /

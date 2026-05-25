@@ -1,0 +1,114 @@
+---
+title: "Cognitive verbs and subject namespaces"
+description: "The closed enum of 10 verbs, the 15 blessed subject roots, and how strict_namespacing controls enforcement."
+---
+
+Every skill in mcp-flowgate carries a `verb` (one of ten) and a `subject` (a dotted namespace starting with a blessed root). These aren't free-form strings. They're a closed vocabulary, enforced at config load. This page lists the verbs, the blessed roots, and the failure modes.
+
+## The ten verbs
+
+`verb` is a closed enum — ten cognitive operations defined in SPEC §5.4.1. Unknown verbs fail config load with `INVALID_VERB`. There is no escape hatch, no `Other(String)`, no opt-in extension. Adding a verb requires a spec amendment (SPEC §23.7 sets the criterion).
+
+| Verb | Cognitive posture |
+|---|---|
+| `triage` | Classify, prioritize, route. The "what kind of problem is this and who handles it" call. |
+| `diagnose` | Find root cause. Not fix — find. Symptom-to-cause work. |
+| `plan` | Design the approach before acting. ADRs, RFCs, sprint breakdowns. |
+| `implement` | Produce or generate the artifact. Code, config, content, the actual thing. |
+| `review` | Evaluate against criteria. Adversarial reads, checklists, rubrics. |
+| `refactor` | Restructure while preserving behavior. Same outputs, better shape. |
+| `explain` | Build understanding. Self-explain to think, or teach others. |
+| `compose` | Assemble parts into a whole. Integration, glue, end-to-end wiring. |
+| `research` *(v0.3)* | Gather context from sources — web, local, docs, prior decisions. Open-ended, before you know what you're looking for. |
+| `summarize` *(v0.3)* | Condense. Compress what you already understand into a tighter form for the next reader. |
+
+These are **cognitive postures**, not methodologies. TDD, spec-driven, design-by-contract — those are workflow shapes that sequence the ten verbs. Modifiers like "speedrun" or "code-golf" belong in the body of a skill, not in the verb metadata.
+
+### Picking the right verb
+
+The closest-neighbor confusions worth disambiguating:
+
+| When you're tempted to use… | Use this instead if… |
+|---|---|
+| `diagnose` | …the work is open-ended context-gathering ("what do we know about X?"), not a "why is X broken?" investigation → **`research`** |
+| `triage` | …you're researching to inform the classification (not already classifying) → **`research`** |
+| `explain` | …you're compressing rather than expanding → **`summarize`** |
+| `compose` | …you're assembling existing artifacts into a deliverable (compose), not just summarizing what was done (summarize) — both can be right depending on what the output is |
+
+The model reads a skill ref as `"{verb} {subject}"` — `review review.style.house-voice` — and fetches the body with `gateway.describe` only if relevant.
+
+## Why a closed enum?
+
+Closed enums let `gateway.search` filter by `verb=review` and get an exact, deterministic set. Open vocabulary would force fuzzy matching ("is `evaluate` the same as `review`?") and synonym tables, and the synonym table is itself a config the operator has to maintain. Closed forces authors to pick: this skill is a `review`, not an `evaluate`. The discipline is the point.
+
+It also gives the model a stable cognitive vocabulary across every architecture it encounters. The same eight verbs, everywhere. No re-learning per project.
+
+## Subject namespaces
+
+`subject` is a dotted namespace. Format: lowercase kebab-case, at least two segments, no whitespace. The schema pattern is `^[a-z][a-z0-9-]+(\.[a-z][a-z0-9-]+)+$`. An empty subject is rejected with `EMPTY_SUBJECT`.
+
+The **first segment** must be a blessed root. Segments below the root are free-form — name them however makes sense for your team.
+
+Examples of well-formed subjects:
+
+- `review.code.adversarial`
+- `review.style.house-voice`
+- `plan.specify.change-request`
+- `diagnose.codebase.search`
+- `implement.edit.constrained`
+- `deploy.safety.checklist`
+
+The 15 blessed roots, from `BLESSED_SUBJECT_ROOTS` in `crates/mcp-flowgate-core/src/discovery.rs`:
+
+**Domain-themed roots** (group guidance by topic, regardless of which verb fits):
+
+- `authoring` — composing workflows or skills
+- `debug` — diagnosis, triage, reproduction
+- `deploy` — release-time guidance
+- `import` — external-source ingest
+- `lifecycle` — drafting, completing, archiving
+
+**Verb-mirror roots** (group guidance by cognitive operation — one per verb):
+
+- `triage`
+- `diagnose`
+- `plan` (also a verb)
+- `implement`
+- `review` (also a verb)
+- `refactor`
+- `explain`
+- `compose`
+- `research` *(v0.3)*
+- `summarize` *(v0.3)*
+
+`plan` and `review` appear in both categories; they're listed once each. Total: 15 roots.
+
+The dual structure lets you organize either way. `review.code.adversarial` sits in the verb-mirror tree (everything that primes a `review` posture). `debug.reproduction` sits in the domain tree (everything about debugging, whatever verb it uses). Pick whichever clusters better for your library.
+
+## strict_namespacing
+
+The `strict_namespacing` flag, declared under the top-level `flowgate:` key (SPEC §5.4.2), controls what happens when a subject's first segment isn't a blessed root.
+
+```yaml
+flowgate:
+  strict_namespacing: true   # default
+```
+
+- **`true` (default)** — unblessed roots fail config load with `INVALID_SUBJECT_ROOT { subject, blessed_roots: [...] }`. The error payload includes the full blessed list so the author can fix it.
+- **`false`** — unblessed roots surface a warning diagnostic in `startup_diagnostics()` and via `gateway.diagnostics`, but config loads. The warning includes the Levenshtein-closest blessed root as a suggested alternative ("did you mean `review`?").
+
+The default is strict because the blessed list exists for a reason: it keeps subjects clusterable in search, predictable in audit, and grep-able across architectures. Loose mode is a migration aid — flip it `false` while you're ingesting external skill libraries, then flip it back once you've renamed.
+
+## Error codes
+
+The codes you'll see in `check` output or at config-load time, from SPEC §13:
+
+| Code | When it fires |
+|---|---|
+| `INVALID_VERB` | `verb` field is not one of the eight closed verbs. Payload includes `allowed`. |
+| `INVALID_SUBJECT_ROOT` | First segment of `subject` is not blessed. Raised when `strict_namespacing: true`. Payload includes `blessed_roots`. |
+| `EMPTY_SUBJECT` | `subject` string is empty after trim. |
+| `UNBLESSED_SUBJECT_ROOT` | Same condition as `INVALID_SUBJECT_ROOT`, but emitted as a warning when `strict_namespacing: false`. |
+| `HASH_MISMATCH` | The fragment's stored `hash` doesn't match the recomputed hash of the normalized body. Payload includes `stored` and `computed`. |
+| `VERB_MAPPED` | Info-level. An ingested external skill used a verb synonym (e.g. `fix` → `implement`); the mapping fired cleanly. |
+| `INGEST_INVALID_VERB` | An ingested external skill used a verb that's neither in the closed eight nor in the synonym table. The skill is rejected. |

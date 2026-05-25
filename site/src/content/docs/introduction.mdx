@@ -66,3 +66,7 @@ You wire in MCP servers, CLI commands, and REST APIs. mcp-flowgate handles disco
 If you have one MCP server with a handful of tools, no governance requirements, and token costs aren't a concern -- you don't need this. Direct MCP works fine at that scale.
 
 mcp-flowgate earns its keep when your tool count grows, when you need control over what the model can do, or when you need an audit trail of what it did. If none of those apply today, bookmark this and come back when they do.
+
+## Beyond tools: cognitive architectures
+
+Tools are the bottom of the stack. Above them sit **skills** (mental models the agent loads on demand), **workflows** (state machines that sequence which skill to load when), and **cognitive architectures** (the whole bundle — skills, workflow, agent configs, connections). The same gateway that governs your tool list also surfaces skills and runs workflows. See [Skills, workflows, and cognitive architectures](/guides/skills-and-architectures/) for the layered model.

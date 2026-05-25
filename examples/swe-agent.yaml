@@ -112,6 +112,7 @@ workflows:
             executor: { kind: noop }
 
       planning:
+        delegate: planning-agent
         goal: Normalise the change request into a typed problem
         skills:
           - plan.specify.change-request
@@ -132,6 +133,7 @@ workflows:
               risk:               "$.arguments.risk"
 
       retrieving:
+        delegate: retrieval-agent
         goal: Assemble a precise evidence pack
         skills:
           - diagnose.codebase.search
@@ -146,6 +148,7 @@ workflows:
               evidencePack: "$.output"
 
       editing:
+        delegate: editing-agent
         goal: Produce constrained edit operations
         skills:
           - implement.edit.constrained
@@ -172,6 +175,7 @@ workflows:
               verifierPassed: "$.output.passed"
 
       critiquing:
+        delegate: critique-agent
         goal: Adversarial review of the patch
         skills:
           - review.code.adversarial

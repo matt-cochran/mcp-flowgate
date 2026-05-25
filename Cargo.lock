@@ -3458,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3478,7 +3478,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3503,7 +3503,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-executors"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3525,7 +3525,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-mcp-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3544,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-schema"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3559,18 +3559,20 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-tui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
  "aether-tui",
  "aether-wisp",
  "anyhow",
+ "async-trait",
  "clap",
  "crossterm",
  "dirs 5.0.1",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",

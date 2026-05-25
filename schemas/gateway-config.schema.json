@@ -39,6 +39,12 @@
       "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
       "default": {},
       "description": "Guidance fragment library. Each entry is keyed by its `subject` (the gateway.describe lookup handle) and carries a space-free `verb` + a static markdown `body`. Subjects and verbs are constrained at config load to lowercase kebab — malformed descriptors are unrepresentable (SPEC §5.4)."
+    },
+    "scripts": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/scriptFragment" },
+      "default": {},
+      "description": "Curated script library (SPEC §22). Peer to `skills`: where skills tell an LLM what to think, scripts tell a workflow what to do deterministically. Each entry has a `verb` from the closed ScriptVerb set (build/test/deploy/format/lint/install/verify/run), a `lifecycle`, and either an inline `body` OR an external `uri` + required `hash`. Invoked via the `script` executor kind."
     }
   },
   "$defs": {
@@ -250,8 +256,11 @@
       "properties": {
         "verb": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9-]*$",
-          "description": "Space-free mode token — e.g. `apply`, `check`, `avoid`. Surfaced alongside the subject so the model reads the ref as `\"{verb} {subject}\"`."
+          "enum": [
+            "triage", "diagnose", "plan", "implement", "review", "refactor", "explain", "compose",
+            "research", "summarize"
+          ],
+          "description": "Cognitive verb — closed enum per SPEC §5.4.1. Surfaced alongside the subject so the model reads the ref as `\"{verb} {subject}\"`. Adding a verb is a spec amendment (SPEC §23.7)."
         },
         "body": {
           "type": "string",
@@ -264,6 +273,54 @@
       "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
       "default": [],
       "description": "References to entries in the top-level `skills:` library. Surfaced in the response's `guidance.refs` whenever this scope is active."
+    },
+    "scriptFragment": {
+      "type": "object",
+      "required": ["verb", "lifecycle"],
+      "additionalProperties": false,
+      "description": "SPEC §22 — a curated script. Either inline `body` OR external `uri`+`hash` (XOR enforced at config load).",
+      "properties": {
+        "verb": {
+          "type": "string",
+          "enum": [
+            "build", "test", "deploy", "format", "lint", "install", "verify", "run",
+            "inspect", "search", "fetch", "audit"
+          ],
+          "description": "Action verb — what category of operation this script performs. Closed enum per SPEC §22.3."
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": ["experimental", "stable", "deprecated"],
+          "description": "Maturity marker. Mirrors skill lifecycle semantics."
+        },
+        "source": {
+          "type": "string",
+          "description": "Provenance. Examples: `cognitive-architectures@v0.1.0`, `<repo>/scripts/local`."
+        },
+        "body": {
+          "type": "string",
+          "description": "Inline script body (literal text). Mutually exclusive with `uri`. Hash is computed at load time; if `hash` is also provided, mismatch is SCRIPT_HASH_MISMATCH."
+        },
+        "uri": {
+          "type": "string",
+          "description": "External script body location. v1 supports `file://` only (resolved relative to the config file). `hash` is required when `uri` is set."
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Content-identity hash: `sha256:` + 64 lowercase hex chars. Required when `uri` is set; optional when `body` is inline (computed otherwise)."
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["body"],
+          "not": { "required": ["uri"] }
+        },
+        {
+          "required": ["uri", "hash"],
+          "not": { "required": ["body"] }
+        }
+      ]
     },
     "workflowDefinition": {
       "type": "object",
@@ -358,6 +415,11 @@
           "type": "string",
           "description": "Behavioral instructions for the LLM in this phase. Returned in the workflow response as guidance."
         },
+        "delegate": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent config name for sub-agent delegation. Pass-through field — surfaced verbatim at the top level of every workflow response. The TUI interpreter spawns an isolated sub-agent session using this name (resolved against `--agent name=provider/model` CLI args). The gateway itself never reads or validates the name."
+        },
         "terminal": { "type": "boolean", "default": false },
         "onEnter": { "$ref": "#/$defs/action" },
         "skills": { "$ref": "#/$defs/skillRefs" },
@@ -446,10 +508,14 @@
       "properties": {
         "kind": {
           "type": "string",
-          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop"]
+          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop", "script"]
         },
         "connection": { "type": "string" },
         "capability": { "type": "string" },
+        "subject": {
+          "type": "string",
+          "description": "Script subject (SPEC §22) when `kind: script`. Names a curated entry in the top-level `scripts:` block; the runtime materializes the body from the workflow's pinned snapshot at execute time."
+        },
         "idempotencyKey": {
           "oneOf": [
             { "type": "boolean" },

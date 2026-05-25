@@ -505,6 +505,98 @@ Add under Tier 2:
 
 Document `delegate` pass-through semantics.
 
+### Phase 5: Cognitive architectures library — `cognitive-architectures` repo
+
+A sibling open-source repository that serves as the curated library of
+Flowgate configurations — skills, workflows, agent configs, and connection
+definitions. This is the adoption mechanism: the collection of proven
+cognitive architectures that operators copy-paste to compose their own
+governed agent systems.
+
+Relationship to `mattpocock/skills`:
+
+| mattpocock/skills | cognitive-architectures |
+|---|---|
+| Static markdown files | Flowgate YAML — skills, workflows, connections |
+| No runtime semantics | Structured: verb, lifecycle, hash, subject namespace |
+| Model reads raw text | Gateway surfaces via HATEOAS; hash-invalidated cache |
+| One mental model per file | Skills reference each other; workflows compose skills |
+
+The cognitive architecture thesis, grounded in RESEARCH.md:
+
+> A cheap or open-weight model, directed by a precise cognitive architecture
+> and governed by a deterministic harness, can match or beat a frontier model
+> that operates without structure.
+
+Each architecture encodes: what to think about (guidance scoped to one of the
+8 cognitive verbs), when to think it (workflow states in sequence), how to
+enforce it (guards + blackboard + deterministic executors), and how to audit
+it (transition records).
+
+The `ingest` executor (SPEC §19) adapts mattpocock-style `.claude/skills/*.md`
+into Flowgate fragments, making `cognitive-architectures` a superset — it can
+both ship original Flowgate-native architectures and ingest/adopt the best of
+what exists in the broader skills ecosystem, wrapping them in governance.
+
+#### 5.1 Repository structure
+
+```
+cognitive-architectures/
+  README.md
+  skills/                        # Reusable guidance fragments (Flowgate format)
+    plan.specify.change-request.yaml
+    diagnose.codebase.search.yaml
+    implement.edit.constrained.yaml
+    review.code.adversarial.yaml
+    review.code.final-approval.yaml
+    deploy.safety.checklist.yaml
+    debug.reproduction.yaml
+    triage.issue.yaml
+    compose.integration.yaml
+  workflows/                     # Complete governed workflow definitions
+    swe-agent.yaml
+    pr-review.yaml
+    deploy-pipeline.yaml
+    tdd.yaml
+    triage-router.yaml
+    content-publish.yaml
+  agents/                        # Reference agent configs
+    planning-agent.toml
+    retrieval-agent.toml
+    editing-agent.toml
+    critique-agent.toml
+    thin-llm.toml
+  connections/                   # Common connection definitions
+    structureos.yaml
+    github-mcp.yaml
+    verifier-harness.yaml
+    codebase-graph.yaml
+    constrained-edit.yaml
+  examples/                      # End-to-end gateway configs composing everything
+    full-swe-pipeline.yaml
+    review-only.yaml
+    deploy-with-governance.yaml
+```
+
+#### 5.2 Execution order
+
+After Phase 4 (Documentation):
+
+5a. **Create `cognitive-architectures` repo** with README positioning the
+    cognitive architecture thesis and linking to RESEARCH.md
+5b. **Migrate the 4 skill fragments from Phase 3** into `skills/` as
+    standalone YAML files
+5c. **Add 5 additional skills** covering remaining RESEARCH.md roles:
+    `review.code.final-approval`, `deploy.safety.checklist`,
+    `debug.reproduction`, `triage.issue`, `compose.integration`
+5d. **Add 5 additional workflows** beyond swe-agent: `pr-review.yaml`,
+    `deploy-pipeline.yaml`, `tdd.yaml`, `triage-router.yaml`,
+    `content-publish.yaml`
+5e. **Add README-driven instructions** for how to ingest mattpocock-style
+    skills into the Flowgate format via the `ingest` executor
+5f. **Add reference agent configs** showing the tier structure for
+    planning/retrieval/editing/critique agents
+
 ---
 
 ## Sequential implementation order
@@ -535,7 +627,17 @@ Document `delegate` pass-through semantics.
 4. **Documentation** (Phase 4 — ~2 hours)
    - CHANGELOG, README, TUI-AGENT.md, DEVELOPMENT.md, STABILITY.md
 
-5. **Cleanup**
+5. **Cognitive architectures library** (Phase 5 — ~3 hours)
+   - Create `cognitive-architectures` repo with README
+   - Migrate Phase 3 skills + add 5 more (9 total)
+   - Add 5 additional workflows (6 total)
+   - Add reference agent configs and connection definitions
+   - Write README: cognitive architecture thesis, usage instructions,
+     mattpocock ingest path
+   - Add `examples/` composing skills + workflows + connections into
+     copy-paste gateway configs
+
+6. **Cleanup**
    - Delete `SPEC_RESEARCH_GAPS.md` (superseded by this WIP and the
      updated README's coding-agent recipe section)
 

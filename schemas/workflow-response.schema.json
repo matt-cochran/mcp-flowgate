@@ -29,6 +29,11 @@
       "default": [],
       "description": "When deterministic chaining occurred, records each intermediate state the workflow traversed automatically."
     },
+    "delegate": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pass-through agent-config name (SPEC §21). When present, the TUI interpreter spawns an isolated sub-agent session with this name to drive the current state. The gateway itself never reads or branches on this field — it surfaces whatever was declared on the active state's `delegate` key."
+    },
     "guidance": {
       "type": "object",
       "additionalProperties": false,

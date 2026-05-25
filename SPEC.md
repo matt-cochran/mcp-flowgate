@@ -168,24 +168,27 @@ on demand, via `gateway.describe`.
 
 #### 5.4.1 Closed `verb` vocabulary (poka-yoke)
 
-`verb` is a **closed enum** of eight cognitive operations. Unknown verbs fail
+`verb` is a **closed enum** of ten cognitive operations. Unknown verbs fail
 config-load with `INVALID_VERB { verb, allowed: [...] }`. There is no escape
 hatch — no `Other(String)` variant, no opt-in extension. Adding a verb requires
-a deliberate spec amendment, not authoring convention.
+a deliberate spec amendment (see §23.7 for the criterion), not authoring
+convention.
 
-| Verb | Cognitive posture |
-|---|---|
-| `triage` | classify, prioritize, route |
-| `diagnose` | find root cause |
-| `plan` | design approach before acting |
-| `implement` | produce / generate the artifact |
-| `review` | evaluate against criteria |
-| `refactor` | restructure preserving behavior |
-| `explain` | build understanding (self-explain or teach others) |
-| `compose` | assemble parts into a whole |
+| Verb | Cognitive posture | Use when… (vs neighbor) |
+|---|---|---|
+| `triage` | classify, prioritize, route | something needs categorization or routing (not "find root cause" — that's `diagnose`) |
+| `diagnose` | find root cause | answering "why is X broken?" (not "what do we know about X?" — that's `research`) |
+| `plan` | design approach before acting | sequencing steps before execution (not "explore options" — that's `research`) |
+| `implement` | produce / generate the artifact | creating the artifact (not restructuring existing — that's `refactor`) |
+| `review` | evaluate against criteria | judging a proposed artifact (not grading a scan — that's the `audit` script verb) |
+| `refactor` | restructure preserving behavior | reshaping code/text without changing semantics (not creating new — that's `implement`) |
+| `explain` | build understanding (self-explain or teach others) | expanding a concept (not condensing — that's `summarize`) |
+| `compose` | assemble parts into a whole | integration / synthesis from existing parts |
+| `research` *(v0.3)* | gather context from sources (web, local, docs) | open-ended information-gathering (not specific "why" — that's `diagnose`; not classification — that's `triage`) |
+| `summarize` *(v0.3)* | condense | compressing what's known (not expanding — that's `explain`) |
 
 The verbs are **cognitive postures**, not methodologies. Methodologies (TDD,
-spec-driven, design-by-contract) are workflow shapes that sequence the eight
+spec-driven, design-by-contract) are workflow shapes that sequence the ten
 verbs — see §17. Posture *modifiers* (speedrun, improvise, code-golf) belong
 in the body of a fragment or the framing of a workflow state, not in the verb
 metadata.
@@ -209,6 +212,11 @@ Blessed roots:
 | `import.*` | external-source ingest |
 | `lifecycle.*` | drafting / completing / archiving |
 | `plan.*` | design — with two conventional second-level paths: `plan.specify.*` for durable artifacts (ADRs, RFCs, contracts, interfaces, acceptance tests), `plan.execute.*` for short-term sequencing (PR scope, sprint breakdown) |
+
+Additional verb-mirror roots (the runtime accepts every cognitive verb token
+as a blessed root for symmetry with the verb taxonomy): `triage.*`,
+`diagnose.*`, `implement.*`, `refactor.*`, `explain.*`, `compose.*`,
+`research.*` *(v0.3)*, `summarize.*` *(v0.3)*. Total: 15 blessed roots.
 
 A subject whose first segment is outside the blessed set produces a diagnostic.
 Behavior depends on `flowgate.strict_namespacing` (default `true`):
@@ -626,6 +634,8 @@ unless the ref's `hash` differs (cache invalidation, §5.7).
 | `summary` | `workflow.submit` arg | optional model-written string |
 | `rotation:` | `audit:` | `daily` (default) / `hourly` / `weekly` |
 | `strict_namespacing:` | `flowgate:` (top level) | `true` (default) / `false` — controls whether unblessed `subject` roots error or warn (§5.4.2) |
+| `delegate:` | workflow state | optional non-empty string — agent-config name for sub-agent delegation. Pass-through only — see §21 |
+| `scripts:` | top level | curated script library — `{ <subject>: { verb, lifecycle, body \| (uri+hash), source? } }`. See §22 |
 
 **Error codes.**
 
@@ -646,6 +656,7 @@ unless the ref's `hash` differs (cache invalidation, §5.7).
 | `GUIDANCE_NOT_ACKNOWLEDGED` | `guidance_acknowledged` guard fired; payload names the unacknowledged subject and the current vs acknowledged hash |
 | `GUIDANCE_SUBJECT_UNKNOWN` | `guidance_acknowledged` guard names a subject absent from the instance's snapshot |
 | `CONFIG_FLAG_NOT_RUNTIME_MUTABLE` | a flag scoped to `flowgate:` top level (e.g. `strict_namespacing`, `authoring.write_enabled`) appears within `workflows:` |
+| `INVALID_DELEGATE` | a state's `delegate` value is present but not a non-empty string |
 
 Existing codes unchanged. `SUMMARY_REQUIRED` and `MIGRATION_FAILED` are **not**
 introduced (§4).
@@ -971,3 +982,364 @@ consumer (jq pipeline, Vector route, Prometheus exporter) can tail it.
 All three are surfaced as transition rejection codes (mirroring
 `GUARD_REJECTED`) when the rejecting guard is the `evidence` kind with
 the new clauses.
+
+## 21. Sub-agent delegation (TUI pass-through)
+
+A workflow state MAY declare a `delegate: <string>` field. The gateway
+treats it as **pass-through only**:
+
+- It is read at response-build time and surfaced verbatim at the top
+  level of every `workflow.get` / `workflow.start` / `workflow.submit`
+  response for that state.
+- It is **not** validated against any agent registry, **not** acted on
+  by the gateway, **not** required to be present for the workflow to
+  function. A state with no `delegate` is identical to today.
+- Empty strings and non-string values are rejected at config load with
+  `INVALID_DELEGATE` (§13).
+
+The sole consumer is the **TUI interpreter** (`crates/mcp-flowgate-tui/`),
+which uses the field to decide whether to spawn an isolated **sub-agent
+session** for that state instead of driving the workflow inline. The
+sub-agent receives:
+
+- the state's `goal` and `guidance` as system-prompt material,
+- the full blackboard at spawn time,
+- the same seven Flowgate MCP tools (no extra tools, no out-of-band
+  access).
+
+The sub-agent runs until it calls `workflow.submit` (advancing the
+workflow) or hits its timeout / step limit. Timeout exhaustion submits
+the `escalate` transition if one is declared, else propagates an
+`InterpreterError::SubAgentTimeout` to the parent interpreter.
+
+The pass-through design is deliberate: it lets the gateway stay
+model-agnostic. The TUI is one consumer; other harnesses (IDE
+integrations, batch runners) MAY consume `delegate` with different
+semantics. The gateway prescribes the field's shape and surfacing,
+not the policy.
+
+**Rationale.** Putting `delegate` on the workflow state (where the
+guidance lives) rather than on the agent invocation (where the
+provider/model live) means workflow authors declare *where the work
+is done* and operators declare *who does it* — clean separation of
+concerns. A workflow shipped in the `cognitive-architectures`
+library names `planning-agent` / `editing-agent` / etc., and any
+operator can plug in any combination of provider/model behind those
+names without editing the workflow.
+
+## 22. Curated scripts (deterministic peer to skills)
+
+A workflow MAY declare a top-level `scripts:` block. Each entry is a
+curated, hash-pinned script body invokable by a workflow's `script`
+executor. The peer relationship to skills is intentional:
+
+> *Skills tell the LLM what to think; scripts tell the workflow what
+> to do.* Both are vocabulary the harness composes; both are content-
+> identified by hash; both surface through the same discovery, describe,
+> and acknowledgment patterns.
+
+### 22.1 Shape
+
+```yaml
+scripts:
+  build.cargo.release:
+    verb: build                          # closed enum, see §22.3
+    lifecycle: stable                    # experimental | stable | deprecated
+    source: cognitive-architectures      # optional provenance
+    body: |                              # inline literal OR uri+hash
+      cargo build --release --locked
+```
+
+Or with an external source:
+
+```yaml
+scripts:
+  build.cargo.release:
+    verb: build
+    lifecycle: stable
+    source: cognitive-architectures
+    uri: file://./scripts/build/cargo.sh # v1: file:// only
+    hash: sha256:<64 lowercase hex chars> # REQUIRED with uri
+```
+
+### 22.2 Body source: inline vs uri+hash
+
+**Exactly one** of `body` (inline literal) OR `uri + hash` (external
+reference) is required.
+
+- **Inline `body:`** — the literal script content. Hash is computed at
+  load time. If the author also provides `hash:`, mismatch is
+  `SCRIPT_HASH_MISMATCH`. v1 supports only `body:` and `uri: file://`.
+- **External `uri:`** — `file://` URI resolved at load time. Path is
+  relative to the config file that declared it. `hash:` is **required**;
+  the runtime fetches the body, computes its hash, and rejects on
+  mismatch (`SCRIPT_HASH_MISMATCH`). Deferred to v2: `https://` and
+  `git+https://...@<ref>`.
+
+**Normalization** is stricter than the skill hash. Shell scripts treat
+whitespace as load-bearing (`if [[ x ]]` ≠ `if [[  x  ]]`), so the
+normalization rule is:
+
+1. Preserve all internal whitespace exactly.
+2. Collapse trailing newlines to exactly one terminal newline.
+3. No leading-whitespace trim.
+
+This means an inline edit changing tabs to spaces WILL invalidate a
+uri-sourced hash — by design. The skill hash collapses whitespace; the
+script hash does not.
+
+### 22.3 Closed verb enum
+
+Scripts use a distinct verb set from skills (cognitive verbs vs action
+verbs). Twelve closed values:
+
+| Verb | When | Use this when… (vs neighbor) |
+|------|------|---|
+| `build` | Compile, package, generate artifacts | producing a deliverable artifact |
+| `test` | Exercise the system against assertions | the script's contract is pass/fail on assertions (not "report findings" — that's `audit`) |
+| `deploy` | Promote artifacts to an environment | moving things between environments |
+| `format` | Apply style transformations (writes) | the script WRITES style fixes (not "report style issues" — that's `lint`) |
+| `lint` | Inspect for static issues (reads, binary verdict) | binary pass/fail on issue presence (not "graded findings" — that's `audit`; not "data gathering" — that's `inspect`) |
+| `install` | Provision dependencies / toolchains | side-effectful environment setup |
+| `verify` | Confirm an externally-asserted property | proving a specific claim (not "find issues" — that's `lint`/`audit`) |
+| `run` | Catch-all for runnable operations | nothing more specific fits (use sparingly) |
+| `inspect` *(v0.3)* | Read-only local introspection | gathering system state / dep tree / symbols (not "find content matching pattern" — that's `search`; not "binary verdict" — that's `lint`) |
+| `search` *(v0.3)* | Content discovery — codebase grep, web search, doc search | finding unknown matches (not "retrieve known resource" — that's `fetch`; not "system state" — that's `inspect`) |
+| `fetch` *(v0.3)* | Retrieve known resource by URL / path | the target is identified by id (not "discover candidates" — that's `search`) |
+| `audit` *(v0.3)* | Graded compliance / security / quality scan emitting structured findings | emitting a report with severity grades (not "binary pass/fail" — that's `lint`) |
+
+Adding a verb is a spec amendment (see §23.7 for the criterion). Unknown
+verbs reject with `INVALID_SCRIPT_VERB`.
+
+### 22.4 Blessed subject roots
+
+Scripts subjects follow the same dotted pattern as skills, but the
+blessed-root set is action-flavored. **Verb-mirror roots** (one per
+ScriptVerb) plus **domain-themed roots** for operational categories:
+
+```
+verb-mirror:    build, test, deploy, format, lint, install, verify, run,
+                inspect, search, fetch, audit
+domain-themed:  release, migrate, ci
+```
+
+Total: 15 blessed script roots.
+
+`strict_namespacing: true` (default) rejects unblessed roots with
+`INVALID_SCRIPT_SUBJECT_ROOT`; lenient mode warns with the closest-
+blessed-root suggestion.
+
+### 22.5 Snapshot stamping
+
+The SPEC §8.2 invariant applies: every workflow that references a
+script gets a stamped `_scriptsLibrary` on its definition snapshot at
+config-load time. The library contains the materialized body, hash,
+verb, lifecycle, and source. In-flight instances are immune to edits of
+either the top-level `scripts:` block or the external file behind a
+`uri:`.
+
+### 22.6 The `script` executor
+
+```yaml
+transitions:
+  build:
+    executor:
+      kind: script
+      subject: build.cargo.release        # required
+      args: ["{{$.context.features}}"]    # optional, templated
+      workingDirectory: /path/to/repo     # optional
+      env: { CI: "true" }                 # optional
+      treatNonZeroAsFailure: true         # optional (default true)
+```
+
+Execute flow: look up subject in instance's `_scriptsLibrary` →
+materialize body to temp file (`chmod 0700`) → exec via shebang if
+present, else `bash <path>` → capture stdout/stderr/exit → emit
+`script_output` Evidence with body hash for audit replay. Temp file is
+deleted on Drop.
+
+Subject not in snapshot → `SCRIPT_NOT_IN_SNAPSHOT` (poka-yoke: workflow
+references must be collectible by `collect_referenced_script_subjects`).
+Missing subject field → `INVALID_SCRIPT_INVOCATION`.
+
+The executor exposes two env vars to the script body so it can
+self-identify in logs/metrics without parsing argv:
+
+- `FLOWGATE_SCRIPT_SUBJECT` — the dotted subject name
+- `FLOWGATE_SCRIPT_HASH` — the `sha256:...` body hash
+
+### 22.7 `gateway.scripts.search` (authoring-time tool)
+
+Mirror of `gateway.skills.search`. Returns refs (`{verb, subject,
+source}`) filterable by `verb` / `subject_root` / `source`. Never
+emits bodies — bodies are fetched on demand via `gateway.describe`
+(progressive disclosure).
+
+Advertised only when `FlowgateServer::with_scripts_search(true)` is
+set. Default off; authoring-time only.
+
+### 22.8 `script_acknowledged` guard
+
+```yaml
+guards:
+  - { kind: script_acknowledged, subject: deploy.production.rollout }
+```
+
+Passes iff `gateway.describe` was called for `subject` against this
+workflow AND the recorded body hash matches the current snapshot's
+hash. Hash flip invalidates the prior ack — editing the script body
+forces re-review. Use case: review-before-execute gates on destructive
+scripts.
+
+The guard requires a `ScriptAcknowledgmentStore` wired via
+`FlowgateServer::with_script_ack_store(...)`. Without one, the guard
+cannot pass (returns false rather than silently succeeding).
+
+Script and guidance acknowledgments use **distinct keyspaces** —
+recording a script ack does not satisfy a guidance-guard for the same
+subject, and vice versa.
+
+### 22.9 Error codes added by §22
+
+| Code | When |
+|---|---|
+| `INVALID_SCRIPT_VERB` | `verb` field not in the closed eight |
+| `MISSING_SCRIPT_VERB` | `verb` field absent |
+| `INVALID_SCRIPT_SUBJECT_ROOT` | First segment not blessed; raised under `strict_namespacing: true` |
+| `EMPTY_SCRIPT_SUBJECT` | `subject` empty after trim |
+| `MISSING_SCRIPT_LIFECYCLE` | `lifecycle` absent |
+| `INVALID_SCRIPT_LIFECYCLE` | `lifecycle` not in experimental/stable/deprecated |
+| `SCRIPT_BODY_SOURCE_AMBIGUOUS` | Both `body` and `uri` present, or neither |
+| `MISSING_SCRIPT_HASH` | `uri` present without `hash` |
+| `UNSUPPORTED_SCRIPT_URI_SCHEME` | `uri` scheme not in {`file://`} for v1 |
+| `INVALID_SCRIPT_HASH_FORMAT` | Hash not matching `^sha256:[0-9a-f]{64}$` |
+| `SCRIPT_HASH_MISMATCH` | Declared hash ≠ computed hash for resolved body |
+| `SCRIPT_NOT_IN_SNAPSHOT` | Executor invoked for subject not in workflow's `_scriptsLibrary` |
+| `INVALID_SCRIPT_INVOCATION` | Executor config missing `subject` field |
+| `SCRIPT_SUBJECT_UNKNOWN` | `script_acknowledged` guard references a subject not in `_scriptsLibrary` |
+
+## 23. Intent layer invariant
+
+This section locks the architectural rule that distinguishes which surfaces
+get a closed verb taxonomy and which surfaces don't. Adding it as a numbered
+invariant prevents drift toward "verb every typed thing for symmetry" — a
+common reflex that conflates transport with intent.
+
+### 23.1 Two-layer split
+
+The gateway has two distinct typing layers:
+
+| Layer | Surfaces | Typed by | Why |
+|---|---|---|---|
+| **Access** — "what can be reached, how" | `connections`, `capabilities`, `executors` | `kind` (mcp / cli / rest / script / ...) | Transport / protocol is structural. A `cli` connection is a `cli` connection regardless of which subcommand is invoked. The kind tells you the rules for invoking; the intent is decided elsewhere. |
+| **Intent** — "what kind of work" | `skills`, `scripts` | closed verb enum | Cognition and action have natural semantic categories. Verbing makes search, discovery, and governance precise. Closed enum forces authors to pick instead of inventing synonyms. |
+
+### 23.2 Why only skills and scripts get verbs
+
+Verbs live at the intent layer because that's where the *what* (semantically)
+matters. A `cargo` CLI connection would be doubly-classified if verbed — is
+it a `build` connection? a `test` connection? Both. Neither in particular.
+Putting the verb on the access layer forces the choice prematurely; the
+verb belongs at each individual USAGE (script invocation), not at the
+declaration (connection).
+
+### 23.3 Indeterminate + determinate intent
+
+The two intent surfaces partition cleanly along determinism:
+
+| Surface | Determinism | Means |
+|---|---|---|
+| **Skills** | Indeterminate | LLM-driven. The skill body is guidance; the model interprets it. Same skill, different sessions, different outputs. |
+| **Scripts** | Determinate | Deterministic. The script body is executable bytes; identical inputs produce identical outputs (modulo time / IO). Hash-pinned for replay-by-hash. |
+
+Together skills and scripts form the **complete intent vocabulary**:
+indeterminate cognition (skills) + determinate action (scripts) = everything
+the workflow can express intentionally. No third intent surface is needed,
+and no fourth.
+
+### 23.4 Workflows are a meta-layer
+
+Workflows sequence skills + scripts + access into a state machine. They are
+NOT verbed because they are implicitly always `compose` — they assemble the
+other vocabulary. Verbing workflows would be self-referential. A workflow's
+`states` and `transitions` are the structural shape; what each state DOES
+is expressed through skills, scripts, and executor invocations.
+
+### 23.5 Audit events are event-shaped, not verb-shaped
+
+`workflow.started`, `transition.requested`, `guard.evaluated` are a closed
+taxonomy, but they describe *what happened*, not *what was intended*. Event
+descriptions are noun-shaped (subject + state-change); intent descriptions
+are verb-shaped (action category). Different kinds of closed enum, different
+purposes.
+
+### 23.6 The numbered invariant
+
+> **Verb taxonomy lives only on skills and scripts.** The access layer
+> (`connections`, `capabilities`, `executors`) is kind-typed. Workflows
+> compose. Audit events describe. No surface gets two of these
+> classifications at once.
+
+A pull request that proposes adding `verb:` to a connection, capability,
+executor, workflow, or audit event MUST be rejected on §23 grounds, even if
+the proposed verb is plausible. The right answer is always to push the
+classification down into the script or skill that USES the access-layer
+surface, or up into the workflow shape that composes it.
+
+### 23.7 Closed-enum amendment criterion
+
+The skill verb enum (§5.4.1) and script verb enum (§22.3) are closed. Adding
+a verb is a spec amendment. Required PR contents for any future verb
+addition:
+
+1. **Documented gap.** Existing verbs forced an awkward classification on
+   ≥1 concrete subject in the cognitive-architectures library OR a downstream
+   adopter. Cite the subject and explain why each existing verb was the
+   wrong fit.
+2. **Distinct semantic category.** The proposed verb is not a synonym of
+   any existing verb. Provide a one-row disambiguation against the closest
+   neighbor ("use X when …, not Y when …") matching the format of the §5.4.1
+   / §22.3 tables.
+3. **≥2 example subjects.** Concrete subject names that would use the
+   proposed verb naturally. If only one example surfaces, the verb is
+   premature.
+
+The criterion is intentionally a sieve, not a checklist — meeting it doesn't
+guarantee acceptance, missing it does guarantee rejection. The goal is to
+keep "I want my own verb" debates out of PR review.
+
+### 23.8 Authoring preferences (advisory)
+
+LLM-driven authoring workflows that generate new skills, scripts, or
+workflows benefit from a steering signal — "operators here prefer
+Python, not bash" — without that signal being a hard constraint
+(authoring tasks that specifically require a different runtime should
+still be writable).
+
+The gateway carries this signal at the top level:
+
+```yaml
+flowgate:
+  authoring:
+    preferred_script_language: bash   # or "python3" / "powershell" / "node"
+```
+
+The field is **advisory only**. No validator rejects a script for not
+matching it; no runtime guard branches on it. The single mechanism is
+**template substitution** (§5.2): authoring skills include the
+preference in their bodies via `{{$.flowgate.authoring.preferred_script_language}}`,
+and the substituted value is what the LLM sees in its system prompt.
+
+Snapshot stamping (SPEC §8.2): `flowgate.authoring` is copied onto
+each workflow's snapshot as `_authoringPrefs` at config-resolve time.
+In-flight instances see the preferences that existed at
+`workflow.start` — editing the gateway config doesn't mutate what an
+already-running authoring workflow sees.
+
+Shape validation: `preferred_script_language` must be a non-empty
+string if present (`INVALID_AUTHORING_PREFERENCE` at config load).
+The value itself is free-form — `bash`, `sh`, `python3`,
+`powershell`, `node`, `deno`, anything makes sense to the operator.
+Closed-enum discipline doesn't apply here because the preference is
+about what code a downstream tool will EMIT, not about what the
+gateway will validate.

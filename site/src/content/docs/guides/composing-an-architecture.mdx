@@ -1,0 +1,259 @@
+---
+title: "Composing a small architecture from scratch"
+description: "Walk through building a minimal code-review architecture: two skills, one workflow, two agents, ready to ship."
+---
+
+You're going to build a complete cognitive architecture from scratch — two skills, one workflow, two agent configs, no external tools. It's the smallest useful thing: a model proposes a patch, a critic adversarially reviews it, you ship or you don't. By the end you'll have a 30-line YAML you can run.
+
+## The goal
+
+A `code-review` architecture. The flow:
+
+1. A reviewing agent reads a patch and produces a verdict against a rubric.
+2. A critiquing agent adversarially attacks the verdict — what did the reviewer miss?
+3. The workflow lands in `done` with both opinions on the blackboard.
+
+No retrieval, no editing, no human gate. The minimum viable cognitive architecture. You'd extend it later; for now you'll see the whole shape on one screen.
+
+## Step 1 — Identify the verbs
+
+Both jobs are evaluation against criteria. One verb: `review`. Subject root: `review.*`. That's it.
+
+If you found yourself reaching for two different verbs at this step, you'd want two different workflows or you'd want to think harder about whether you have one job or two. Keep it tight.
+
+## Step 2 — Write two skill fragments
+
+```yaml
+skills:
+  review.code.adversarial:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Adversarial patch review
+      - Find missed edge cases, hidden regressions, policy or security issues.
+      - Cite each finding with file:line and a counterexample input.
+      - Return verdict: accept | retry | escalate.
+
+  review.code.final-approval:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Final approval checklist
+      - Re-read the diff against the original acceptance criteria, not just the summary.
+      - Confirm the adversarial review's findings were addressed or explicitly waived.
+      - Return verdict: approve | reject with a specific question.
+```
+
+Two skills, two distinct cognitive postures. Both `review`, but `adversarial` primes "attack this" and `final-approval` primes "decide and ship."
+
+## Step 3 — Write the workflow
+
+Three states: `reviewing` → `critiquing` → `done`. The first two `delegate` to named agents (the operator wires up which model plays each role). The terminal state has no delegate.
+
+```yaml
+workflows:
+  code_review:
+    version: "2026-05-25"
+    initialState: reviewing
+    skills:
+      - review.code.adversarial
+      - review.code.final-approval
+    blackboard:
+      candidatePatch:    { type: object }
+      reviewVerdict:     { type: string }
+      critiqueVerdict:   { type: string }
+
+    states:
+      reviewing:
+        delegate: review-agent
+        goal: Adversarially review the candidate patch
+        skills:
+          - review.code.adversarial
+        transitions:
+          review_done:
+            target: critiquing
+            executor: { kind: noop }
+            output:
+              reviewVerdict: "$.arguments.verdict"
+
+      critiquing:
+        delegate: critique-agent
+        goal: Final approval pass over the reviewed patch
+        skills:
+          - review.code.final-approval
+        transitions:
+          approve:
+            target: done
+            executor: { kind: noop }
+            output:
+              critiqueVerdict: "$.arguments.verdict"
+
+      done:
+        terminal: true
+```
+
+`delegate:` is pass-through (SPEC §21) — the gateway surfaces the field but doesn't act on it. The TUI interpreter reads it and decides whether to spawn an isolated sub-agent for that state. That's what lets `review-agent` and `critique-agent` be different models with different system prompts.
+
+## Step 4 — Pick agents
+
+Two roles, two model choices. The bet is that the first pass is volume work and the critique is precision work.
+
+- **`review-agent`** — Sonnet. Cheap enough to run on every patch, smart enough to catch the obvious misses. The agent's job is throughput.
+- **`critique-agent`** — Opus. You're paying for the second opinion. If it agrees with the reviewer, you ship. If it doesn't, you've spent the money to find the bug before the user did.
+
+You'd swap these around for other workloads (Opus for review on safety-critical code, Sonnet for critique on docs PRs). The workflow doesn't change; the agent configs do.
+
+## Step 5 — Wire connections
+
+None. This architecture doesn't touch external tools. The reviewing and critiquing agents work entirely from the patch text and the rubric in the skill body.
+
+This is the simplest case. The moment you want retrieval (search the codebase before reviewing), verification (run tests after editing), or human approval gates, you add a `connections:` block. For now: skip it.
+
+## Step 6 — Add a deterministic verification step (scripts)
+
+Reviewers are good. They miss things anyway. Before the workflow declares approval, run the workspace's actual test suite — deterministically, hash-pinned, no model in the loop.
+
+This is what curated scripts are for. Where a skill is guidance for an LLM, a script is executable bytes the workflow runs through the `script` executor. Both live at the same intent layer (see [The intent layer](/guides/skills-and-architectures/#the-intent-layer-indeterminate--determinate)). Both are content-identified by hash. Their division of labor is determinism — skills are indeterminate (the model interprets), scripts are determinate (the bytes execute).
+
+Add a `scripts:` block. One script for now: run the workspace's checks and either pass or fail loud.
+
+```yaml
+scripts:
+  verify.workspace.green:
+    verb: verify
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo fmt --all -- --check >&2
+      cargo clippy --workspace --all-targets -- -D warnings >&2
+      cargo test --workspace >&2
+      echo '{"passed":true,"stages":["format","lint","test"]}'
+```
+
+Insert a `verifying` state into the workflow between `critiquing` and `done`. The state's transition uses `kind: script` with the curated subject — the runtime materializes the body from this workflow's pinned snapshot, execs it (chmod 0700 temp file), captures the verdict, and audit-logs the body hash.
+
+```yaml
+verifying:
+  goal: Confirm the workspace is green before approval
+  transitions:
+    run_verifier:
+      target: done
+      actor: deterministic
+      executor:
+        kind: script
+        subject: verify.workspace.green
+      output:
+        verifierPassed: "$.output.success"
+```
+
+The transition is `actor: deterministic` because no model decides whether to take it — the workflow auto-chains once the critique succeeds. The verifying script's exit code drives the verdict: non-zero fails the transition, the workflow takes its `onTimeout` or `escalate` path. Pair the executor with a `script_acknowledged` guard if you want operators to review the script body before it runs.
+
+## Step 7 — Compose the gateway config
+
+Put it all together. Save as `code-review.yaml`:
+
+```yaml
+version: "1.0.0"
+
+skills:
+  review.code.adversarial:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Adversarial patch review
+      - Find missed edge cases, hidden regressions, policy or security issues.
+      - Cite each finding with file:line and a counterexample input.
+      - Return verdict: accept | retry | escalate.
+
+  review.code.final-approval:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Final approval checklist
+      - Re-read the diff against the original acceptance criteria.
+      - Confirm the adversarial review's findings were addressed or waived.
+      - Return verdict: approve | reject with a specific question.
+
+scripts:
+  verify.workspace.green:
+    verb: verify
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo fmt --all -- --check >&2
+      cargo clippy --workspace --all-targets -- -D warnings >&2
+      cargo test --workspace >&2
+      echo '{"passed":true,"stages":["format","lint","test"]}'
+
+workflows:
+  code_review:
+    version: "2026-05-25"
+    initialState: reviewing
+    skills: [review.code.adversarial, review.code.final-approval]
+    blackboard:
+      candidatePatch:  { type: object }
+      reviewVerdict:   { type: string }
+      critiqueVerdict: { type: string }
+      verifierPassed:  { type: boolean }
+    states:
+      reviewing:
+        delegate: review-agent
+        goal: Adversarially review the candidate patch
+        skills: [review.code.adversarial]
+        transitions:
+          review_done:
+            target: critiquing
+            executor: { kind: noop }
+            output: { reviewVerdict: "$.arguments.verdict" }
+      critiquing:
+        delegate: critique-agent
+        goal: Final approval pass over the reviewed patch
+        skills: [review.code.final-approval]
+        transitions:
+          approve:
+            target: verifying
+            executor: { kind: noop }
+            output: { critiqueVerdict: "$.arguments.verdict" }
+      verifying:
+        goal: Confirm the workspace is green before approval
+        transitions:
+          run_verifier:
+            target: done
+            actor: deterministic
+            executor:
+              kind: script
+              subject: verify.workspace.green
+            output:
+              verifierPassed: "$.output.success"
+      done:
+        terminal: true
+```
+
+## Step 8 — Validate
+
+```bash
+mcp-flowgate check --config code-review.yaml
+```
+
+`check` confirms the skill verbs are in the closed ten, the script verbs are in the closed twelve, every subject starts with a blessed root, every `skills:` ref resolves, the `script` executor's subject resolves into the workflow's snapshot, the blackboard slots line up with the `output:` mappings, and every state is reachable. Fix anything it flags before you run.
+
+## Step 9 — Run
+
+```bash
+flowgate-tui \
+  --workflow code_review \
+  --agent review-agent=anthropic:claude-sonnet \
+  --agent critique-agent=anthropic:claude-opus \
+  --max-sub-agent-seconds 120 \
+  --max-sub-agent-steps 20
+```
+
+The TUI starts the workflow, walks `reviewing` → `critiquing` → `done`, and spawns a fresh sub-agent session for each `delegate:` state. The timeout and step limits are the safety rails — a runaway sub-agent gets cut off, and if you declared an `escalate` transition the runtime takes it.
+
+## What you skipped
+
+This architecture has no retrieval, no verification, no human review gate, no retry budget on failed critique. All of those are one or two states each, and you compose them in by extending the workflow.
+
+For a fuller example with retrieval, constrained editing, deterministic verification, and a human approval gate, see [`cognitive-architectures/examples/full-swe-pipeline.yaml`](https://github.com/matt-cochran/cognitive-architectures/blob/main/examples/full-swe-pipeline.yaml). Same three layers, more states, more skills, real connections.

@@ -17,6 +17,10 @@ crates/
                               registry, import (tools/list)
   mcp-flowgate-mcp-server/    FlowgateServer (rmcp ServerHandler) — the 7 tools
   mcp-flowgate/               binary: serve | check
+  mcp-flowgate-tui/           binaries: flowgate, flowgate-tui — Aether-wrapped
+                              TUI + deterministic interpreter (SPEC §21) +
+                              sub-agent spawner. Routes every model tool call
+                              through mcp-flowgate as the sole MCP server.
 
 schemas/
   gateway-config.schema.json
