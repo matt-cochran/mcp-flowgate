@@ -131,7 +131,45 @@ Scripts get the same treatment skills do:
 
 The point: instead of inlining brittle `command: ["bash", "-c", "..."]` arrays across every workflow, curate a library. Operators replace the library wholesale per environment; workflows reference subjects, not commands.
 
+## Authoring preferences: steering LLM-driven library growth
+
+When an authoring workflow has an LLM generate new scripts (or skills, or workflows), the operator usually has a runtime preference — "default to bash here," "prefer Python for new ML scripts," "PowerShell in the Windows lab." `flowgate.authoring.preferred_script_language` lets you declare that once:
+
+```yaml
+flowgate:
+  authoring:
+    preferred_script_language: bash    # or "python3", "powershell", "node"
+```
+
+Authoring skills then reference the preference via template substitution:
+
+```yaml
+skills:
+  authoring.skill.script-shape:
+    verb: implement
+    lifecycle: stable
+    body: |
+      When writing a new script, default to {{$.flowgate.authoring.preferred_script_language}}
+      unless the task specifically requires a different runtime (cross-platform need,
+      missing interpreter, performance constraint).
+```
+
+The preference is **advisory by construction** — no runtime branch enforces it, no validator rejects a script for ignoring it. The single mechanism is the template substitution at skill-render time, so the LLM sees the operator's choice in its system prompt. When no preference is declared, the template renders as `(preferred_script_language: unset)` and the LLM picks freely.
+
+The full mechanism (snapshot stamping, template root, validation) is documented in [SPEC §23.8](https://github.com/outboundlabs/mcp-flowgate/blob/main/SPEC.md#238-authoring-preferences-advisory). The `cognitive-architectures/skills/authoring.skill.script-shape.yaml` skill is a worked example.
+
+## Parallelism: compressing wall-clock without changing the state machine
+
+Architectures sometimes need to run independent activities concurrently — 50 SCIP queries against a codebase, 20 validation scenarios against a patch, multiple reviewers / critics fanning out across one diff. Sequential execution wastes wall-clock; first-class parallelism doesn't.
+
+The `parallel` executor kind (SPEC §24) fans out N branches **inside a single transition**. Each branch is any executor config (`script`, `mcp`, `cli`, `rest`, `workflow`, even nested `parallel`); the executor aggregates results and the workflow's state machine still sees just one slow-but-normal executor call. CPM "crashing" is the mental model.
+
+The constraint that makes it safe: fan-out happens INSIDE one executor invocation. Branches never touch the workflow store directly; the parent executor returns one aggregated `ExecuteResult`. One version bump, one transition record, one shared correlation_id with per-branch events linked underneath.
+
+Use cases this unlocks: parallel research, parallel validation, parallel PR review, parallel simulation / pressure-testing at multiple abstraction levels, parallelized FMECA exploring potential failure modes. See [Parallel execution](/reference/parallel-execution/) for the full reference.
+
 ## Next steps
 
 - [Cognitive verbs and subject namespaces](/reference/cognitive-verbs/) — the closed enum of eight verbs and the blessed roots
+- [Parallel execution](/reference/parallel-execution/) — fan-out / fan-in inside one transition
 - [Composing a small architecture from scratch](/guides/composing-an-architecture/) — build a minimal code-review architecture end-to-end

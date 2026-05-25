@@ -27,6 +27,8 @@ uuid = { workspace = true }
 # SPEC §22 — script executor materializes the snapshot's stamped body to
 # a per-invocation temp file (chmod 0700) before exec.
 tempfile = "3"
+# SPEC §24 — ParallelExecutor's defensive snapshot-hash assert (F1).
+sha2 = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }

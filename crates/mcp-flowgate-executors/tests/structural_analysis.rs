@@ -31,6 +31,7 @@ fn req_for(definition: Value) -> ExecuteRequest {
         arguments: json!({ "definition": definition }),
         executor_config: Value::Null,
         idempotency_key: None,
+        correlation_id: None,
     }
 }
 
@@ -417,6 +418,7 @@ async fn missing_definition_argument_errors() {
         arguments: json!({}),
         executor_config: Value::Null,
         idempotency_key: None,
+        correlation_id: None,
     };
     let err = StructuralAnalysisExecutor
         .execute(req)

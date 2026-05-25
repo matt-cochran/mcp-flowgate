@@ -34,6 +34,7 @@ fn req(args: Value) -> ExecuteRequest {
         arguments: args,
         executor_config: Value::Null,
         idempotency_key: None,
+        correlation_id: None,
     }
 }
 

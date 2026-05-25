@@ -30,6 +30,7 @@ fn run(args: Value) -> Result<Value, mcp_flowgate_core::error::ExecutorError> {
         arguments: args,
         executor_config: Value::Null,
         idempotency_key: None,
+        correlation_id: None,
     };
     futures::executor::block_on(DryRunExecutor.execute(req)).map(|r| r.output)
 }

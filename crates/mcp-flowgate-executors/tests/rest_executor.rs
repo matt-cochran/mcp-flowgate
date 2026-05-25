@@ -47,6 +47,7 @@ fn make_request(
         arguments,
         executor_config,
         idempotency_key: None,
+        correlation_id: None,
     }
 }
 

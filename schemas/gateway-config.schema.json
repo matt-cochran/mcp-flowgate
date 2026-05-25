@@ -508,7 +508,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop", "script"]
+          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop", "script", "parallel"]
         },
         "connection": { "type": "string" },
         "capability": { "type": "string" },
@@ -522,12 +522,103 @@
             { "type": "string" }
           ],
           "description": "If `true`, an idempotency key is auto-derived from workflowId + transition + correlationId — same key across retries and fallback candidates so downstream dedup works. If a string, it's used as a literal template; supported tokens: {workflowId}, {transition}, {correlationId}."
+        },
+        "branches": {
+          "description": "SPEC §24 (kind: parallel only) — fan-out branches. Either a literal array of executor configs OR a `{for_each: <path>, do: <executor>}` template for dynamic per-element fan-out. Each literal branch / each `do:` template is itself a valid `executor` config (recursive).",
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/executor" } },
+            { "$ref": "#/$defs/parallelForEach" }
+          ]
+        },
+        "join": {
+          "description": "SPEC §24.2 (kind: parallel only) — join condition. `all` (default), `any`, or `{at_least: K}` where K is a positive integer.",
+          "oneOf": [
+            { "type": "string", "enum": ["all", "any"] },
+            { "$ref": "#/$defs/parallelAtLeast" }
+          ]
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "SPEC §24 (kind: parallel only) — semaphore cap on simultaneous in-flight branches. REQUIRED when `branches.len() >= 10` (DOS poka-yoke); optional below that."
+        },
+        "on_branch_failure": {
+          "type": "string",
+          "enum": ["bail", "continue"],
+          "default": "bail",
+          "description": "SPEC §24.2 (kind: parallel only) — `bail` (default) cancels in-flight siblings on first failure; `continue` drains all branches and computes verdict per join condition."
+        },
+        "total_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "SPEC §24.2 (kind: parallel only) — wall-clock cap on the whole fan-out. On expiry, in-flight branches are cancelled and the executor returns Timeout."
+        },
+        "max_recursion_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "SPEC §24.8 (kind: parallel only) — cap on nested parallel-of-parallels depth. Default 3 (catches authoring bugs); override for deliberately deep nesting."
         }
       },
       "oneOf": [
         { "required": ["kind"] },
         { "required": ["capability"] }
       ]
+    },
+    "parallelForEach": {
+      "type": "object",
+      "required": ["for_each", "do"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — dynamic `branches` form. `for_each` is a path expression resolving to a JSON array against the workflow's `$.context`, `$.workflow.input`, or `$.arguments`. `do` is an executor template; `$.branch.value` and `$.branch.index` are substituted per element.",
+      "properties": {
+        "for_each": {
+          "type": "string",
+          "description": "Path expression — `$.context.queries`, `$.workflow.input.aspects`, etc. — that resolves to a JSON array."
+        },
+        "do": {
+          "$ref": "#/$defs/executor",
+          "description": "Per-branch executor template. `$.branch.value` and `$.branch.index` are substituted per array element."
+        }
+      }
+    },
+    "parallelAtLeast": {
+      "type": "object",
+      "required": ["at_least"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — quorum join condition. Executor succeeds iff at least `at_least` branches succeed.",
+      "properties": {
+        "at_least": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Minimum number of branches that must succeed for the parallel executor to return Ok."
+        }
+      }
+    },
+    "parallelExecutor": {
+      "type": "object",
+      "required": ["kind", "branches"],
+      "additionalProperties": true,
+      "description": "SPEC §24 — the `parallel` executor (canonical shape). The `executor` $def above accepts these fields too (with additionalProperties: true); this $def documents them for tools that introspect the schema (IDE autocomplete, YAML LSPs).",
+      "properties": {
+        "kind": { "const": "parallel" },
+        "branches": {
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/executor" } },
+            { "$ref": "#/$defs/parallelForEach" }
+          ]
+        },
+        "join": {
+          "oneOf": [
+            { "type": "string", "enum": ["all", "any"] },
+            { "$ref": "#/$defs/parallelAtLeast" }
+          ],
+          "default": "all"
+        },
+        "max_concurrency": { "type": "integer", "minimum": 1 },
+        "on_branch_failure": { "type": "string", "enum": ["bail", "continue"], "default": "bail" },
+        "total_timeout_ms": { "type": "integer", "minimum": 1 },
+        "max_recursion_depth": { "type": "integer", "minimum": 1, "default": 3 }
+      }
     },
     "guard": {
       "type": "object",

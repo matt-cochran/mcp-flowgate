@@ -31,6 +31,7 @@ async fn ingest(args: Value) -> Result<Value, mcp_flowgate_core::error::Executor
             arguments: args,
             executor_config: Value::Null,
             idempotency_key: None,
+            correlation_id: None,
         })
         .await
         .map(|r| r.output)

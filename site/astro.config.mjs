@@ -66,6 +66,7 @@ export default defineConfig({
 						{ label: 'Stores', slug: 'reference/stores' },
 						{ label: 'Cognitive verbs', slug: 'reference/cognitive-verbs' },
 						{ label: 'Script verbs', slug: 'reference/script-verbs' },
+						{ label: 'Parallel execution', slug: 'reference/parallel-execution' },
 						{ label: 'Audit events', slug: 'reference/audit' },
 					],
 				},

@@ -39,6 +39,7 @@ fn req(workflow: WorkflowInstance, executor_config: Value, arguments: Value) -> 
         arguments,
         executor_config,
         idempotency_key: None,
+        correlation_id: None,
     }
 }
 

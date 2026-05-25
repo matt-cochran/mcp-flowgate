@@ -32,6 +32,7 @@ async fn human_executor_emits_approval_requested() {
         arguments: json!({}),
         executor_config: json!({ "kind": "human", "queue": "engineering-approvals" }),
         idempotency_key: None,
+        correlation_id: None,
     };
 
     exec.execute(request)

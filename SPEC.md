@@ -1343,3 +1343,207 @@ The value itself is free-form — `bash`, `sh`, `python3`,
 Closed-enum discipline doesn't apply here because the preference is
 about what code a downstream tool will EMIT, not about what the
 gateway will validate.
+
+## 24. Parallel execution (fan-out / fan-in)
+
+The workflow runtime is sequential at the state-machine level — one
+active state, one transition at a time. The `parallel` executor kind
+adds fan-out **inside a single executor invocation**: N branches run
+concurrently, results aggregate, and the runtime sees one
+slow-but-normal executor call. CPM ("critical path method") "crashing"
+is the mental model: parallelizing independent activities compresses
+wall-clock without changing CPU work or any state-machine invariant.
+
+### 24.1 Why parallel
+
+Five use cases that motivate the primitive:
+
+- **Parallel research.** N SCIP queries against the codebase, results
+  aggregated into one evidence pack.
+- **Parallel validation.** A patch tested against N scenarios
+  concurrently; aggregate verdict drives the next transition.
+- **Parallel PR review** (Greptile-style, local pre-PR). Multiple
+  reviewers / critics / checks fan-out against a diff.
+- **Parallel simulation / pressure-testing** at multiple abstraction
+  levels (concepts, plans, specs, copy, docs). New agentic-interaction
+  paradigm.
+- **Parallelized FMECA** to explore potential real failure modes of
+  code execution — meta-applies the discipline to itself.
+
+### 24.2 The executor
+
+```yaml
+executor:
+  kind: parallel
+  branches:                            # static list OR {for_each, do}
+    - { kind: script, subject: ... }
+    - { kind: mcp,    connection: ..., tool: ... }
+    - { kind: workflow, definitionId: critique-agent, input: { ... } }
+  join: all                            # all (default) | any | { at_least: K }
+  max_concurrency: 4                   # REQUIRED when branches.len() >= 10
+  on_branch_failure: bail              # bail (default) | continue
+  total_timeout_ms: 60000              # optional
+  max_recursion_depth: 3               # optional, default 3
+```
+
+Dynamic-branches form:
+
+```yaml
+branches:
+  for_each: "$.context.queries"        # path resolving to a JSON array
+  do:                                  # per-branch executor template
+    kind: mcp
+    connection: scip
+    tool: lookup
+    args: { symbol: "$.branch.value" }
+```
+
+`$.branch.value` and `$.branch.index` are template substitution
+markers replaced per branch when the `do:` template is expanded.
+
+**Join conditions:**
+
+- `all` (default) — every branch must succeed. Any failure fails the whole.
+- `any` — first success wins; siblings cancelled.
+- `{at_least: K}` — succeeds iff K or more branches succeed; failures
+  making K unreachable fail early.
+
+**Failure modes:**
+
+- `on_branch_failure: bail` (default) — first failure cancels in-flight
+  siblings, executor returns error immediately.
+- `on_branch_failure: continue` — all branches run regardless of failures;
+  verdict computed per join condition over the aggregate.
+
+**Branches accept any executor kind**, including nested `parallel`. The
+schema is recursive — `branches[*]` references the same `executor` $def.
+
+### 24.3 Output shape
+
+```json
+{
+  "branches": [
+    { "ok": true,  "index": 0, "output": { ... } },
+    { "ok": false, "index": 1, "error": { "code": "timeout", "message": "..." } },
+    { "ok": true,  "index": 2, "output": { ... } }
+  ],
+  "summary": {
+    "n":                      3,
+    "ok_count":               2,
+    "failed_count":           1,
+    "cancelled_count":        0,
+    "durationMs":             4321,
+    "first_failure_index":    1,
+    "max_in_flight_observed": 2,
+    "join":                   "all",
+    "verdict":                "failed"
+  }
+}
+```
+
+Output mappings can pluck per-branch fields via the **`[*]` array-
+projection** extension to path expressions: `$.output.branches[*].ok`
+returns `[true, false, true]`. See §6 (output mappings) for the syntax.
+
+### 24.4 Audit event taxonomy
+
+| Event | When | Payload |
+|---|---|---|
+| `parallel.branch.started` | Each branch begins | `transition`, `branch_index`, `branch_executor_kind` |
+| `parallel.branch.completed` | Branch returns Ok | `transition`, `branch_index`, `durationMs` |
+| `parallel.branch.failed` | Branch returns Err | `transition`, `branch_index`, `durationMs`, `error` |
+| `parallel.branch.cancelled` | Branch cancelled (any-join success or bail-failure) | `transition`, `branch_index`, elapsed |
+| `parallel.fanout.completed` | Aggregate done, before parent transition record | `transition`, `summary` |
+| `parallel.fanout.empty` | Dynamic `for_each` resolved to `[]` | `transition`, `for_each` |
+
+All per-branch events carry the **parent transition's correlation_id**
+plus the `branch_index` payload field. Combined with the parent
+transition's `seq`, the pair `(seq, branch_index)` groups all events
+for one branch's invocation; intra-branch ordering (the `started` →
+`completed`/`failed`/`cancelled` sequence + any `executor.started`/
+`executor.succeeded` from the reliability stack) is timestamp-monotonic.
+Replay tools sort by `(seq, branch_index, timestamp)`.
+
+### 24.5 Snapshot + version invariants
+
+> **Load-bearing rule:** fan-out happens inside one executor invocation.
+> Branches NEVER touch the WorkflowStore. The parent `ParallelExecutor`
+> returns one `ExecuteResult`; the runtime does exactly one
+> `save_if_version` post-aggregation. The transition record is written
+> once, the workflow version bumps once.
+
+This preserves every existing invariant — optimistic locking still
+works, deterministic chaining still works, audit ordering still works.
+Multi-active-state workflow execution is explicitly OUT of scope; the
+constraint keeps the system coherent.
+
+**Defensive assert:** the parallel executor hashes the snapshot bytes
+at fan-out start and re-hashes at aggregation. Mismatch raises
+`PARALLEL_SNAPSHOT_MUTATED` — a runtime invariant violation that should
+be impossible in safe Rust (the snapshot is in an `Arc`) but is checked
+anyway as a future-regression safety net.
+
+### 24.6 Compensating transactions (operator-responsibility)
+
+`parallel` does NOT provide distributed-saga compensation in v1. If
+your branches have side effects:
+
+- Prefer **idempotent branches** (replay-safe — same input always produces
+  same downstream effect).
+- Use `on_branch_failure: bail` for STRICT semantics (no partial
+  commits past the first failure).
+- For `on_branch_failure: continue`, design follow-up cleanup workflows
+  that consume `summary.failed_branches` (the aggregate output lists
+  every branch's outcome — operators compose cleanup based on the
+  audit log).
+
+Distributed-saga support (undo handlers, compensating actions) is v2
+work. v1 explicitly does not silently hide partial-commit cases —
+every branch's outcome is in the audit log.
+
+### 24.7 MCP transport bottleneck note
+
+`parallel` of `kind: mcp` branches against the same MCP **connection**
+is bounded by that connection's concurrency. Typical MCP servers are
+single-connection / serialized. Operators wanting true MCP parallelism
+should either:
+
+- Configure N separate connections to the SAME MCP server, OR
+- Use an MCP server that supports concurrent in-flight requests on one
+  connection.
+
+Per-branch `durationMs` in the audit log reveals serialization — if
+every branch's start time staggers by roughly its predecessor's
+duration, transport is serialising. No new metric needed; the existing
+audit fields surface the symptom.
+
+### 24.8 Recursion-depth cap + amendment criterion
+
+`max_recursion_depth` (default 3) caps parallel-of-parallels nesting.
+Exceeding it raises `PARALLEL_DEPTH_EXCEEDED`. The default is
+**speculative** — three levels is the deepest a sane architecture
+should need; operators with deeper-nesting use cases override
+explicitly. The cap exists to catch authoring bugs that produce
+exponential fan-out by accident.
+
+**Amendment criterion** (mirrors §23.7) for future v0.4+ additions:
+- `percent: X` join — concrete use case + ratio-vs-count rationale
+- Expression-based join (`join_when: <guard expr>`) — edge case
+  analysis for "guard reads still-running branch's output"
+- Compensating transactions — distributed-saga shape proposal
+- Multi-active-state workflow execution — strong justification
+  required; preserves the §24.5 invariant or explicitly amends it.
+
+### 24.9 Error codes added by §24
+
+| Code | When |
+|---|---|
+| `INVALID_PARALLEL_CONFIG` | Malformed `parallel` executor config (missing `branches`, bad `join`, unbounded fan-out without `max_concurrency`, etc.) |
+| `JOIN_THRESHOLD_NOT_MET` | `join: at_least: K` and fewer than K branches succeeded |
+| `PARALLEL_DEPTH_EXCEEDED` | Nested `parallel` exceeded `max_recursion_depth` |
+| `PARALLEL_SNAPSHOT_MUTATED` | Defensive: snapshot bytes diverged during fan-out (runtime invariant violation) |
+| `PARALLEL_EXECUTOR_NOT_WIRED` | Registry wasn't set on `ParallelExecutor` after construction (deployment bug) |
+
+`[*]` array-projection mapping errors fall under the existing mapping
+contract (`None` for unresolvable paths); no new error code needed in
+v1.

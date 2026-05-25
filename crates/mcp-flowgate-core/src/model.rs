@@ -194,6 +194,15 @@ pub struct ExecuteRequest {
     /// across primary + fallback candidates so downstream services can
     /// dedupe. None when the executor config didn't request one.
     pub idempotency_key: Option<String>,
+    /// SPEC §24 (v0.4) — the parent transition's correlation_id, threaded
+    /// through so executors that fan out (`kind: parallel`) can emit
+    /// per-branch audit events that share the parent's correlation. The
+    /// runtime sets this when invoking executors through
+    /// `execute_with_reliability`. Tests that build `ExecuteRequest`
+    /// directly may leave it `None`; per-branch audit events fall back to
+    /// emitting under a synthetic `"unset-corr"` value (clearly broken in
+    /// production but acceptable for direct-executor unit tests).
+    pub correlation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -116,6 +116,7 @@ async fn sub_workflow_completes_and_returns_context() {
                 "input": {},
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await
         .unwrap();
@@ -163,6 +164,7 @@ async fn sub_workflow_polls_until_terminal() {
                 "timeoutMs": 5_000,
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await
         .unwrap();
@@ -198,6 +200,7 @@ async fn sub_workflow_times_out() {
                 "timeoutMs": 100,
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await;
 
@@ -236,6 +239,7 @@ async fn sub_workflow_missing_definition_surfaces_as_executor_error() {
                 "input": {},
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await;
 
@@ -276,6 +280,7 @@ async fn sub_workflow_audit_events_emitted() {
                 "input": {},
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await
         .unwrap();

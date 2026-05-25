@@ -7,6 +7,7 @@ pub mod import;
 pub mod ingest;
 pub mod mcp;
 pub mod noop;
+pub mod parallel;
 pub mod registry;
 pub mod registry_executor;
 pub mod rest;
@@ -21,6 +22,28 @@ pub use import::import_capabilities;
 pub use ingest::IngestExecutor;
 pub use mcp::{McpConnection, McpConnections, McpExecutor};
 pub use noop::NoopExecutor;
+pub use parallel::ParallelExecutor;
+
+/// SPEC §24 GAP-E mitigation — the canonical list of executor kinds the
+/// default registry builders wire in. Tooling (drift tests, schema
+/// validators) reads this to assert parity against the JSON schema's
+/// `executor.properties.kind.examples` array. Adding a new executor kind
+/// means appending here AND to the schema in the SAME commit; the drift
+/// test fails the build if they diverge.
+///
+/// `registry` is omitted intentionally — it's an authoring-time-only
+/// executor (`RegistryExecutor`) whose `kind` value isn't a stable
+/// runtime executor kind.
+pub const REGISTERED_EXECUTOR_KINDS: &[&str] = &[
+    "cli",
+    "human",
+    "mcp",
+    "noop",
+    "parallel",
+    "rest",
+    "script",
+    "workflow",
+];
 pub use registry::HashMapExecutorRegistry;
 pub use registry_executor::RegistryExecutor;
 pub use rest::{RestConnection, RestConnections, RestExecutor};
@@ -59,6 +82,11 @@ pub fn default_registry_with_mcp(
     audit: Arc<dyn mcp_flowgate_core::audit::AuditSink>,
 ) -> Arc<dyn ExecutorRegistry> {
     let rest_connections = Arc::new(RestConnections::from_config(config));
+    // SPEC §24 — `ParallelExecutor` needs a back-reference to the registry
+    // so its branches can invoke other executors. Construct first, register
+    // with a clone, then wire the registry back into the parallel executor
+    // after the registry Arc exists.
+    let parallel = Arc::new(ParallelExecutor::new(audit.clone()));
     let registry = HashMapExecutorRegistry::new()
         .with("cli", Arc::new(CliExecutor::new(cli_connections)))
         .with(
@@ -68,9 +96,12 @@ pub fn default_registry_with_mcp(
         .with("rest", Arc::new(RestExecutor::new(rest_connections)))
         .with("human", Arc::new(HumanExecutor::with_audit(audit)))
         .with("noop", Arc::new(NoopExecutor))
-        .with("script", Arc::new(ScriptExecutor::new()));
+        .with("script", Arc::new(ScriptExecutor::new()))
+        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
 
-    Arc::new(registry)
+    let registry: Arc<dyn ExecutorRegistry> = Arc::new(registry);
+    parallel.set_registry(registry.clone());
+    registry
 }
 
 /// Build a registry with the workflow executor. Requires a WorkflowRuntime
@@ -83,6 +114,7 @@ pub fn default_registry_with_workflow(
     runtime: WorkflowRuntime,
 ) -> Arc<dyn ExecutorRegistry> {
     let rest_connections = Arc::new(RestConnections::from_config(config));
+    let parallel = Arc::new(ParallelExecutor::new(audit.clone()));
     let registry = HashMapExecutorRegistry::new()
         .with("cli", Arc::new(CliExecutor::new(cli_connections)))
         .with(
@@ -93,7 +125,10 @@ pub fn default_registry_with_workflow(
         .with("human", Arc::new(HumanExecutor::with_audit(audit.clone())))
         .with("noop", Arc::new(NoopExecutor))
         .with("script", Arc::new(ScriptExecutor::new()))
-        .with("workflow", Arc::new(WorkflowExecutor::new(runtime, audit)));
+        .with("workflow", Arc::new(WorkflowExecutor::new(runtime, audit)))
+        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
 
-    Arc::new(registry)
+    let registry: Arc<dyn ExecutorRegistry> = Arc::new(registry);
+    parallel.set_registry(registry.clone());
+    registry
 }

@@ -10,6 +10,62 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — Parallel / fan-out execution (SPEC §24)
+
+- **`parallel` executor kind** — fan-out N concurrent branches inside
+  one transition. State machine stays singular (one state, one
+  transition, one version bump, one transition record); the executor
+  internally runs branches via `tokio::task::JoinSet`, bounded by an
+  optional `max_concurrency` semaphore, with per-branch and total
+  timeouts. Branches are any executor config (recursive): `script`,
+  `mcp`, `cli`, `rest`, `workflow`, even nested `parallel`.
+- **Branch sourcing** — static literal `branches: [...]` OR dynamic
+  `branches: { for_each: "$.context.x", do: <executor template> }`.
+  Template substitution markers `$.branch.value` and `$.branch.index`
+  expand per branch.
+- **Join conditions** — `all` (default), `any` (first success wins;
+  siblings cancelled), `{at_least: K}` (quorum). Configurable
+  `on_branch_failure: bail` (default — first failure aborts) /
+  `continue` (all branches run regardless; verdict per join).
+- **Aggregated output shape** — `{branches: [{ok, output, error?}],
+  summary: {n, ok_count, failed_count, cancelled_count, durationMs,
+  first_failure_index, max_in_flight_observed, join, verdict}}`.
+  Both raw per-branch results AND structured rollup so workflows can
+  guard on either.
+- **Audit per-branch events** — `parallel.branch.started/.completed/
+  .failed/.cancelled` plus aggregate `parallel.fanout.completed` (or
+  `parallel.fanout.empty` for vacuous `for_each` cases). All carry
+  parent transition's `correlation_id` + `branch_index` payload;
+  three-tuple `(seq, branch_index, branch_seq)` is the canonical
+  ordering.
+- **Idempotency-key segmentation** (SPEC §24 F7) — branches that
+  declare `idempotencyKey: true` get `:branch:<index>` appended so
+  downstream dedupes per branch, not per fan-out. Stable across the
+  SAME branch's retries.
+- **Defensive snapshot-hash assert** — `PARALLEL_SNAPSHOT_MUTATED`
+  raised if snapshot bytes diverge during fan-out. Structurally
+  impossible in safe Rust; assert exists as future-regression safety
+  net.
+- **DOS poka-yoke** — `branches.len() >= 10` without explicit
+  `max_concurrency` rejects at config-load with `INVALID_PARALLEL_CONFIG`
+  naming the offending state.
+- **Recursion-depth cap** — `max_recursion_depth` (default 3) on the
+  parallel config; nested `parallel` beyond the cap raises
+  `PARALLEL_DEPTH_EXCEEDED`.
+- **`[*]` array-projection in output mapping** (`mapping.rs`) —
+  `$.output.branches[*].field` plucks `field` from each element of
+  `branches`, returning an array in original order. Multi-level
+  wildcards supported (`$.context.groups[*].items[*].name`). Backward-
+  compatible: paths without `[*]` resolve identically to before.
+- **5 new error codes** (SPEC §24.9): `INVALID_PARALLEL_CONFIG`,
+  `JOIN_THRESHOLD_NOT_MET`, `PARALLEL_DEPTH_EXCEEDED`,
+  `PARALLEL_SNAPSHOT_MUTATED`, `PARALLEL_EXECUTOR_NOT_WIRED`.
+- **`ExecuteRequest.correlation_id: Option<String>`** new field — the
+  runtime threads the parent transition's correlation_id through so
+  fan-out executors can emit per-branch events with the parent's
+  linkage. Existing executors that don't care continue to ignore the
+  field.
+
 ## [0.3.0] - 2026-05-25
 
 A substantial additive release adding the scripts surface (SPEC §22),
