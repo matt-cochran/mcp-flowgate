@@ -45,6 +45,28 @@
       "additionalProperties": { "$ref": "#/$defs/scriptFragment" },
       "default": {},
       "description": "Curated script library (SPEC §22). Peer to `skills`: where skills tell an LLM what to think, scripts tell a workflow what to do deterministically. Each entry has a `verb` from the closed ScriptVerb set (build/test/deploy/format/lint/install/verify/run), a `lifecycle`, and either an inline `body` OR an external `uri` + required `hash`. Invoked via the `script` executor kind."
+    },
+    "repos": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Directory containing a `flowgate.repo.yaml` manifest. Accepts absolute, relative (resolved against the host config's directory), or `~/`-prefixed paths."
+          }
+        }
+      },
+      "description": "Declared resource repos (SPEC §9). Each repo is loaded via its `flowgate.repo.yaml` manifest; every loaded definitionId is namespace-prefixed `<namespace>/<id>` before being merged into the gateway registry. Two repos sharing a namespace fail at load (V20)."
+    },
+    "overrides": {
+      "type": "array",
+      "default": [],
+      "items": { "type": "string" },
+      "description": "Fully-qualified definitionIds (`<namespace>/<id>`) that the host config explicitly shadows after a repo has provided them (SPEC §9.4). Anonymous shadowing — defining `<namespace>/<id>` locally without listing it here — fails at load (V23). Listing an id that no repo provides is also an error (stale override)."
     }
   },
   "$defs": {

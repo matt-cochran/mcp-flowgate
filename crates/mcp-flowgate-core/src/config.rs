@@ -1505,6 +1505,268 @@ pub fn load_resolved_with_diagnostics(
     resolve_with_diagnostics(load_yaml(path)?)
 }
 
+/// SPEC §9 — load + merge declared repos + resolve in one call.
+///
+/// Compared to [`load_resolved_with_diagnostics`], this variant additionally
+/// honors top-level `repos: [{ path: <repo-root> }]` and `overrides: [<id>]`
+/// blocks in the host config. Each repo is loaded via [`crate::repo::load_repo`],
+/// its definitionIds prefixed `<namespace>/`, and merged into the gateway
+/// registry BEFORE the host config's own entries — so the host can shadow a
+/// repo-provided id only when it lists the id in `overrides:` (V23). Repos
+/// declaring the same `namespace` fail at load (V20). After merging, every
+/// `kind: workflow` `definitionId:` reference must resolve to a loaded entry
+/// (V22).
+///
+/// Hosts with no `repos:` block behave exactly like
+/// [`load_resolved_with_diagnostics`] — the wrapper is the new entrypoint
+/// the binary should call regardless.
+pub fn load_resolved_with_repos(
+    path: impl AsRef<Path>,
+) -> anyhow::Result<(Value, Vec<Diagnostic>)> {
+    let path = path.as_ref();
+    let host = load_yaml(path)?;
+    let parent_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let merged = merge_declared_repos(host, &parent_dir)?;
+    resolve_with_diagnostics(merged)
+}
+
+/// Extract `repos:` + `overrides:` from `host`, load each repo, validate
+/// V20 / V21 / V22 / V23, deep-merge repo contents (then host on top so
+/// declared overrides win), and return the cleaned value (with `repos:`
+/// and `overrides:` stripped). Hosts without a `repos:` block round-trip
+/// through unchanged.
+fn merge_declared_repos(mut host: Value, host_dir: &Path) -> anyhow::Result<Value> {
+    let (repos, overrides) = take_repos_and_overrides(&mut host)?;
+    if repos.is_empty() {
+        // No repos declared — strip an empty `overrides:` (it's meaningless
+        // without any repo-provided ids to shadow) and return unchanged.
+        return Ok(host);
+    }
+
+    let mut repo_aggregate = Value::Object(Map::new());
+    let mut repo_provided_ids: HashSet<String> = HashSet::new();
+    let mut seen_namespaces: HashMap<String, String> = HashMap::new();
+
+    for repo_path in repos {
+        // Relative paths resolve against the host config's directory — same
+        // base-dir convention as `include:`.
+        let repo_path = if repo_path.is_absolute() {
+            repo_path
+        } else {
+            host_dir.join(repo_path)
+        };
+        let (manifest, repo_value) = crate::repo::load_repo(&repo_path).with_context(|| {
+            format!("loading repo at {}", repo_path.display())
+        })?;
+        // V20 — namespace uniqueness across declared repos.
+        if let Some(prev_name) =
+            seen_namespaces.insert(manifest.namespace.clone(), manifest.name.clone())
+        {
+            bail!(
+                "DUPLICATE_REPO_NAMESPACE: namespace '{}' is declared by repos '{}' and '{}'. \
+                 Each repo MUST declare a unique namespace (SPEC §9.4).",
+                manifest.namespace,
+                prev_name,
+                manifest.name
+            );
+        }
+        for id in crate::repo::aggregate_ids(&repo_value) {
+            repo_provided_ids.insert(id);
+        }
+        repo_aggregate = deep_merge(repo_aggregate, repo_value);
+    }
+
+    // V23 — any host-defined id that collides with a repo-provided id MUST
+    // appear in the explicit `overrides:` block. This closes the supply-chain
+    // backdoor: an operator cannot silently shadow a vendored definition.
+    let host_ids = host_definition_ids(&host);
+    let collisions: Vec<String> = host_ids
+        .intersection(&repo_provided_ids)
+        .cloned()
+        .collect();
+    for id in &collisions {
+        if !overrides.contains(id) {
+            bail!(
+                "ANONYMOUS_OVERRIDE: '{id}' is provided by a declared repo and shadowed \
+                 by the host config without an explicit `overrides:` entry. Add `{id}` to \
+                 the top-level `overrides:` array to make the shadowing intentional \
+                 (SPEC §9.4)."
+            );
+        }
+    }
+    // Any id listed in `overrides:` that doesn't actually collide is a
+    // stale declaration — surface it as a hard error so authors aren't
+    // misled into thinking they're shadowing something they aren't.
+    for id in &overrides {
+        if !repo_provided_ids.contains(id) {
+            bail!(
+                "STALE_OVERRIDE: `overrides:` lists '{id}', but no declared repo provides \
+                 that id. Remove it or correct the namespace prefix (SPEC §9.4)."
+            );
+        }
+    }
+
+    // Repo contents first, host body last → host wins on the explicitly
+    // declared overrides.
+    let merged = deep_merge(repo_aggregate, host);
+
+    // V22 — every `kind: workflow` definitionId reference in the merged
+    // registry must resolve. References were namespace-prefixed inside
+    // each repo's workflow bodies by `load_repo`; here we walk the final
+    // registry and assert every `kind: workflow` ref binds.
+    validate_workflow_refs_resolve(&merged)?;
+    Ok(merged)
+}
+
+/// Remove the `repos:` and `overrides:` top-level keys from `host` and
+/// return their parsed payloads. Errors on shape mismatches.
+fn take_repos_and_overrides(
+    host: &mut Value,
+) -> anyhow::Result<(Vec<PathBuf>, HashSet<String>)> {
+    let Some(obj) = host.as_object_mut() else {
+        return Ok((Vec::new(), HashSet::new()));
+    };
+    let repos: Vec<PathBuf> = match obj.remove("repos") {
+        None => Vec::new(),
+        Some(Value::Array(arr)) => arr
+            .into_iter()
+            .enumerate()
+            .map(|(i, entry)| parse_repo_entry(i, entry))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+        Some(other) => bail!(
+            "INVALID_REPOS_SHAPE: top-level `repos:` must be an array of `{{ path: <dir> }}` \
+             objects ({})",
+            short_value_kind(&other)
+        ),
+    };
+    let overrides: HashSet<String> = match obj.remove("overrides") {
+        None => HashSet::new(),
+        Some(Value::Array(arr)) => arr
+            .into_iter()
+            .map(|entry| match entry {
+                Value::String(s) if !s.is_empty() => Ok(s),
+                Value::String(_) => bail!(
+                    "INVALID_OVERRIDE_ENTRY: `overrides:` entries MUST be non-empty strings"
+                ),
+                other => bail!(
+                    "INVALID_OVERRIDE_ENTRY: `overrides:` entries MUST be strings ({})",
+                    short_value_kind(&other)
+                ),
+            })
+            .collect::<anyhow::Result<HashSet<_>>>()?,
+        Some(other) => bail!(
+            "INVALID_OVERRIDES_SHAPE: top-level `overrides:` must be an array of \
+             fully-qualified id strings ({})",
+            short_value_kind(&other)
+        ),
+    };
+    Ok((repos, overrides))
+}
+
+/// Parse one `repos:` array entry. Accepts `{ path: <string> }`; expands
+/// `~/` to `$HOME` and `~` alone is treated literally (no expansion).
+fn parse_repo_entry(index: usize, entry: Value) -> anyhow::Result<PathBuf> {
+    let path_str = entry
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            anyhow!(
+                "INVALID_REPO_ENTRY: `repos[{index}]` must be an object with a `path` field, \
+                 e.g. `- path: ~/repos/swe-core`"
+            )
+        })?;
+    Ok(expand_repo_path(path_str))
+}
+
+/// Expand a `~/`-prefixed path against `$HOME`. Returns the input unchanged
+/// when no `~/` prefix is present or `$HOME` is unset (load-time error will
+/// surface in `load_repo` instead, with the unresolved literal in the
+/// message).
+fn expand_repo_path(p: &str) -> PathBuf {
+    if let Some(rest) = p.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(p)
+}
+
+/// Collect every host-declared definitionId across the four prefixable
+/// blocks. Mirror of [`crate::repo::aggregate_ids`] for the host side.
+fn host_definition_ids(host: &Value) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(obj) = host.as_object() else { return out };
+    for block in ["workflows", "skills", "scripts", "connections"] {
+        if let Some(entries) = obj.get(block).and_then(Value::as_object) {
+            for k in entries.keys() {
+                out.insert(k.clone());
+            }
+        }
+    }
+    out
+}
+
+/// SPEC §9.3 — after repo loading, every `kind: workflow` executor's
+/// `definitionId:` reference must resolve to a loaded workflow. Unresolved
+/// refs are V22 (likely an unprefixed cross-repo ref or a typo).
+fn validate_workflow_refs_resolve(config: &Value) -> anyhow::Result<()> {
+    let known: HashSet<String> = config
+        .pointer("/workflows")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    if known.is_empty() {
+        return Ok(());
+    }
+    let mut unresolved: Vec<(String, String)> = Vec::new();
+    if let Some(workflows) = config.pointer("/workflows").and_then(Value::as_object) {
+        for (wf_id, wf_def) in workflows {
+            collect_unresolved_workflow_refs(wf_def, &known, wf_id, &mut unresolved);
+        }
+    }
+    if let Some((wf_id, target)) = unresolved.first() {
+        bail!(
+            "UNRESOLVED_WORKFLOW_REF: workflow '{wf_id}' references definitionId '{target}' \
+             via a `kind: workflow` executor, but no workflow with that id is loaded. \
+             Unprefixed names resolve in the workflow's OWN namespace; to call into \
+             another repo, fully qualify the id as `<namespace>/{target}` (SPEC §9.3)."
+        );
+    }
+    Ok(())
+}
+
+fn collect_unresolved_workflow_refs(
+    value: &Value,
+    known: &HashSet<String>,
+    wf_id: &str,
+    out: &mut Vec<(String, String)>,
+) {
+    match value {
+        Value::Object(map) => {
+            let is_workflow_exec = map.get("kind").and_then(Value::as_str) == Some("workflow");
+            if is_workflow_exec {
+                if let Some(def_id) = map.get("definitionId").and_then(Value::as_str) {
+                    if !known.contains(def_id) {
+                        out.push((wf_id.to_string(), def_id.to_string()));
+                    }
+                }
+            }
+            for child in map.values() {
+                collect_unresolved_workflow_refs(child, known, wf_id, out);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                collect_unresolved_workflow_refs(v, known, wf_id, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Parse + resolve a YAML string in-process. Use this when the config is
 /// embedded with `include_str!` so rules ship with the binary and end users
 /// can't edit them. Multi-file `include:` directives won't work in this path

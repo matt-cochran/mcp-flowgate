@@ -48,6 +48,7 @@ pub use error::{ErrorClass, ExecutorError, RuntimeError};
 pub use fs::{Filesystem, InMemoryFilesystem, RealFilesystem};
 pub use guards::DefaultGuardEvaluator;
 pub use mapping::{merge_output, read_in_scopes};
+pub use repo::{load_manifest, load_repo, RepoLayout, RepoManifest, REPO_MANIFEST_SCHEMA_V1};
 pub use model::*;
 pub use ports::*;
 pub use proxy_workflow::{compile_proxy_workflow, DEFAULT_PROXY_STATE, DEFAULT_PROXY_WORKFLOW_ID};

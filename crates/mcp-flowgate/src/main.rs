@@ -182,10 +182,14 @@ fn init_tracing(log_format: &str) {
 }
 
 fn load_config(path: &PathBuf) -> anyhow::Result<Value> {
-    // Walks `include:` blocks, then resolves `capabilities:` / `wraps` /
+    // Walks `include:` blocks, loads any declared `repos:` (namespace-prefixing
+    // every definitionId), enforces the V20/V21/V22/V23 multi-repo invariants
+    // (SPEC §9), then resolves `capabilities:` / `wraps` /
     // `executor: { capability: ... }` references into the inline shapes the
-    // runtime expects.
-    mcp_flowgate_core::config::load_resolved(path)
+    // runtime expects. Soft diagnostics are discarded here; `check` uses the
+    // diagnostics-returning variant.
+    mcp_flowgate_core::config::load_resolved_with_repos(path)
+        .map(|(config, _diagnostics)| config)
         .with_context(|| format!("loading config {}", path.display()))
 }
 
@@ -361,7 +365,7 @@ fn check(config_path: PathBuf) -> anyhow::Result<()> {
     // soft diagnostics (e.g. non-strict-mode unblessed subject roots)
     // become visible. Use the diagnostics-returning variant.
     let (config, soft_diagnostics) =
-        mcp_flowgate_core::config::load_resolved_with_diagnostics(&config_path)
+        mcp_flowgate_core::config::load_resolved_with_repos(&config_path)
             .with_context(|| format!("loading config {}", config_path.display()))?;
 
     let version = config

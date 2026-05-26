@@ -13,10 +13,12 @@
 //! This module owns the manifest schema + loader. Namespace-prefixing
 //! lives in `config.rs` where it can reuse `deep_merge`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 /// The expected value of the manifest's `schema` field. Loaders refuse any
 /// manifest whose `schema` is not exactly this string — forward-incompatible
@@ -109,15 +111,205 @@ pub fn load_manifest(repo_root: &Path) -> anyhow::Result<RepoManifest> {
     Ok(manifest)
 }
 
+/// Top-level config blocks whose entries are subject to namespace prefixing
+/// when loaded from a repo. Order matters only for stable error messages;
+/// the merged value is order-independent.
+const PREFIXABLE_BLOCKS: &[&str] = &["workflows", "skills", "scripts", "connections"];
+
+/// Load a repo: parse its `flowgate.repo.yaml`, walk every layout directory,
+/// merge every `*.yaml` file's top-level `workflows:` / `skills:` / `scripts:` /
+/// `connections:` block into a single aggregate Value with every entry key
+/// prefixed `<namespace>/<id>`. Inside repo-loaded workflows, also rewrite
+/// `kind: workflow` `definitionId:` references so unprefixed names bind to
+/// the current namespace (the "current namespace" resolution rule from
+/// spec §9.3).
+///
+/// Returns the manifest plus an aggregate Value shaped like a gateway
+/// config fragment — caller deep-merges it into the host config.
+///
+/// Errors at:
+/// - manifest load (see [`load_manifest`])
+/// - YAML parse failure on any layout-dir file
+/// - duplicate prefixed id within this repo (V21)
+/// - unsupported top-level block in a layout-dir file
+pub fn load_repo(repo_path: &Path) -> anyhow::Result<(RepoManifest, Value)> {
+    let manifest = load_manifest(repo_path)?;
+    let ns = &manifest.namespace;
+    let mut aggregate = Value::Object(Map::new());
+
+    for layout_dir in [
+        &manifest.layout.capabilities,
+        &manifest.layout.orchestrators,
+        &manifest.layout.skills,
+        &manifest.layout.scripts,
+        &manifest.layout.connections,
+    ] {
+        let dir_path = repo_path.join(layout_dir);
+        if !dir_path.is_dir() {
+            // A repo may legitimately ship only some of the layout tiers
+            // (e.g. a `connections-only` repo). Missing dirs are silent.
+            continue;
+        }
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir_path)
+            .with_context(|| format!("reading repo layout dir {}", dir_path.display()))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("yaml"))
+            .collect();
+        // Deterministic order so duplicate-id errors are reproducible.
+        entries.sort();
+        for file_path in entries {
+            let text = std::fs::read_to_string(&file_path)
+                .with_context(|| format!("reading repo file {}", file_path.display()))?;
+            let value: Value = serde_yaml::from_str(&text)
+                .with_context(|| format!("parsing YAML {}", file_path.display()))?;
+            merge_repo_file(&mut aggregate, value, ns, &file_path)?;
+        }
+    }
+    Ok((manifest, aggregate))
+}
+
+/// Merge one repo YAML file's contents into the aggregate Value. Prefix
+/// every entry key under any [`PREFIXABLE_BLOCKS`] block with `<ns>/`, and
+/// rewrite `kind: workflow` `definitionId:` refs inside workflow bodies.
+fn merge_repo_file(
+    aggregate: &mut Value,
+    file_value: Value,
+    namespace: &str,
+    file_path: &Path,
+) -> anyhow::Result<()> {
+    let Value::Object(top) = file_value else {
+        bail!(
+            "repo file {} must be a YAML mapping at the top level",
+            file_path.display()
+        );
+    };
+    let agg_obj = aggregate
+        .as_object_mut()
+        .expect("aggregate is constructed as an object");
+    for (block_key, block_value) in top {
+        if !PREFIXABLE_BLOCKS.contains(&block_key.as_str()) {
+            bail!(
+                "repo file {} has unsupported top-level key `{}`. Repo files may declare \
+                 only {:?} blocks (SPEC §9.2).",
+                file_path.display(),
+                block_key,
+                PREFIXABLE_BLOCKS
+            );
+        }
+        let Value::Object(entries) = block_value else {
+            bail!(
+                "repo file {} block `{}:` must be a mapping",
+                file_path.display(),
+                block_key
+            );
+        };
+        let agg_block = agg_obj
+            .entry(block_key.clone())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .expect("just inserted as object");
+        for (id, mut def) in entries {
+            let prefixed = prefix_id(namespace, &id);
+            if block_key == "workflows" {
+                rewrite_workflow_refs(&mut def, namespace);
+            }
+            if agg_block.contains_key(&prefixed) {
+                // V21 — duplicate definitionId within one repo.
+                bail!(
+                    "DUPLICATE_REPO_DEF: repo namespace '{}' defines '{}' more than once \
+                     (last seen in {}). Each definitionId may appear at most once per repo \
+                     (SPEC §9.4).",
+                    namespace,
+                    prefixed,
+                    file_path.display()
+                );
+            }
+            agg_block.insert(prefixed, def);
+        }
+    }
+    Ok(())
+}
+
+/// Prefix `id` with `<namespace>/` unless it is already namespace-qualified
+/// (contains `/`). A repo may legitimately re-export a foreign id by writing
+/// it fully qualified.
+fn prefix_id(namespace: &str, id: &str) -> String {
+    if id.contains('/') {
+        id.to_string()
+    } else {
+        format!("{}/{}", namespace, id)
+    }
+}
+
+/// SPEC §9.3 — inside a repo-loaded workflow, rewrite every `kind: workflow`
+/// executor's `definitionId:` from an unprefixed name (`cap.plan.vet`) to
+/// the current-namespace form (`swe/cap.plan.vet`). Fully qualified refs
+/// (`other-ns/cap.plan.vet`) pass through unchanged.
+///
+/// Recursive walk: refs may appear in workflow-level `onEnter`, state-level
+/// `onEnter`, transitions, fallback executors, and arbitrarily nested
+/// executors. Cheap by design — workflow bodies are small.
+pub(crate) fn rewrite_workflow_refs(value: &mut Value, namespace: &str) {
+    match value {
+        Value::Object(map) => {
+            // Direct executor block: { kind: workflow, definitionId: ... }
+            let is_workflow_executor = map
+                .get("kind")
+                .and_then(Value::as_str)
+                == Some("workflow");
+            if is_workflow_executor {
+                if let Some(Value::String(id)) = map.get_mut("definitionId") {
+                    if !id.contains('/') {
+                        *id = format!("{}/{}", namespace, id);
+                    }
+                }
+            }
+            for child in map.values_mut() {
+                rewrite_workflow_refs(child, namespace);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                rewrite_workflow_refs(v, namespace);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect every fully-qualified definitionId provided by a repo (the keys
+/// of every prefixable block in the aggregate Value). Used by the host-side
+/// loader to seed V20 (namespace uniqueness via separate map) and V23
+/// (anonymous-shadowing) checks.
+pub fn aggregate_ids(aggregate: &Value) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(obj) = aggregate.as_object() else { return out };
+    for block in PREFIXABLE_BLOCKS {
+        if let Some(entries) = obj.get(*block).and_then(Value::as_object) {
+            for k in entries.keys() {
+                out.insert(k.clone());
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::TempDir;
 
     fn write_manifest(dir: &Path, body: &str) -> PathBuf {
         let p = dir.join("flowgate.repo.yaml");
         std::fs::write(&p, body).unwrap();
         p
+    }
+
+    fn write_file(dir: &Path, rel: &str, body: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, body).unwrap();
     }
 
     #[test]
@@ -178,5 +370,191 @@ mod tests {
         let err = load_manifest(td.path()).expect_err("missing file should error");
         let msg = format!("{:#}", err);
         assert!(msg.contains("flowgate.repo.yaml"), "error should mention file: {msg}");
+    }
+
+    fn minimal_manifest(namespace: &str) -> String {
+        format!(
+            "schema: flowgate.repo/v1\nname: {namespace}-core\nnamespace: {namespace}\nversion: 0.6.0\n"
+        )
+    }
+
+    #[test]
+    fn load_repo_prefixes_workflow_ids_with_namespace() {
+        let td = TempDir::new().unwrap();
+        write_manifest(td.path(), &minimal_manifest("swe"));
+        write_file(
+            td.path(),
+            "capabilities/cap.plan.vet.yaml",
+            "workflows:\n  cap.plan.vet:\n    title: Plan vet\n",
+        );
+
+        let (manifest, agg) = load_repo(td.path()).expect("repo loads");
+        assert_eq!(manifest.namespace, "swe");
+        let workflows = agg
+            .pointer("/workflows")
+            .and_then(Value::as_object)
+            .expect("workflows present");
+        assert!(workflows.contains_key("swe/cap.plan.vet"), "got keys: {:?}", workflows.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn load_repo_merges_files_across_layout_dirs() {
+        let td = TempDir::new().unwrap();
+        write_manifest(td.path(), &minimal_manifest("swe"));
+        write_file(
+            td.path(),
+            "capabilities/cap.plan.vet.yaml",
+            "workflows:\n  cap.plan.vet:\n    title: Vet\n",
+        );
+        write_file(
+            td.path(),
+            "orchestrators/flow.add-feature.yaml",
+            "workflows:\n  flow.add-feature:\n    title: Add feature\n",
+        );
+        write_file(
+            td.path(),
+            "skills/sk.plan.specify.change-request.yaml",
+            "skills:\n  sk.plan.specify.change-request:\n    verb: specify\n    lifecycle: stable\n    body: hi\n",
+        );
+
+        let (_m, agg) = load_repo(td.path()).expect("repo loads");
+        let workflows = agg.pointer("/workflows").and_then(Value::as_object).unwrap();
+        assert!(workflows.contains_key("swe/cap.plan.vet"));
+        assert!(workflows.contains_key("swe/flow.add-feature"));
+        let skills = agg.pointer("/skills").and_then(Value::as_object).unwrap();
+        assert!(skills.contains_key("swe/sk.plan.specify.change-request"));
+    }
+
+    #[test]
+    fn load_repo_rewrites_unprefixed_workflow_refs_to_current_namespace() {
+        let td = TempDir::new().unwrap();
+        write_manifest(td.path(), &minimal_manifest("swe"));
+        write_file(
+            td.path(),
+            "orchestrators/flow.add-feature.yaml",
+            r#"
+workflows:
+  flow.add-feature:
+    title: Add feature
+    states:
+      planning:
+        transitions:
+          plan_drafted:
+            target: vetting
+            executor:
+              kind: workflow
+              definitionId: cap.plan.vet
+          plan_external:
+            target: vetting
+            executor:
+              kind: workflow
+              definitionId: quality/cap.plan.vet
+"#,
+        );
+
+        let (_m, agg) = load_repo(td.path()).expect("repo loads");
+        let vet_def_id = agg.pointer(
+            "/workflows/swe~1flow.add-feature/states/planning/transitions/plan_drafted/executor/definitionId",
+        ).and_then(Value::as_str).expect("ref should be present");
+        assert_eq!(vet_def_id, "swe/cap.plan.vet", "unprefixed ref should rewrite to current namespace");
+        let external = agg.pointer(
+            "/workflows/swe~1flow.add-feature/states/planning/transitions/plan_external/executor/definitionId",
+        ).and_then(Value::as_str).expect("external ref should be present");
+        assert_eq!(external, "quality/cap.plan.vet", "fully-qualified ref should pass through unchanged");
+    }
+
+    #[test]
+    fn load_repo_errors_on_duplicate_id_within_same_repo() {
+        let td = TempDir::new().unwrap();
+        write_manifest(td.path(), &minimal_manifest("swe"));
+        write_file(
+            td.path(),
+            "capabilities/a.yaml",
+            "workflows:\n  cap.plan.vet:\n    title: A\n",
+        );
+        write_file(
+            td.path(),
+            "capabilities/b.yaml",
+            "workflows:\n  cap.plan.vet:\n    title: B (collides)\n",
+        );
+
+        let err = load_repo(td.path()).expect_err("duplicate id should error");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("DUPLICATE_REPO_DEF"), "msg: {msg}");
+        assert!(msg.contains("swe/cap.plan.vet"), "msg should name the id: {msg}");
+    }
+
+    #[test]
+    fn load_repo_errors_on_unsupported_top_level_block() {
+        let td = TempDir::new().unwrap();
+        write_manifest(td.path(), &minimal_manifest("swe"));
+        write_file(
+            td.path(),
+            "capabilities/bad.yaml",
+            "bogus_top_level:\n  foo: bar\n",
+        );
+        let err = load_repo(td.path()).expect_err("unsupported block should error");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("bogus_top_level"), "msg: {msg}");
+    }
+
+    #[test]
+    fn load_repo_silently_skips_missing_layout_dirs() {
+        // A repo that only ships skills, no capabilities/orchestrators/etc.
+        let td = TempDir::new().unwrap();
+        write_manifest(td.path(), &minimal_manifest("snip"));
+        write_file(
+            td.path(),
+            "skills/sk.do.thing.yaml",
+            "skills:\n  sk.do.thing:\n    verb: explain\n    lifecycle: stable\n    body: hi\n",
+        );
+        let (_m, agg) = load_repo(td.path()).expect("skills-only repo loads");
+        assert!(agg.pointer("/skills/snip~1sk.do.thing").is_some());
+        assert!(agg.pointer("/workflows").is_none(), "no workflows block expected");
+    }
+
+    #[test]
+    fn rewrite_workflow_refs_recurses_into_nested_executors() {
+        // Cover deeply nested executor configs — e.g. inside a fallback or
+        // pipeline step.
+        let mut v = json!({
+            "states": {
+                "s1": {
+                    "transitions": {
+                        "t1": {
+                            "executor": {
+                                "kind": "pipeline",
+                                "steps": [
+                                    { "executor": { "kind": "workflow", "definitionId": "cap.x" } },
+                                    { "executor": { "kind": "workflow", "definitionId": "other/cap.y" } }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        rewrite_workflow_refs(&mut v, "ns");
+        let step0 = v.pointer("/states/s1/transitions/t1/executor/steps/0/executor/definitionId")
+            .and_then(Value::as_str).unwrap();
+        assert_eq!(step0, "ns/cap.x");
+        let step1 = v.pointer("/states/s1/transitions/t1/executor/steps/1/executor/definitionId")
+            .and_then(Value::as_str).unwrap();
+        assert_eq!(step1, "other/cap.y", "qualified ref untouched");
+    }
+
+    #[test]
+    fn aggregate_ids_collects_keys_across_all_prefixable_blocks() {
+        let agg = json!({
+            "workflows":   { "swe/cap.a": {}, "swe/flow.b": {} },
+            "skills":      { "swe/sk.x.y": {} },
+            "connections": { "swe/conn.z": {} }
+        });
+        let ids = aggregate_ids(&agg);
+        assert!(ids.contains("swe/cap.a"));
+        assert!(ids.contains("swe/flow.b"));
+        assert!(ids.contains("swe/sk.x.y"));
+        assert!(ids.contains("swe/conn.z"));
+        assert_eq!(ids.len(), 4);
     }
 }
