@@ -28,6 +28,7 @@ pub mod store_postgres;
 pub mod store_sqlite;
 pub mod validate;
 pub mod templating;
+pub mod use_binding;
 pub mod runtime_chain;
 pub mod runtime_links;
 pub mod runtime_records;

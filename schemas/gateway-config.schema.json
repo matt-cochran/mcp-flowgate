@@ -370,6 +370,29 @@
           "items": { "type": "string" },
           "default": []
         },
+        "snippet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputs", "outputs"],
+          "properties": {
+            "inputs":  { "type": "object", "additionalProperties": { "type": "object" } },
+            "outputs": { "type": "object", "additionalProperties": { "type": "object" } }
+          },
+          "description": "SPEC §5.1 — typed I/O contract for a capability workflow. `inputs` and `outputs` are objects keyed by name with JSON-schema-fragment values. Required on `cap.*` workflows (V3); forbidden on orchestrators (V8, PR3)."
+        },
+        "verb": {
+          "type": "string",
+          "description": "SPEC §4 — capability verb from the 24-token CapVerb cloud (PR3 will enforce the closed enum). Required on `cap.*` workflows for verb-shape checks; absent on orchestrators."
+        },
+        "inputs": {
+          "type": "object",
+          "description": "SPEC §7 — orchestrator entry signature, used to seed the slot table for cross-workflow type checks. Distinct from a capability's `snippet.inputs`."
+        },
+        "lifecycle": {
+          "type": "string",
+          "default": "experimental",
+          "description": "SPEC §6.2 — workflow lifecycle. Capabilities default to `experimental`; declaring `stable` is what makes `expects_contract_hash` mandatory on callers (V16, PR3)."
+        },
         "initialState": { "type": "string" },
         "initialContext": {
           "type": "object",
@@ -582,6 +605,27 @@
           "minimum": 1,
           "default": 3,
           "description": "SPEC §24.8 (kind: parallel only) — cap on nested parallel-of-parallels depth. Default 3 (catches authoring bugs); override for deliberately deep nesting."
+        },
+        "use": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "SPEC §6.1 (kind: workflow only) — typed use-binding for capability invocations. `inputs` resolves to the capability's `snippet.inputs` schema; `outputs` projects declared capability outputs back to host context slots. Required when targeting a `cap.*` definitionId (V12).",
+          "properties": {
+            "inputs":  { "type": "object" },
+            "outputs": {
+              "type": "object",
+              "description": "Map of host JSON path (`$.context.<slot>`) to capability output name. Only the listed outputs propagate; capability-internal slots stay scoped to the child blackboard.",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "expects_contract_hash": {
+          "type": "string",
+          "description": "SPEC §6.2 (kind: workflow only) — optional pin on the target capability's `snippet`-derived contract hash. Mismatch is V15 (PR3). Required when targeting a `stable`-lifecycle capability (V16, PR3)."
+        },
+        "_snippetOutputs": {
+          "type": "object",
+          "description": "Runtime-stamped — do NOT author. Resolve embeds the target capability's `snippet.outputs` schema here so the runtime executor can validate without a DefinitionStore lookup."
         }
       },
       "oneOf": [

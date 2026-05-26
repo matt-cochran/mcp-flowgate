@@ -52,6 +52,18 @@ pub enum ExecutorError {
     #[error("permanent error: {0}")]
     Permanent(String),
 
+    /// SPEC §5.3 — a capability produced an output that failed validation
+    /// against its declared `snippet.outputs` schema. The message carries
+    /// the structured violation diff (slot name + jsonschema reason). The
+    /// variant is distinct from [`ExecutorError::Permanent`] so reliability
+    /// policy can refuse to retry contract-typing failures explicitly and
+    /// so audit emitters can recognize this class of failure as a
+    /// `cap.output.schema_violation` event without text-matching the
+    /// `Permanent(..)` payload. Classifies as `ErrorClass::Permanent`
+    /// (never retryable).
+    #[error("schema violation: {0}")]
+    SchemaViolation(String),
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -64,6 +76,7 @@ impl ExecutorError {
             ExecutorError::Connection(_) => ErrorClass::Connection,
             ExecutorError::Transient(_) => ErrorClass::Transient,
             ExecutorError::Permanent(_) => ErrorClass::Permanent,
+            ExecutorError::SchemaViolation(_) => ErrorClass::Permanent,
             ExecutorError::Other(_) => ErrorClass::Permanent,
         }
     }

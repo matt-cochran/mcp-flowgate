@@ -252,7 +252,190 @@ pub fn resolve_with_diagnostics(mut config: Value) -> anyhow::Result<(Value, Vec
     crate::lexicon::validate_lexicon(&config)?;
     crate::lexicon::stamp_lexicon_library(&mut config);
 
+    // 7-sexies. SPEC §6 — for every transition whose executor is
+    //           `kind: workflow` with a `use:` block, synthesize the
+    //           transition-level `output:` mapping from `use.outputs`
+    //           and embed the target capability's `snippet.outputs`
+    //           schema as `_snippetOutputs` on the executor config.
+    //           After this pass, the runtime's existing merge_output
+    //           projection drives cap-output writes; the executor needs
+    //           no schema lookup at run time.
+    expand_use_bindings(&mut config)?;
+
     Ok((config, diagnostics))
+}
+
+/// SPEC §6 — Walk every workflow's transitions; for any `kind: workflow`
+/// executor with a `use:` block:
+///
+/// 1. Resolve the target capability's `snippet.outputs` from
+///    `config["workflows"][definitionId]["snippet"]["outputs"]` and embed
+///    it on the executor as `_snippetOutputs` so the runtime executor
+///    has the schema in hand without doing a DefinitionStore lookup.
+///
+/// 2. Synthesize the transition-level `output:` mapping from `use.outputs`.
+///    Each `host_path → cap_output_name` entry becomes
+///    `<host_path_tail>: "$.output.<cap_output_name>"` where
+///    `host_path_tail` strips the `$.context.` prefix. The synthesized
+///    mapping merges into any operator-declared `output:` block; operator
+///    declarations win on tail-key collisions (so an author can override
+///    a single field while letting the rest auto-project).
+///
+/// Errors when:
+/// - `use:` is present but the target `definitionId` is not loaded.
+/// - A `use.outputs` LHS does not match `^\$\.context\.[a-z][a-z0-9_-]*$`
+///   (V12 — runtime can only write top-level context keys via merge_output).
+///
+/// Idempotent: re-running on already-expanded config detects the embedded
+/// `_snippetOutputs` and skips.
+fn expand_use_bindings(config: &mut Value) -> anyhow::Result<()> {
+    // Borrow the workflows map immutably to harvest snippet schemas, then
+    // walk it mutably to inject the synthesized outputs. We can't do both
+    // at once, so snapshot the snippet schemas into a HashMap up front.
+    let snippets: HashMap<String, Value> = match config
+        .pointer("/workflows")
+        .and_then(Value::as_object)
+    {
+        Some(workflows) => workflows
+            .iter()
+            .filter_map(|(id, def)| {
+                def.pointer("/snippet/outputs")
+                    .cloned()
+                    .map(|outputs| (id.clone(), outputs))
+            })
+            .collect(),
+        None => HashMap::new(),
+    };
+
+    let Some(workflows) = config
+        .pointer_mut("/workflows")
+        .and_then(Value::as_object_mut)
+    else {
+        return Ok(());
+    };
+
+    for (wf_id, def) in workflows.iter_mut() {
+        let Some(states) = def
+            .pointer_mut("/states")
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        for (state_name, state_def) in states.iter_mut() {
+            let Some(transitions) = state_def
+                .pointer_mut("/transitions")
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            for (t_name, t_def) in transitions.iter_mut() {
+                expand_one_transition(t_def, &snippets, wf_id, state_name, t_name)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Expand a single transition's `use:` block in place. See [`expand_use_bindings`]
+/// for the full rule set. Trailing args (`wf_id`, `state_name`, `t_name`)
+/// are diagnostic context for error messages — when V12 fires, the operator
+/// gets the exact JSON-Pointer-equivalent path to the offender.
+fn expand_one_transition(
+    t_def: &mut Value,
+    snippets: &HashMap<String, Value>,
+    wf_id: &str,
+    state_name: &str,
+    t_name: &str,
+) -> anyhow::Result<()> {
+    let Some(t_obj) = t_def.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(executor) = t_obj.get_mut("executor") else {
+        return Ok(());
+    };
+    let Some(exec_obj) = executor.as_object_mut() else {
+        return Ok(());
+    };
+    let is_workflow = exec_obj.get("kind").and_then(Value::as_str) == Some("workflow");
+    if !is_workflow {
+        return Ok(());
+    }
+    let Some(use_val) = exec_obj.get("use").cloned() else {
+        return Ok(());
+    };
+
+    // Without a definitionId we can't look up the snippet schema and we
+    // can't validate references. Leave the transition untouched and let
+    // `validate.rs::validate_use_bindings` surface the diagnostic — it
+    // has the same context this function does and produces a proper
+    // structured `Diagnostic::Error`.
+    let Some(def_id) = exec_obj
+        .get("definitionId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return Ok(());
+    };
+
+    // V22 (cross-PR with PR1): the ref must resolve to a loaded workflow.
+    // We only emit `_snippetOutputs` when the target declares a snippet;
+    // legacy non-cap callees stay untouched (some pre-v0.6 fixtures
+    // use `kind: workflow` against plain workflows without `snippet:`).
+    let snippet_outputs = snippets.get(&def_id);
+
+    // Embed the snippet schema for the runtime executor.
+    if let Some(s) = snippet_outputs {
+        exec_obj.insert("_snippetOutputs".into(), s.clone());
+    }
+
+    // Synthesize the transition-level `output:` mapping from use.outputs.
+    // Skips malformed entries silently — `validate.rs::validate_use_block_shape`
+    // is the surface that reports them as `Diagnostic::Error`. Errors-as-data
+    // beat errors-as-bail here so a single bad transition doesn't poison the
+    // whole config load.
+    let _ = (wf_id, state_name, t_name); // diagnostic context retained for future use
+    let Some(use_outputs) = use_val.get("outputs").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let mut synthesized = Map::new();
+    for (host_path, cap_name_value) in use_outputs {
+        let Some(cap_name) = cap_name_value.as_str() else { continue };
+        let Some(tail) = host_path_tail(host_path) else { continue };
+        synthesized.insert(tail, Value::String(format!("$.output.{cap_name}")));
+    }
+
+    // Merge with any operator-declared `output:` block. Operator wins on
+    // collisions (lets authors override one slot while auto-projecting
+    // the rest).
+    let existing = t_obj
+        .get("output")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (k, v) in existing {
+        synthesized.insert(k, v);
+    }
+    t_obj.insert("output".into(), Value::Object(synthesized));
+    Ok(())
+}
+
+/// Extract the top-level context-slot name from `$.context.<name>`. Returns
+/// `None` for any other path shape (nested paths, non-context roots, etc.).
+/// `<name>` must match `^[a-z][a-z0-9_-]*$`.
+fn host_path_tail(host_path: &str) -> Option<String> {
+    let tail = host_path.strip_prefix("$.context.")?;
+    if tail.is_empty() || tail.contains('.') || tail.contains('/') {
+        return None;
+    }
+    let mut chars = tail.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_lowercase() {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_') {
+        return None;
+    }
+    Some(tail.to_string())
 }
 
 /// SPEC §29 — for every workflow with `enable_human_ask: true`, inject

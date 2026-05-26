@@ -63,6 +63,17 @@ fn validate_one_workflow(
         out.push(Diagnostic::Error(format!("workflow '{id}': {e}")));
     }
 
+    // SPEC §5.1, V3/V4/V5 — capability workflows MUST declare a typed
+    // `snippet:` contract; orchestrators MUST NOT (V8 is PR3 territory).
+    // The tier is determined by the unprefixed id stem (`cap.` vs `flow.`).
+    let tier = tier_of(id);
+    if matches!(tier, Tier::Cap) {
+        validate_snippet(id, def, out);
+    }
+    // SPEC §6.1, V12 — every `kind: workflow` executor inside this
+    // workflow's transitions must conform to the use-binding contract.
+    validate_use_bindings(id, def, out);
+
     let Some(initial_state) = def.get("initialState").and_then(Value::as_str) else {
         out.push(Diagnostic::Error(format!(
             "workflow '{id}': missing 'initialState'"
@@ -593,6 +604,187 @@ fn check_skills_refs(
             }
         }
     }
+}
+
+/// SPEC §3.2 — workflow tier inferred from the unprefixed id stem.
+/// `swe/cap.plan.vet` → `Cap`; `swe/flow.add-feature` → `Flow`; any other
+/// shape (legacy pre-v0.6 workflows like `with_artifact_lock`) → `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tier {
+    Cap,
+    Flow,
+    Other,
+}
+
+fn tier_of(id: &str) -> Tier {
+    let stem = id.rsplit('/').next().unwrap_or(id);
+    if stem.starts_with("cap.") {
+        Tier::Cap
+    } else if stem.starts_with("flow.") {
+        Tier::Flow
+    } else {
+        Tier::Other
+    }
+}
+
+/// SPEC §5.1, V3/V4/V5 — capability workflows MUST declare a `snippet:`
+/// block with `inputs:` AND `outputs:` keys. Each schema entry must be a
+/// JSON object (the runtime later validates against the embedded schema
+/// via `jsonschema::validator_for`; here we only insist on shape so V17's
+/// runtime check has well-formed material to work with).
+fn validate_snippet(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(snippet) = def.get("snippet") else {
+        out.push(Diagnostic::Error(format!(
+            "MISSING_SNIPPET: capability '{id}' is missing required `snippet:` block \
+             (SPEC §5.1, V3)"
+        )));
+        return;
+    };
+    let Some(snip_obj) = snippet.as_object() else {
+        out.push(Diagnostic::Error(format!(
+            "INVALID_SNIPPET: capability '{id}' `snippet:` must be an object (SPEC §5.1, V4)"
+        )));
+        return;
+    };
+    for key in ["inputs", "outputs"] {
+        let Some(block) = snip_obj.get(key) else {
+            out.push(Diagnostic::Error(format!(
+                "INVALID_SNIPPET: capability '{id}' `snippet:` is missing required \
+                 `{key}:` key (may be `{{}}` — but must be present) (SPEC §5.1, V4)"
+            )));
+            continue;
+        };
+        let Some(entries) = block.as_object() else {
+            out.push(Diagnostic::Error(format!(
+                "INVALID_SNIPPET: capability '{id}' `snippet.{key}` must be a mapping \
+                 (SPEC §5.1, V4)"
+            )));
+            continue;
+        };
+        for (name, schema) in entries {
+            if !schema.is_object() {
+                out.push(Diagnostic::Error(format!(
+                    "INVALID_SNIPPET: capability '{id}' `snippet.{key}.{name}` must be a \
+                     JSON-schema-shaped object (SPEC §5.1, V5)"
+                )));
+            }
+        }
+    }
+}
+
+/// SPEC §6.1, V12 — walk every transition; for any `kind: workflow`
+/// executor targeting a `cap.*` definition, require a `use:` block;
+/// validate its shape. Also enforces the `host_path → cap_output_name`
+/// shape baked into `expand_use_bindings`.
+fn validate_use_bindings(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(states) = def.pointer("/states").and_then(Value::as_object) else {
+        return;
+    };
+    for (state_name, state_def) in states {
+        let Some(transitions) = state_def
+            .pointer("/transitions")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for (t_name, t_def) in transitions {
+            let Some(exec) = t_def.pointer("/executor").and_then(Value::as_object) else {
+                continue;
+            };
+            if exec.get("kind").and_then(Value::as_str) != Some("workflow") {
+                continue;
+            }
+            let target_def_id = exec.get("definitionId").and_then(Value::as_str);
+            let targets_capability = target_def_id
+                .map(|d| matches!(tier_of(d), Tier::Cap))
+                .unwrap_or(false);
+            let has_use = exec.contains_key("use");
+            if targets_capability && !has_use {
+                out.push(Diagnostic::Error(format!(
+                    "MISSING_USE: workflow '{id}' state '{state_name}' transition \
+                     '{t_name}' invokes capability '{}' via `kind: workflow` without a \
+                     `use:` block. Capability invocations require a typed use-binding \
+                     (SPEC §6.1, V12).",
+                    target_def_id.unwrap_or("?")
+                )));
+                continue;
+            }
+            if let Some(use_val) = exec.get("use") {
+                validate_use_block_shape(id, state_name, t_name, use_val, out);
+            }
+        }
+    }
+}
+
+fn validate_use_block_shape(
+    id: &str,
+    state_name: &str,
+    t_name: &str,
+    use_val: &Value,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(obj) = use_val.as_object() else {
+        out.push(Diagnostic::Error(format!(
+            "INVALID_USE: workflow '{id}' state '{state_name}' transition '{t_name}' \
+             `use:` must be a mapping (SPEC §6.1, V12)"
+        )));
+        return;
+    };
+    for key in ["inputs", "outputs"] {
+        let Some(block) = obj.get(key) else {
+            // inputs OR outputs may be omitted only when literally empty — but
+            // since the runtime treats absence as `{}`, we accept either.
+            continue;
+        };
+        if !block.is_object() {
+            out.push(Diagnostic::Error(format!(
+                "INVALID_USE: workflow '{id}' state '{state_name}' transition '{t_name}' \
+                 `use.{key}` must be a mapping (SPEC §6.1, V12)"
+            )));
+        }
+    }
+    // V12 (shape half): every use.outputs value must be a string naming a
+    // capability output, every key must match `$.context.<simple-name>`.
+    if let Some(outputs) = obj.get("outputs").and_then(Value::as_object) {
+        for (host_path, cap_name) in outputs {
+            if cap_name.as_str().is_none() {
+                out.push(Diagnostic::Error(format!(
+                    "INVALID_USE_OUTPUT_VALUE: workflow '{id}' state '{state_name}' \
+                     transition '{t_name}' use.outputs[{host_path}] must be a string \
+                     naming a capability output (SPEC §6.1, V12)"
+                )));
+            }
+            if !host_path_tail_ok(host_path) {
+                out.push(Diagnostic::Error(format!(
+                    "INVALID_USE_OUTPUT_PATH: workflow '{id}' state '{state_name}' \
+                     transition '{t_name}' use.outputs key '{host_path}' must match \
+                     `^\\$\\.context\\.[a-z][a-z0-9_-]*$` — v0.6 projects only to \
+                     single-segment context slots (SPEC §6.1, V12)"
+                )));
+            }
+        }
+    }
+}
+
+/// Mirror of `crate::config::host_path_tail` — accept iff the path matches
+/// `^\$\.context\.[a-z][a-z0-9_-]*$`. Kept private to validate.rs so
+/// callers can't accidentally couple to one of the two implementations.
+fn host_path_tail_ok(host_path: &str) -> bool {
+    let Some(tail) = host_path.strip_prefix("$.context.") else {
+        return false;
+    };
+    if tail.is_empty() || tail.contains('.') || tail.contains('/') {
+        return false;
+    }
+    let mut chars = tail.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !first.is_ascii_lowercase() {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 #[cfg(test)]
