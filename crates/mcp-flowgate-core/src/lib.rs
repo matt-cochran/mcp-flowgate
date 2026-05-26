@@ -19,6 +19,7 @@ pub mod ports;
 pub mod proxy_workflow;
 pub mod lexicon;
 pub mod reliability;
+pub mod repo;
 pub mod runtime;
 pub mod slot_constraint;
 pub mod store;
