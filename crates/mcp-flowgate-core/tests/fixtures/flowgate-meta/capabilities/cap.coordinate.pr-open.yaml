@@ -1,0 +1,26 @@
+# capabilities/cap.coordinate.pr-open.yaml
+#
+# Open a PR with the authored content. STUB SHADOW (see
+# cap.review.adversarial.yaml for the override pattern).
+
+workflows:
+  cap.coordinate.pr-open:
+    verb: coordinate
+    lifecycle: experimental
+    description: >
+      Open a PR against the declared base ref. v0.1 stub emits a
+      placeholder URL.
+    snippet:
+      inputs:
+        title: { type: string, required: true }
+        body:  { type: string, default: "" }
+        base:  { type: string, default: "main" }
+      outputs:
+        url:       { type: string }
+        pr_number: { type: integer }
+    initialState: opened
+    initialContext:
+      url: "https://example.invalid/pr/stub"
+      pr_number: 0
+    states:
+      opened: { terminal: true }

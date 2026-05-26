@@ -1,0 +1,40 @@
+schema: flowgate.repo/v1
+name: flowgate-meta
+namespace: meta
+version: 0.1.0
+description: |
+  Meta-authoring workflows for mcp-flowgate v0.6+: capabilities and
+  orchestrators whose job is to author or optimize other capabilities
+  and orchestrators.
+
+  Operators load this repo alongside cognitive-architectures (or any
+  other resource repo) to get a self-bootstrapping authoring loop:
+
+      repos:
+        - path: /repos/cognitive-architectures
+        - path: /repos/flowgate-meta
+
+  Loaded ids land under `meta/<id>` — e.g. `meta/flow.author-capability`,
+  `meta/cap.research.tool-inventory`.
+
+  The four meta orchestrators (v0.1):
+    - meta/flow.author-capability
+    - meta/flow.author-flow
+    - meta/flow.optimize-capability
+    - meta/flow.optimize-flow
+
+  All four share a small cap stack: tool-inventory (introspect what's
+  reachable), compose-implementation (propose shapes), emit-yaml
+  (generate snippet-contract-compliant YAML), check-config (run
+  `mcp-flowgate check` on the result), audit-mine-transitions (for
+  the optimize variants), plus thin typed wrappers over the existing
+  `gateway.lexicon.*` MCP tools so authored content stays
+  vocabulary-consistent.
+
+# v0.1 ships only capabilities and orchestrators through the manifest.
+layout:
+  capabilities:  capabilities
+  orchestrators: orchestrators
+  skills:        ._unused_v01_skills
+  scripts:       ._unused_v01_scripts
+  connections:   ._unused_v01_connections

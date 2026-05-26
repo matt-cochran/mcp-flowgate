@@ -1,0 +1,32 @@
+# capabilities/cap.review.adversarial.yaml
+#
+# Adversarial review of the candidate YAML body. STUB SHADOW of the
+# cap with the same definitionId in cognitive-architectures —
+# operators who load both repos should declare this in their
+# top-level `overrides:` to win the collision deliberately:
+#
+#   overrides:
+#     - cognitive/cap.review.adversarial   # use cognitive's richer version
+#
+# Then meta/cap.review.adversarial stays loadable standalone for
+# operators who don't have cognitive-architectures installed.
+
+workflows:
+  cap.review.adversarial:
+    verb: review
+    lifecycle: experimental
+    description: >
+      Adversarial review of a candidate YAML body. v0.1 stub
+      auto-approves; real review wires to a critic-agent.
+    snippet:
+      inputs:
+        diff_against: { type: string, default: "" }
+      outputs:
+        verdict:  { type: string, enum: [approved, needs-revision, rejected] }
+        findings: { type: array }
+    initialState: reviewed
+    initialContext:
+      verdict: "approved"
+      findings: []
+    states:
+      reviewed: { terminal: true }

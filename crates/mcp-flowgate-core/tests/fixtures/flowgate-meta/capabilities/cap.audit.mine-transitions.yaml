@@ -1,0 +1,29 @@
+# capabilities/cap.audit.mine-transitions.yaml
+#
+# Mine the audit log for an existing workflow id. Emits an
+# "instrumentation report" the optimize-* orchestrators consume:
+# which states stall, which guards fail most often, where humans
+# intervene, average wall-clock per transition.
+
+workflows:
+  cap.audit.mine-transitions:
+    verb: audit
+    lifecycle: experimental
+    description: >
+      Read transition records for a workflow definition; surface a
+      structured report driving the optimization loop.
+    snippet:
+      inputs:
+        definition_id: { type: string, required: true }
+        since:         { type: string, default: "" }
+      outputs:
+        report: { type: object }
+    initialState: mined
+    initialContext:
+      report:
+        stalled_states: []
+        failing_guards: []
+        human_interventions: []
+        slow_transitions: []
+    states:
+      mined: { terminal: true }

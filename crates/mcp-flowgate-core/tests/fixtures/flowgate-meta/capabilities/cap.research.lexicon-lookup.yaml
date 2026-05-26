@@ -1,0 +1,28 @@
+# capabilities/cap.research.lexicon-lookup.yaml
+#
+# Typed wrapper over the gateway.lexicon.lookup MCP tool. Used by
+# meta-authoring caps that want to thread vocabulary consistently
+# through new content — same terms across an operator's library
+# is what the lexicon primitive exists for.
+
+workflows:
+  cap.research.lexicon-lookup:
+    verb: research
+    lifecycle: experimental
+    description: >
+      Look up a term in the active gateway's lexicon overlay; emit
+      definition + governance metadata. Thin contract over the
+      existing `gateway.lexicon.lookup` MCP tool.
+    snippet:
+      inputs:
+        term: { type: string, required: true }
+      outputs:
+        entry: { type: object }
+    initialState: looked_up
+    initialContext:
+      entry:
+        term: "stub"
+        definition: ""
+        governance: "advisory"
+    states:
+      looked_up: { terminal: true }
