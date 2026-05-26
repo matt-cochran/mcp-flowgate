@@ -1,0 +1,30 @@
+# capabilities/cap.implement.tdd-loop.yaml
+#
+# TDD red-green-refactor loop, scope-bounded by `scope_paths`. Used by
+# `flow.add-feature` as the implementation step.
+#
+# v0.6 stubs this as a terminal initial state; v0.7 will grow the
+# internal red/green/refactor self-loop with iteration cap.
+
+workflows:
+  cap.implement.tdd-loop:
+    verb: implement
+    lifecycle: experimental
+    description: >
+      Run a scope-bounded TDD loop against the plan; emit result +
+      tests added.
+    snippet:
+      inputs:
+        plan:        { type: object, required: true }
+        scope_paths: { type: array,  default: [] }
+      outputs:
+        result:      { type: object }
+        tests_added: { type: integer }
+    initialState: implemented
+    initialContext:
+      result:
+        diff_summary: "Stub diff (cap.implement.tdd-loop v0.6)"
+        files_changed: []
+      tests_added: 0
+    states:
+      implemented: { terminal: true }

@@ -1,0 +1,24 @@
+# capabilities/cap.plan.track-gaps.yaml
+#
+# Compare implementation result to the plan; identify deltas.
+# Used by `flow.add-feature` after the TDD loop.
+
+workflows:
+  cap.plan.track-gaps:
+    verb: plan
+    lifecycle: experimental
+    description: >
+      Diff plan vs. implementation result; report unresolved gaps.
+    snippet:
+      inputs:
+        plan:   { type: object, required: true }
+        result: { type: object, required: true }
+      outputs:
+        report: { type: object }
+    initialState: tracked
+    initialContext:
+      report:
+        unresolved_gaps: 0
+        details: []
+    states:
+      tracked: { terminal: true }

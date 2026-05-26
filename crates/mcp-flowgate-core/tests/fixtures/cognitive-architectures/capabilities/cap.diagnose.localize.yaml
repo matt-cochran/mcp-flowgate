@@ -1,0 +1,26 @@
+# capabilities/cap.diagnose.localize.yaml
+#
+# Localize the defect to specific files / symbols. Used by
+# `flow.bugfix-from-error-log` after reproduce; output feeds plan.fix.
+
+workflows:
+  cap.diagnose.localize:
+    verb: diagnose
+    lifecycle: experimental
+    description: >
+      Pinpoint the defect to one or more file:line / symbol locations
+      from the parsed error + repro steps.
+    snippet:
+      inputs:
+        parsed:      { type: object, required: true }
+        repro_steps: { type: array,  required: true }
+      outputs:
+        defect_location: { type: object }
+    initialState: localized
+    initialContext:
+      defect_location:
+        file: "unknown"
+        line: 0
+        symbol: "stub"
+    states:
+      localized: { terminal: true }

@@ -1,0 +1,25 @@
+# capabilities/cap.verify.regression-tests.yaml
+#
+# Verify a bugfix lands a passing regression test for the specific
+# defect. Used by `flow.bugfix-from-error-log`.
+
+workflows:
+  cap.verify.regression-tests:
+    verb: verify
+    lifecycle: experimental
+    description: >
+      Confirm at least one new test covers the defect's repro path
+      and passes only with the fix applied.
+    snippet:
+      inputs:
+        defect_location: { type: object, required: true }
+        repro_steps:     { type: array,  required: true }
+      outputs:
+        ok:           { type: boolean }
+        tests_added:  { type: integer }
+    initialState: verified
+    initialContext:
+      ok: true
+      tests_added: 1
+    states:
+      verified: { terminal: true }

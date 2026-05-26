@@ -1,0 +1,22 @@
+# capabilities/cap.diagnose.reproduce.yaml
+#
+# Derive minimal reproduction steps from a parsed error. Used by
+# `flow.bugfix-from-error-log` after parse-error.
+
+workflows:
+  cap.diagnose.reproduce:
+    verb: diagnose
+    lifecycle: experimental
+    description: >
+      Synthesize the minimal set of steps + inputs that re-triggers
+      the parsed error.
+    snippet:
+      inputs:
+        parsed: { type: object, required: true }
+      outputs:
+        repro_steps: { type: array }
+    initialState: reproduced
+    initialContext:
+      repro_steps: ["stub: replace with real repro derivation"]
+    states:
+      reproduced: { terminal: true }

@@ -1,0 +1,32 @@
+# capabilities/cap.plan.draft.yaml
+#
+# Draft a structured implementation plan from a feature brief + lexicon.
+# Used by `flow.add-feature` as the first cognitive step.
+#
+# v0.6 ships this as a typed-contract stub: initialState `drafted` is
+# terminal and seeds the declared outputs from `initialContext`. Real
+# planning logic (LLM prompt, plan template, gap detector) lands in
+# v0.7 as the cap matures past stub.
+
+workflows:
+  cap.plan.draft:
+    verb: plan
+    lifecycle: experimental
+    description: >
+      Produce a structured implementation plan from a brief + lexicon.
+    snippet:
+      inputs:
+        brief:   { type: string, required: true }
+        lexicon: { type: object, default: {} }
+      outputs:
+        plan:      { type: object }
+        artifacts: { type: array }
+    initialState: drafted
+    initialContext:
+      plan:
+        title: "Stub plan (cap.plan.draft v0.6)"
+        summary: "Replace this stub with real planning output."
+        scope_paths: []
+      artifacts: []
+    states:
+      drafted: { terminal: true }

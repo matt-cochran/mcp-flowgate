@@ -1,0 +1,23 @@
+# capabilities/cap.triage.classify-severity.yaml
+#
+# Classify an inbound issue/ticket into a severity bucket. Used by
+# `flow.triage-issue` as the first cognitive step.
+
+workflows:
+  cap.triage.classify-severity:
+    verb: triage
+    lifecycle: experimental
+    description: >
+      Read an inbound issue/ticket; emit a severity classification.
+    snippet:
+      inputs:
+        issue: { type: object, required: true }
+      outputs:
+        severity:   { type: string, enum: [P0, P1, P2, P3] }
+        confidence: { type: number }
+    initialState: classified
+    initialContext:
+      severity:   "P2"
+      confidence: 0.8
+    states:
+      classified: { terminal: true }

@@ -1,0 +1,25 @@
+# capabilities/cap.diagnose.parse-error.yaml
+#
+# Parse a raw error log / stack trace into a structured defect
+# descriptor. Used by `flow.bugfix-from-error-log` as the first step.
+
+workflows:
+  cap.diagnose.parse-error:
+    verb: diagnose
+    lifecycle: experimental
+    description: >
+      Extract error class, frames, root cause hint from a raw error
+      log or stack trace.
+    snippet:
+      inputs:
+        error_log: { type: string, required: true }
+      outputs:
+        parsed: { type: object }
+    initialState: parsed
+    initialContext:
+      parsed:
+        error_class: "stub"
+        frames: []
+        hint: "Replace with real parser output."
+    states:
+      parsed: { terminal: true }

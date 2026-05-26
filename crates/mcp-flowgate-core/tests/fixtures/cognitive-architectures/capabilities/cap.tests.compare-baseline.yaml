@@ -1,0 +1,27 @@
+# capabilities/cap.tests.compare-baseline.yaml
+#
+# Run the test suite again and compare to a captured baseline. Used by
+# `flow.safe-refactor` post-implement to assert no observable change.
+
+workflows:
+  cap.tests.compare-baseline:
+    verb: test
+    lifecycle: experimental
+    description: >
+      Run tests under the post-refactor tree; emit drift vs the
+      baseline (new failures, regressed tests, timing deltas).
+    snippet:
+      inputs:
+        baseline: { type: object, required: true }
+      outputs:
+        ok:    { type: boolean }
+        drift: { type: object }
+    initialState: compared
+    initialContext:
+      ok: true
+      drift:
+        new_failures: []
+        regressed:    []
+        timing_delta: {}
+    states:
+      compared: { terminal: true }

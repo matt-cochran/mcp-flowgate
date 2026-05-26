@@ -1,0 +1,27 @@
+# capabilities/cap.implement.scope-bounded.yaml
+#
+# Edit code constrained to a declared scope (paths or component). Used by
+# `flow.bugfix-from-error-log` and `flow.safe-refactor` as the actual
+# edit application step — bug fixes and refactors should never wander
+# outside their declared blast radius.
+
+workflows:
+  cap.implement.scope-bounded:
+    verb: implement
+    lifecycle: experimental
+    description: >
+      Apply edits constrained to the given scope_paths. Refuses any
+      change outside scope (enforced by the underlying edit tool).
+    snippet:
+      inputs:
+        plan:        { type: object, required: true }
+        scope_paths: { type: array,  required: true }
+      outputs:
+        result: { type: object }
+    initialState: applied
+    initialContext:
+      result:
+        diff_summary: "Stub diff (cap.implement.scope-bounded v0.6)"
+        files_changed: []
+    states:
+      applied: { terminal: true }

@@ -1,0 +1,28 @@
+# capabilities/cap.triage.route-component.yaml
+#
+# Identify which component / team owns the inbound issue. Used by
+# `flow.triage-issue` after classification.
+
+workflows:
+  cap.triage.route-component:
+    verb: triage
+    lifecycle: experimental
+    description: >
+      Match the inbound issue to a component + owner team based on
+      symptoms, files mentioned, and CODEOWNERS.
+    snippet:
+      inputs:
+        issue: { type: object, required: true }
+      outputs:
+        component:     { type: string }
+        owner_team:    { type: string }
+        confidence:    { type: number }
+        is_ambiguous:  { type: boolean }
+    initialState: routed
+    initialContext:
+      component:    "unassigned"
+      owner_team:   "unassigned"
+      confidence:   0.7
+      is_ambiguous: false
+    states:
+      routed: { terminal: true }

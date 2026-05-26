@@ -1,0 +1,24 @@
+# capabilities/cap.verify.workspace-green.yaml
+#
+# Deterministic gate: run the workspace's build + test sweep; emit
+# pass/fail. Used by `flow.add-feature` before review.
+
+workflows:
+  cap.verify.workspace-green:
+    verb: verify
+    lifecycle: experimental
+    description: >
+      Run the workspace test sweep + lint + format check; emit ok.
+    snippet:
+      inputs: {}
+      outputs:
+        ok:      { type: boolean }
+        summary: { type: object }
+    initialState: verified
+    initialContext:
+      ok: true
+      summary:
+        passed_count: 0
+        failed_count: 0
+    states:
+      verified: { terminal: true }

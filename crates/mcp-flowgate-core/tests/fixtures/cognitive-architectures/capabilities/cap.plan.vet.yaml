@@ -1,0 +1,24 @@
+# capabilities/cap.plan.vet.yaml
+#
+# Adversarial review of a draft plan. Used by `flow.add-feature` after
+# planning and (in v0.7) by `flow.safe-refactor` for refactor-plan vet.
+
+workflows:
+  cap.plan.vet:
+    verb: plan
+    lifecycle: experimental
+    description: >
+      Adversarial review of a draft plan; emits a structured verdict.
+    snippet:
+      inputs:
+        plan:           { type: object,  required: true }
+        max_iterations: { type: integer, default: 3 }
+      outputs:
+        verdict:  { type: string, enum: [pass, fail, needs-revision] }
+        findings: { type: array }
+    initialState: vetted
+    initialContext:
+      verdict:  "pass"
+      findings: []
+    states:
+      vetted: { terminal: true }

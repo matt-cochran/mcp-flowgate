@@ -1,0 +1,162 @@
+# orchestrators/flow.add-feature.yaml
+#
+# Plan-driven feature delivery, eight capabilities (SPEC §10 + §12.6).
+#
+# v0.6 shape note. Every primary transition is `actor: deterministic`
+# so the v0.6 E2E acceptance test (tests/flow_orchestrators_e2e.rs)
+# can walk the orchestrator to its terminal state without simulating
+# LLM / human input. The "revise" / "close_gap" branches stay
+# non-deterministic — they fire only when a cap's output declines the
+# happy-path guard, which a fixture-output executor never produces.
+# Real-world deployments will recast the cognitive steps
+# (drafting_plan, implementing, reviewing) back to `actor: agent`.
+
+workflows:
+  flow.add-feature:
+    description: |
+      Plan-driven feature delivery: draft → vet → signoff →
+      TDD implementation → gap reconciliation → verify → review → PR.
+
+      v0.6 shape note. The runtime evaluates guards BEFORE the
+      transition's executor fires (runtime_chain::select_deterministic_transition).
+      That means a guard CANNOT read a slot the same transition's
+      `use.outputs` will write. The spec §10 example uses guard
+      patterns like `vet_verdict == 'pass'` on the `vet` transition —
+      a real deployment splits each "execute + branch" into two
+      states (`vetting → vetted → {advance | revise}`) so the
+      executor runs in one state and the next state's transitions
+      branch on its output. v0.6 stub orchestrators ship the happy
+      path only; branch reshaping is v0.7 work tracked in
+      docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md.
+    inputs:
+      feature_brief: { type: string, required: true }
+      base_ref:      { type: string, default: main }
+      lexicon:       { type: object, default: {} }
+    initialState: drafting_plan
+    states:
+      drafting_plan:
+        transitions:
+          draft:
+            target: vetting_plan
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.plan.draft
+              use:
+                inputs:
+                  brief:   "$.context.feature_brief"
+                  lexicon: "$.context.lexicon"
+                outputs:
+                  "$.context.draft_plan":      plan
+                  "$.context.draft_artifacts": artifacts
+
+      vetting_plan:
+        transitions:
+          vet:
+            target: awaiting_signoff
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.plan.vet
+              use:
+                inputs:
+                  plan:           "$.context.draft_plan"
+                  max_iterations: 3
+                outputs:
+                  "$.context.vet_verdict":  verdict
+                  "$.context.vet_findings": findings
+
+      awaiting_signoff:
+        transitions:
+          signoff:
+            target: implementing
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.gate.human-signoff
+              use:
+                inputs:
+                  artifact: "$.context.draft_plan"
+                  prompt:   "Approve plan for implementation?"
+                outputs:
+                  "$.context.signoff_decision": decision
+
+      implementing:
+        transitions:
+          tdd_loop:
+            target: tracking_gaps
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.implement.tdd-loop
+              use:
+                inputs:
+                  plan:        "$.context.draft_plan"
+                  scope_paths: "$.context.draft_plan"
+                outputs:
+                  "$.context.implementation_result": result
+                  "$.context.tests_added":           tests_added
+
+      tracking_gaps:
+        transitions:
+          track:
+            target: verifying
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.plan.track-gaps
+              use:
+                inputs:
+                  plan:   "$.context.draft_plan"
+                  result: "$.context.implementation_result"
+                outputs:
+                  "$.context.gap_report": report
+
+      verifying:
+        transitions:
+          verify:
+            target: reviewing
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.verify.workspace-green
+              use:
+                inputs:  {}
+                outputs:
+                  "$.context.verify_ok":      ok
+                  "$.context.verify_summary": summary
+
+      reviewing:
+        transitions:
+          review:
+            target: opening_pr
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.review.adversarial
+              use:
+                inputs:
+                  diff_against: "$.context.base_ref"
+                outputs:
+                  "$.context.review_verdict":  verdict
+                  "$.context.review_findings": findings
+
+      opening_pr:
+        transitions:
+          open:
+            target: done
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.coordinate.pr-open
+              use:
+                inputs:
+                  title: "$.context.feature_brief"
+                  body:  "$.context.feature_brief"
+                  base:  "$.context.base_ref"
+                outputs:
+                  "$.context.pr_url":       url
+                  "$.context.pr_number":    pr_number
+
+      done:
+        terminal: true

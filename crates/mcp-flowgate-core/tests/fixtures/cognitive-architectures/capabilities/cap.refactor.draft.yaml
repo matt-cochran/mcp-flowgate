@@ -1,0 +1,27 @@
+# capabilities/cap.refactor.draft.yaml
+#
+# Draft a refactor plan from a context bundle (scope + symbols + tests).
+# Used by `flow.safe-refactor` after context assembly.
+
+workflows:
+  cap.refactor.draft:
+    verb: refactor
+    lifecycle: experimental
+    description: >
+      Draft a refactor plan: extraction targets, renames, move
+      operations. Scope-bounded by the input context.
+    snippet:
+      inputs:
+        context: { type: object, required: true }
+      outputs:
+        plan:        { type: object }
+        scope_paths: { type: array }
+    initialState: drafted
+    initialContext:
+      plan:
+        title: "Stub refactor plan (cap.refactor.draft v0.6)"
+        moves: []
+        renames: []
+      scope_paths: []
+    states:
+      drafted: { terminal: true }

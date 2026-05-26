@@ -1,0 +1,26 @@
+# capabilities/cap.tests.baseline-snapshot.yaml
+#
+# Capture a pre-refactor test baseline (which tests pass, which fail,
+# timing). Used by `flow.safe-refactor` so we can prove "no observable
+# change" post-refactor via cap.tests.compare-baseline.
+
+workflows:
+  cap.tests.baseline-snapshot:
+    verb: test
+    lifecycle: experimental
+    description: >
+      Capture the workspace's current test-pass set + timing as a
+      baseline. Cheap; meant to be paired with compare-baseline.
+    snippet:
+      inputs:
+        scope_paths: { type: array, default: [] }
+      outputs:
+        baseline: { type: object }
+    initialState: snapshotted
+    initialContext:
+      baseline:
+        passed: []
+        failed: []
+        durations: {}
+    states:
+      snapshotted: { terminal: true }
