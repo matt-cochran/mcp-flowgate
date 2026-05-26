@@ -171,6 +171,28 @@ The vocabulary is **closed**. New verbs require a SPEC bump in
 `mcp-flowgate`. This matches how the existing 10-verb cognitive cloud
 and 12-verb script cloud are governed today (SPEC §5, §22).
 
+### 4.1 Runtime verb-shape check
+
+To prevent verb drift across third-party repos (which may not run the
+cognitive-architectures CI lint), the flowgate runtime applies a
+local verb-shape check at config-load. The check is intentionally
+narrow — it inspects only each capability's **primary executor kind**
+(the executor on the transition leaving the capability's initial
+state) — to keep the runtime cost negligible while still catching
+gross verb misuse:
+
+| Verb category | Primary executor SHALL satisfy |
+|---|---|
+| Cognitive (10) | `kind: mcp` OR `kind: noop` that surfaces a skill (`guidance:` block referenced) |
+| Deterministic (12) | `kind: script` OR `kind: mcp` |
+| `gate` | At least one transition out of the initial state has `actor: human` OR `purpose: ask` |
+| `coordinate` | `kind: mcp` AND the connection is declared `external: true` |
+
+Mismatches are config-load errors. The check is **per-capability,
+primary executor only** (TRIZ Local Quality resolution); it does not
+walk every transition. Library-level richer verb-appropriateness
+checks live in cognitive-architectures CI (`scripts/validate.sh`).
+
 ---
 
 ## 5. The snippet contract
@@ -205,8 +227,12 @@ workflows:
 1. `snippet:` is REQUIRED on `cap.*` and FORBIDDEN on `flow.*`.
    Orchestrators are endpoints; only capabilities are invokable as
    snippets.
-2. Every input/output is a typed slot (JSON-schema fragment).
-3. Inputs may declare `required: true` (default false) and `default:`.
+2. Within `snippet:`, the `inputs:` and `outputs:` keys are BOTH
+   required. Their value MAY be an empty object `{}` (a capability with
+   no inputs or no outputs is valid). Omitting either key is a
+   config-load error — no implicit defaults.
+3. Every input/output is a typed slot (JSON-schema fragment).
+4. Inputs may declare `required: true` (default false) and `default:`.
 
 ### 5.2 Scoped capability blackboard
 
@@ -220,6 +246,14 @@ This is the slot-collision firewall. Two parallel invocations of the
 same capability run in independent blackboards — no shared state, no
 contamination.
 
+**Scope of isolation.** Blackboard scoping is the ONLY isolation
+guaranteed by this design. Resource-level isolation (connection pools,
+caches, file handles, MCP client state) is the executor's
+responsibility per SPEC §24. Capability authors MUST design as if
+their internal state is fresh per invocation; cross-invocation state
+(e.g., an LRU cache shared across runs) belongs in scripts or
+connections, not in capabilities.
+
 ### 5.3 Runtime output validation
 
 When a capability completes, the runtime validates every declared
@@ -230,13 +264,67 @@ schema declaring `enum: [pass, fail, needs-revision]` fires a
 orchestrator can route the post-cap transition via a guard
 (e.g., a `cap_error` self-loop with `recovery-escalation`).
 
-### 5.4 Authoring guidance (README only)
+**Unconditional enforcement.** Runtime output validation MUST be
+unconditional: no `cfg!(debug_assertions)` gating, no environment-
+variable toggle, no feature flag. A validation failure causes the
+executor to return `ExecutorError::SchemaViolation` and the transition
+fails closed — no partial outputs are projected into host slots. The
+acceptance test `tests/cap_output_violation.rs` is required (see
+§12.4 M3) and exercises a deliberately bad capability to assert the
+audit event fires and the host blackboard remains untouched.
 
-A capability with > 5 inputs or > 5 outputs is a strong signal that the
-capability is doing more than one thing and should split. This is style
-guidance — not a load-time warning — to avoid normalized warning
-fatigue. See the cognitive-architectures CONTRIBUTING.md for the
-discussion.
+### 5.4 Authoring guidance: I/O cap
+
+A capability with > 5 inputs or > 5 outputs is a strong signal that
+the capability is doing more than one thing and should split. The
+runtime emits a structured warning at load time:
+
+```
+warning: cap.<id> declares <N> inputs (recommended max 5).
+  Consider splitting along a natural axis.
+  See cognitive-architectures CONTRIBUTING.md §<...>
+```
+
+`mcp-flowgate check --strict` converts this warning to a load-time
+error. Library CI (cognitive-architectures and any third-party
+resource repo with strict authoring standards) MUST run `--strict`;
+one-off operator configs may continue to load with the advisory
+warning. This is the asymmetric-strict-mode resolution: enforce in
+authoring contexts, advise in operator contexts.
+
+### 5.5 Capability failure semantics
+
+When a capability terminates abnormally (any executor error inside
+its internal state machine, including but not limited to schema
+violation, MCP transport failure, script non-zero exit, HITL timeout),
+the host transition completes with a `cap.error` outcome:
+
+- A structured audit event `cap.terminated` is emitted with the error
+  kind, the capability's terminal internal state, and the parent
+  correlation_id.
+- NO partial outputs are projected into the host blackboard. Host
+  slots that the `use:.outputs` block would have written remain
+  untouched (unwritten if they did not previously exist; previous
+  value retained if they did).
+- The host orchestrator's transition is treated as failed for routing
+  purposes. The orchestrator MAY declare guard expressions on
+  subsequent transitions referencing `$.last_executor.error_kind` to
+  route recovery (existing SPEC §29 error-routing semantics). There
+  is NO implicit retry.
+
+Worked example: a `cap.implement.tdd-loop` that exhausts
+`max_iterations` without convergence emits `cap.terminated` with
+`error_kind: tdd_no_convergence`. The orchestrator can declare a
+recovery transition:
+
+```yaml
+transitions:
+  retry_with_smaller_scope:
+    target: replanning
+    actor: deterministic
+    guards:
+      - expr: "$.last_executor.error_kind == 'tdd_no_convergence'"
+```
 
 ---
 
@@ -297,9 +385,43 @@ canonicalization). It is surfaced by `gateway.describe`. If the actual
 hash differs from the expected hash, config-load errors with both
 values.
 
-Pinning is optional in v1; it becomes mandatory for capabilities
-declared `lifecycle: stable` (matching the SPEC §22 lifecycle promotion
-discipline).
+**Pinning is MANDATORY for `stable`-lifecycle targets.** A `use:` block
+referencing a capability declared `lifecycle: stable` (existing SPEC
+§22 lifecycle promotion discipline) MUST include
+`expects_contract_hash:`. Config-load errors on missing hash for a
+stable target, with the current hash inlined in the error message so
+the author can paste it:
+
+```
+error: orchestrator flow.add-feature state `vetting` references
+stable capability swe/cap.plan.vet without expects_contract_hash.
+Add: expects_contract_hash: "sha256:f3a1…"
+```
+
+Pinning remains optional for `experimental`-lifecycle targets — those
+are expected to churn.
+
+### 6.3 Actor and correlation_id semantics in nested capabilities
+
+The host transition's `actor:` field describes who initiated the
+capability invocation (the agent acting at that orchestrator state),
+not who runs the capability's internal transitions. A capability's
+internal transitions use the `actor:` declared on each internal
+transition.
+
+Correlation_id chaining is hierarchical:
+
+- The host transition emits a `transition.fired` audit event with its
+  own `correlation_id` (CID-H).
+- The capability invocation emits a `cap.invoked` audit event with
+  `correlation_id` CID-C and `parent_correlation_id: CID-H`.
+- Each of the capability's internal transitions emits its own
+  `transition.fired` event under CID-C.
+- `cap.terminated` or `cap.completed` closes the capability scope
+  under CID-C and links the outputs back to CID-H.
+
+`gateway.describe` renders the parent/child correlation_id chain so
+audit traces are walkable from orchestrator to capability internals.
 
 ---
 
@@ -501,9 +623,24 @@ two repos happen to define same-named capabilities.
   qualified ids differ: `swe/cap.plan.vet` ≠ `quality/cap.plan.vet`).
 - **Same repo defining the same id twice** (e.g., two files both declare
   `definitionId: cap.plan.vet`) → config-load error.
-- **Host `include:` overriding a repo-provided id** → allowed; host wins.
-  This is the override path operators use to customize a vendored
-  capability without forking the upstream repo.
+- **Host `include:` overriding a repo-provided id** → allowed ONLY
+  when accompanied by an explicit `overrides:` declaration listing
+  the fully qualified ids being shadowed:
+
+  ```yaml
+  # local-overrides.yaml
+  overrides:
+    - swe/cap.plan.vet     # explicit shadowing declaration
+  workflows:
+    - definitionId: swe/cap.plan.vet
+      ...                  # operator's customized version
+  ```
+
+  Anonymous shadowing — defining `swe/cap.plan.vet` in `include:`
+  without listing it in `overrides:` — is a config-load error. This
+  closes the supply-chain backdoor: an operator cannot silently shadow
+  a vendored capability with a different contract. `gateway.describe`
+  surfaces every override and contract-hash diff at startup.
 
 ---
 
@@ -700,28 +837,33 @@ orchestrator level.
 All checks run at config-load. Hard errors abort startup; warnings
 print but allow startup.
 
-| Check | Tier | Outcome | Detection point |
-|---|---|---|---|
-| `verb:` is one of the 24 | cap | error | load |
-| `definitionId` matches `cap.<verb>.<name>` | cap | error | load |
-| `snippet:` block present | cap | error | load |
-| `snippet:` block has `inputs:` + `outputs:` keys | cap | error | load |
-| Each input/output is JSON-schema-shaped | cap | error | load |
-| `definitionId` matches `flow.<name>` | flow | error | load |
-| `snippet:` block absent | flow | error | load |
-| `verb:` absent | flow | error | load |
-| Capability invokes another workflow | cap | error | load (Rule 1) |
-| Orchestrator invokes another orchestrator | flow | error | load (Rule 1) |
-| `kind: workflow` executor targeting `cap.*` without `use:` | both | error | load |
-| `use:.inputs` paths resolve to slot table | both | error | load (§7.3 Check A) |
-| `use:.outputs` writes to a slot already typed differently | both | error | load (§7.3 Check B) |
-| `expects_contract_hash` matches actual | both | error | load |
-| Output value matches declared output schema | cap | runtime audit event `cap.output.schema_violation` | runtime |
-| Repo manifest schema valid | repo | error | load |
-| Two repos with same `namespace` | gateway | error | load |
-| Duplicate `definitionId` in one repo | repo | error | load |
-| Unprefixed cross-repo ref | gateway | error | load |
-| Legacy id (neither `cap.*` nor `flow.*`) | gateway | deprecation warning | load |
+| # | Check | Tier | Outcome | Detection point |
+|---|---|---|---|---|
+| V1 | `verb:` is one of the 24 | cap | error | load |
+| V2 | `definitionId` matches `cap.<verb>.<name>` | cap | error | load |
+| V3 | `snippet:` block present | cap | error | load |
+| V4 | `snippet:` block has BOTH `inputs:` AND `outputs:` keys (may be `{}`) | cap | error | load |
+| V5 | Each input/output is JSON-schema-shaped | cap | error | load |
+| V6 | Primary-executor verb-shape check (§4.1) | cap | error | load |
+| V7 | Capability I/O ≤ 5 each | cap | warning (`--strict` → error) | load |
+| V8 | `definitionId` matches `flow.<name>` | flow | error | load |
+| V9 | `snippet:` block absent | flow | error | load |
+| V10 | `verb:` absent | flow | error | load |
+| V11 | Capability invokes another workflow | cap | error | load (Rule 1) |
+| V12 | Orchestrator invokes another orchestrator | flow | error | load (Rule 1) |
+| V13 | `kind: workflow` executor targeting `cap.*` without `use:` | both | error | load |
+| V14 | `use:.inputs` paths resolve to slot table (Check A) | both | error | load (§7.3) |
+| V15 | `use:.outputs` writes to a slot already typed differently (Check B) | both | error | load (§7.3) |
+| V16 | `expects_contract_hash` matches actual | both | error | load |
+| V17 | `use:` block omits `expects_contract_hash` for `stable`-lifecycle target | both | error | load |
+| V18 | Output value matches declared output schema | cap | runtime audit event `cap.output.schema_violation`; executor returns `SchemaViolation` | runtime |
+| V19 | Capability abnormal termination → `cap.terminated` audit event, no partial output projection | cap | runtime audit event | runtime |
+| V20 | Repo manifest schema valid | repo | error | load |
+| V21 | Two repos with same `namespace` | gateway | error | load |
+| V22 | Duplicate `definitionId` in one repo | repo | error | load |
+| V23 | Unprefixed cross-repo ref | gateway | error | load |
+| V24 | `include:` shadows a repo-provided id without `overrides:` declaration | gateway | error | load (§9.4) |
+| V25 | Legacy id (neither `cap.*` nor `flow.*`) | gateway | deprecation warning naming EOL version | load |
 
 `mcp-flowgate check --config <path>` exposes all load-time checks for
 CI use.
@@ -784,11 +926,70 @@ work without changes. To opt in, an operator:
    directories.
 
 Workflows whose ids don't match `cap.*` or `flow.*` get a one-time
-deprecation warning at startup ("workflow `<id>` does not match `cap.*`
-or `flow.*` conventions; tier checks skipped"). They continue to
-function. Operators have one minor version (v0.6 → v0.7) to migrate
-before the warning becomes a hard error. The CHANGELOG entry calls
-this out.
+deprecation warning at startup containing the **hard-coded EOL
+version**:
+
+```
+deprecation: workflow `<id>` does not match cap.* or flow.*
+conventions; tier checks skipped. This will be a config-load error
+in mcp-flowgate v0.7.
+```
+
+They continue to function under v0.6. Under v0.7, the same condition
+is a hard error — implementers MUST switch the warning to an error
+in the v0.7 release branch. The CHANGELOG entry for v0.6 and v0.7
+both call this out.
+
+### 12.4 Acceptance milestones
+
+Implementation is divided into five accept/reject milestones. Each
+milestone has a SINGLE binary acceptance test that the implementing
+agent cannot shortcut. A milestone is "done" only when its acceptance
+test passes against the merged code on `main`.
+
+| # | Milestone | Acceptance test | PR |
+|---|---|---|---|
+| M1 | Multi-repo loading | `tests/multi_repo_loading.rs::two_repos_with_distinct_namespaces_load_both_capabilities` — loads two fixture repos and asserts both prefixed ids are reachable via `gateway.describe`. Also asserts duplicate-namespace fixture errors at load. | PR1 |
+| M2 | Scoped capability blackboard + `use:` bindings | `tests/walk_examples.rs::scoped_capability_io_roundtrip` — runs a host orchestrator that invokes a capability whose internal blackboard sets a "secret" slot; asserts the secret slot is NOT present in the host blackboard post-cap and that declared outputs ARE projected at the host paths declared in `use:.outputs`. | PR2 |
+| M3 | Validation rule coverage | `tests/validation_rules.rs` — one positive + one negative test per validation rule in §11 (rules V1–V25 except V18, V19 which are runtime). Test count parity enforced per §12.5. Plus `tests/cap_output_violation.rs` for V18 and `tests/cap_terminated.rs` for V19. | PR3 |
+| M4 | End-to-end orchestrator | `tests/flow_add_feature_e2e.rs::flow_add_feature_runs_against_fixture_repo` — loads a fixture cognitive-architectures-shaped repo containing the eight capabilities from §10 plus `flow.add-feature`; runs the orchestrator against a synthetic feature brief; asserts every state transitions correctly and the final `pr_url` slot is populated by the (mocked) `cap.coordinate.pr-open`. | cognitive-architectures migration PR |
+| M5 | Deprecation surface | `tests/deprecation_warning.rs::legacy_id_emits_warning_with_eol_version` — loads a fixture workflow whose `definitionId` does not match `cap.*` or `flow.*`; asserts the load succeeds, a warning is emitted, and the warning message contains the literal string `"v0.7"`. | PR3 |
+
+A milestone is NOT considered complete on the basis of "the
+implementation looks right" or "manual smoke test passes." The named
+test must exist, be CI-wired, and pass. PR descriptions MUST cite the
+milestone(s) they advance and link to the new test files.
+
+### 12.5 TDD coverage parity rule
+
+Every validation rule in §11 (rules V1–V25) MUST have at least one
+positive test (rule accepts a valid input) AND at least one negative
+test (rule rejects a specifically crafted bad input) in
+`crates/mcp-flowgate-core/tests/`. Test naming convention:
+
+```
+<rule_id>_accepts_<good_case>
+<rule_id>_rejects_<bad_case>
+```
+
+For example:
+
+```
+v6_accepts_cognitive_verb_with_mcp_executor
+v6_rejects_cognitive_verb_with_only_script_executor
+v17_rejects_stable_target_without_contract_hash
+v17_accepts_stable_target_with_contract_hash
+```
+
+CI enforces the parity invariant: count of test functions matching
+the convention must be ≥ 2 × count of distinct rule ids referenced
+in test names, and that count of distinct rule ids must equal the
+count of rules in §11. The PR introducing the rule must introduce the
+tests in the same commit. A PR that adds a validation rule without
+the corresponding accepts/rejects pair fails CI.
+
+For runtime rules (V18, V19) the same parity applies to integration
+tests in `tests/`, not unit tests.
 
 ---
 
