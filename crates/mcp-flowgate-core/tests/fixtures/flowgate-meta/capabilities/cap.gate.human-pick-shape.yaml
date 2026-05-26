@@ -1,21 +1,12 @@
 # capabilities/cap.gate.human-pick-shape.yaml
-#
-# HITL pick between candidate implementation shapes from
-# `cap.plan.compose-implementation`. Used by every meta-orchestrator
-# so the operator stays in the loop on shape decisions.
-#
-# Coordination verb `gate` per spec §4.1 — primary transition must
-# satisfy actor:human OR purpose:ask. v0.1 stub auto-picks the first
-# candidate; v0.2 wires real HITL via the runtime's enable_human_ask
-# injection.
 
 workflows:
   cap.gate.human-pick-shape:
     verb: gate
     lifecycle: experimental
     description: >
-      Ask the operator to pick one of the candidate implementation
-      shapes from the compose step. Emits the chosen shape's id.
+      Block while the operator picks one of the candidate
+      implementation shapes from the compose step.
     snippet:
       inputs:
         candidates: { type: array,  required: true }
@@ -23,10 +14,22 @@ workflows:
       outputs:
         chosen:    { type: object }
         rationale: { type: string }
-    initialState: picked
-    initialContext:
-      chosen:
-        id: "stub-candidate-a"
-      rationale: "v0.1 stub auto-pick (first candidate)"
+    initialState: awaiting_human
     states:
-      picked: { terminal: true }
+      awaiting_human:
+        goal: Surface the candidate list + prompt; wait for the operator's pick.
+        transitions:
+          pick:
+            target: done
+            actor: human
+            inputSchema:
+              type: object
+              required: [chosen]
+              properties:
+                chosen:    { type: object }
+                rationale: { type: string, default: "" }
+            executor: { kind: human }
+            output:
+              chosen:    "$.arguments.chosen"
+              rationale: "$.arguments.rationale"
+      done: { terminal: true }

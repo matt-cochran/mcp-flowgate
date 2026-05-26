@@ -31,11 +31,10 @@ description: |
 layout:
   capabilities:  capabilities
   orchestrators: orchestrators
-  # v0.6 ships only capabilities and orchestrators through the manifest.
-  # The legacy `skills/`, `scripts-library/`, and `connections/` trees
-  # are NOT in the manifest's layout — they continue to load via the
-  # pre-v0.6 `include:` path. We point these layout slots at sentinel
-  # paths that don't exist so `load_repo` silently skips them.
-  skills:        ._unused_v06_skills
-  scripts:       ._unused_v06_scripts
-  connections:   ._unused_v06_connections
+  skills:        skills
+  scripts:       scripts-library
+  # Connections stay outside the manifest at v0.2 — operators wire their
+  # own MCP / CLI endpoints in the gateway config. The connections/
+  # tree under this repo contains REFERENCE connection definitions
+  # operators copy into their config rather than loading wholesale.
+  connections:   ._unused_v02_connections

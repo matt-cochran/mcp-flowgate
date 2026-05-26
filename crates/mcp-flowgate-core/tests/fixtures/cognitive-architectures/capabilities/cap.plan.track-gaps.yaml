@@ -1,7 +1,4 @@
 # capabilities/cap.plan.track-gaps.yaml
-#
-# Compare implementation result to the plan; identify deltas.
-# Used by `flow.add-feature` after the TDD loop.
 
 workflows:
   cap.plan.track-gaps:
@@ -15,10 +12,21 @@ workflows:
         result: { type: object, required: true }
       outputs:
         report: { type: object }
-    initialState: tracked
-    initialContext:
-      report:
-        unresolved_gaps: 0
-        details: []
+    skills: [plan.gap-reconciliation]
+    initialState: ready
     states:
-      tracked: { terminal: true }
+      ready:
+        goal: Compare plan to result; emit a structured gap report.
+        transitions:
+          submit_report:
+            target: done
+            actor: agent
+            inputSchema:
+              type: object
+              required: [report]
+              properties:
+                report: { type: object }
+            executor: { kind: noop }
+            output:
+              report: "$.arguments.report"
+      done: { terminal: true }

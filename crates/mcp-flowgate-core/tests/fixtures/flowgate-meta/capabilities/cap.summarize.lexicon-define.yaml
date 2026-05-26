@@ -1,18 +1,12 @@
 # capabilities/cap.summarize.lexicon-define.yaml
-#
-# Typed wrapper over `gateway.lexicon.define`. Used by author-*
-# orchestrators when new content introduces vocabulary the operator's
-# lexicon should learn — keeps cross-run vocabulary consistent
-# (SPEC §30 ubiquitous-language story).
 
 workflows:
   cap.summarize.lexicon-define:
     verb: summarize
     lifecycle: experimental
     description: >
-      Register a new term + definition in the active gateway's
-      lexicon overlay. Idempotent: repeating an identical
-      define is a no-op.
+      Register a new term in the gateway's lexicon overlay. Thin
+      wrapper over gateway.lexicon.define.
     snippet:
       inputs:
         term:       { type: string, required: true }
@@ -20,10 +14,22 @@ workflows:
         governance: { type: string, default: "advisory" }
       outputs:
         registered: { type: object }
-    initialState: registered
-    initialContext:
-      registered:
-        term: "stub"
-        accepted: true
+    skills: [summarize.lexicon-extend]
+    initialState: ready
     states:
-      registered: { terminal: true }
+      ready:
+        transitions:
+          define:
+            target: done
+            actor: deterministic
+            executor:
+              kind: mcp
+              connection: gateway_self
+              tool: gateway.lexicon.define
+              arguments:
+                term:       "$.context.term"
+                definition: "$.context.definition"
+                governance: "$.context.governance"
+            output:
+              registered: "$.output"
+      done: { terminal: true }

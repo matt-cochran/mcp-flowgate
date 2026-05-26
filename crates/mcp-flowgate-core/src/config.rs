@@ -759,7 +759,7 @@ fn validate_skills(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow:
         // (default true), an unblessed root is a hard error; otherwise
         // (SPEC §5.4.2 / audit-resolution C.2) it's a soft warning
         // pushed into the diagnostics collector.
-        let root = subject.split('.').next().unwrap_or("");
+        let root = strip_namespace_prefix(subject).split('.').next().unwrap_or("");
         if !BLESSED_SUBJECT_ROOTS.contains(&root) {
             if strict_ns {
                 bail!(
@@ -863,7 +863,7 @@ fn validate_scripts(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow
                  — lowercase, kebab, dotted, at least two segments, no whitespace (SPEC §22.4)"
             );
         }
-        let root = subject.split('.').next().unwrap_or("");
+        let root = strip_namespace_prefix(subject).split('.').next().unwrap_or("");
         if !BLESSED_SCRIPT_ROOTS.contains(&root) {
             if strict_ns {
                 bail!(
@@ -1127,12 +1127,30 @@ pub fn compute_script_hash(body: &str) -> String {
 /// SPEC §5.4.2 — subject pattern: dotted, lowercase-kebab segments, at least
 /// two segments (`a.b`), no whitespace. Does NOT enforce blessed-root; that's
 /// a separate check governed by `strict_namespacing`.
+///
+/// SPEC §9 — accepts an optional single-segment namespace prefix
+/// (`<ns>/<a>.<b>`) for skills loaded via a `repos:` manifest.
+/// Bare-subject form remains the canonical shape for skills declared
+/// directly in the gateway config.
 fn is_subject_pattern(s: &str) -> bool {
-    let parts: Vec<&str> = s.split('.').collect();
+    let body = strip_namespace_prefix(s);
+    let parts: Vec<&str> = body.split('.').collect();
     if parts.len() < 2 {
         return false;
     }
     parts.iter().all(|p| is_kebab_token(p))
+}
+
+/// SPEC §9 — return the post-prefix portion of a subject string. If `s`
+/// has a single leading `<ns>/` segment (kebab-token namespace), strip
+/// it; otherwise return the input unchanged. Used by the blessed-root
+/// check so namespace-prefixed subjects like `cognitive/plan.draft`
+/// are evaluated against the root `plan`, not `cognitive`.
+fn strip_namespace_prefix(s: &str) -> &str {
+    match s.split_once('/') {
+        Some((ns, rest)) if is_kebab_token(ns) => rest,
+        _ => s,
+    }
 }
 
 /// SPEC §5.4.2 — under `strict_namespacing: true` (default), an unblessed

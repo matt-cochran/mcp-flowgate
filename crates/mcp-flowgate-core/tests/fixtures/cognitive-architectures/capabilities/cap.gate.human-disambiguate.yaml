@@ -1,16 +1,12 @@
 # capabilities/cap.gate.human-disambiguate.yaml
-#
-# HITL disambiguation gate — used when a deterministic classifier is
-# uncertain. `flow.triage-issue` invokes this when route-component
-# returns `is_ambiguous: true`.
 
 workflows:
   cap.gate.human-disambiguate:
     verb: gate
     lifecycle: experimental
     description: >
-      Ask a human to pick between candidate routings / owners /
-      component assignments when the classifier is uncertain.
+      Ask a human to pick between candidate routings / classifications
+      when a deterministic classifier returns is_ambiguous=true.
     snippet:
       inputs:
         candidates: { type: array,  required: true }
@@ -18,11 +14,22 @@ workflows:
       outputs:
         chosen:    { type: object }
         rationale: { type: string }
-    initialState: disambiguated
-    initialContext:
-      chosen:
-        component:  "platform"
-        owner_team: "platform-team"
-      rationale: "v0.6 stub default pick"
+    initialState: awaiting_human
     states:
-      disambiguated: { terminal: true }
+      awaiting_human:
+        goal: Block; surface candidates + prompt to the operator.
+        transitions:
+          pick:
+            target: done
+            actor: human
+            inputSchema:
+              type: object
+              required: [chosen]
+              properties:
+                chosen:    { type: object }
+                rationale: { type: string, default: "" }
+            executor: { kind: human }
+            output:
+              chosen:    "$.arguments.chosen"
+              rationale: "$.arguments.rationale"
+      done: { terminal: true }

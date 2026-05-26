@@ -1,26 +1,29 @@
 # capabilities/cap.verify.check-config.yaml
-#
-# Run `mcp-flowgate check --config <path>` against a candidate
-# config and surface V1-V23 diagnostics back to the author loop.
-# The verify gate before review/PR.
 
 workflows:
   cap.verify.check-config:
     verb: verify
     lifecycle: experimental
     description: >
-      Validate a candidate YAML body via mcp-flowgate's `check`
-      subcommand. Emit ok=true when zero hard errors; surface
-      the full diagnostic list otherwise.
+      Validate a candidate YAML via `mcp-flowgate check`. Emit ok=true
+      when zero hard errors; surface the diagnostic list otherwise.
     snippet:
       inputs:
         config_path: { type: string, required: true }
       outputs:
         ok:          { type: boolean }
         diagnostics: { type: array }
-    initialState: checked
-    initialContext:
-      ok: true
-      diagnostics: []
+    initialState: ready
     states:
-      checked: { terminal: true }
+      ready:
+        transitions:
+          check:
+            target: done
+            actor: deterministic
+            executor:
+              kind: script
+              subject: verify.mcp-flowgate.check
+            output:
+              ok:          "$.output.ok"
+              diagnostics: "$.output.diagnostics"
+      done: { terminal: true }

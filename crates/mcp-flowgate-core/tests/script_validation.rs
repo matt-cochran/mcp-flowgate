@@ -157,8 +157,7 @@ fn unblessed_root_under_strict_namespacing_rejects() {
 
 #[test]
 fn unblessed_root_under_lenient_namespacing_produces_warning_with_suggestion() {
-    let yaml = format!(
-        r#"version: "1.0.0"
+    let yaml = r#"version: "1.0.0"
 flowgate:
   strict_namespacing: false
 scripts:
@@ -167,10 +166,9 @@ scripts:
     lifecycle: stable
     body: |
       echo hi
-"#
-    );
+"#;
     let (_resolved, diagnostics): (serde_json::Value, Vec<Diagnostic>) =
-        resolve_yaml_with_diagnostics(&yaml)
+        resolve_yaml_with_diagnostics(yaml)
             .expect("lenient mode must NOT bail; only warn");
     let warn = diagnostics
         .iter()

@@ -187,6 +187,16 @@ fn merge_repo_file(
         .as_object_mut()
         .expect("aggregate is constructed as an object");
     for (block_key, block_value) in top {
+        // SPEC §9.2 — silently skip harmless top-level metadata keys
+        // (`version:`, `include:`, `description:`) that legacy files
+        // commonly carry. Hard-error only on keys that look like they
+        // intended to declare a block we don't know how to namespace-
+        // prefix.
+        const HARMLESS_TOP_LEVEL_KEYS: &[&str] =
+            &["version", "include", "description", "metadata"];
+        if HARMLESS_TOP_LEVEL_KEYS.contains(&block_key.as_str()) {
+            continue;
+        }
         if !PREFIXABLE_BLOCKS.contains(&block_key.as_str()) {
             bail!(
                 "repo file {} has unsupported top-level key `{}`. Repo files may declare \

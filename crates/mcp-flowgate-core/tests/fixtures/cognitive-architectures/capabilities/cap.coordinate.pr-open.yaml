@@ -1,14 +1,10 @@
 # capabilities/cap.coordinate.pr-open.yaml
 #
-# Side-effect coordination: open a PR against the declared base ref.
-# Shared across add-feature, bugfix, and safe-refactor as the
-# terminal "publish" step. The actual GitHub API call lives in the
-# underlying MCP connection; this cap shapes the contract.
-#
-# Per spec §4.1, ideal `coordinate` verb shape is `kind: mcp` AND
-# the connection has `external: true`. The runtime's V6 check
-# enforces only the `kind: mcp` half today (no `external:` field
-# yet — CHANGELOG slot for v0.7).
+# Coordination cap: opens a PR via the operator-supplied `github_mcp`
+# MCP connection. V6 requires `kind: mcp` for the `coordinate` verb;
+# operators wire up their actual GitHub MCP server in their gateway
+# config (an example connection definition ships in
+# `connections/github-mcp.yaml`).
 
 workflows:
   cap.coordinate.pr-open:
@@ -16,18 +12,31 @@ workflows:
     lifecycle: experimental
     description: >
       Open a PR with the declared title/body against base. Emits the
-      created PR URL.
+      created PR URL + number.
     snippet:
       inputs:
         title: { type: string, required: true }
         body:  { type: string, default: "" }
         base:  { type: string, default: "main" }
       outputs:
-        url:        { type: string }
-        pr_number:  { type: integer }
-    initialState: opened
-    initialContext:
-      url:       "https://example.invalid/pr/stub"
-      pr_number: 0
+        url:       { type: string }
+        pr_number: { type: integer }
+    initialState: ready
     states:
-      opened: { terminal: true }
+      ready:
+        transitions:
+          open:
+            target: done
+            actor: deterministic
+            executor:
+              kind: mcp
+              connection: github_mcp
+              tool: create_pr
+              arguments:
+                title: "$.context.title"
+                body:  "$.context.body"
+                base:  "$.context.base"
+            output:
+              url:       "$.output.url"
+              pr_number: "$.output.number"
+      done: { terminal: true }

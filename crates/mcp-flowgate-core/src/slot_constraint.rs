@@ -85,9 +85,7 @@ pub fn evaluate_constraints(
         let Some(constraint) = decl.get("constraint").and_then(Value::as_object) else {
             continue;
         };
-        if let Err(v) = check_constraint(slot_name, constraint, value, context) {
-            return Err(v);
-        }
+        check_constraint(slot_name, constraint, value, context)?;
     }
     Ok(())
 }

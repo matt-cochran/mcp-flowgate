@@ -1,25 +1,32 @@
 # capabilities/cap.plan.fix.yaml
-#
-# Produce a structured fix plan from a localized defect. Used by
-# `flow.bugfix-from-error-log` after diagnosis.
 
 workflows:
   cap.plan.fix:
     verb: plan
     lifecycle: experimental
     description: >
-      Plan the fix: scope, approach, regression-test additions.
+      Plan a scope-bounded fix from a localized defect + repro steps.
     snippet:
       inputs:
         defect_location: { type: object, required: true }
         repro_steps:     { type: array,  required: true }
       outputs:
         plan: { type: object }
-    initialState: planned
-    initialContext:
-      plan:
-        title: "Stub fix plan (cap.plan.fix v0.6)"
-        approach: "minimal-bounded"
-        scope_paths: []
+    skills: [plan.fix.scope-bounded]
+    initialState: ready
     states:
-      planned: { terminal: true }
+      ready:
+        goal: Plan the fix — declare scope, approach, regression tests.
+        transitions:
+          submit_plan:
+            target: done
+            actor: agent
+            inputSchema:
+              type: object
+              required: [plan]
+              properties:
+                plan: { type: object }
+            executor: { kind: noop }
+            output:
+              plan: "$.arguments.plan"
+      done: { terminal: true }

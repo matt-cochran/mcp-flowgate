@@ -10,17 +10,17 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.83"
 license = "Apache-2.0"
 repository = "https://github.com/matt-cochran/mcp-flowgate"
 
 [workspace.dependencies]
-mcp-flowgate-schema = { path = "crates/mcp-flowgate-schema", version = "0.4.0" }
-mcp-flowgate-core = { path = "crates/mcp-flowgate-core", version = "0.4.0" }
-mcp-flowgate-executors = { path = "crates/mcp-flowgate-executors", version = "0.4.0" }
-mcp-flowgate-mcp-server = { path = "crates/mcp-flowgate-mcp-server", version = "0.4.0" }
+mcp-flowgate-schema = { path = "crates/mcp-flowgate-schema", version = "0.2.0" }
+mcp-flowgate-core = { path = "crates/mcp-flowgate-core", version = "0.2.0" }
+mcp-flowgate-executors = { path = "crates/mcp-flowgate-executors", version = "0.2.0" }
+mcp-flowgate-mcp-server = { path = "crates/mcp-flowgate-mcp-server", version = "0.2.0" }
 
 anyhow = "1.0"
 async-trait = "0.1"

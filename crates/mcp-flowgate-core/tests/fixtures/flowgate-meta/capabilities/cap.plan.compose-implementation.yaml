@@ -1,12 +1,4 @@
 # capabilities/cap.plan.compose-implementation.yaml
-#
-# Given a goal description + a tool inventory, propose 2-3 candidate
-# implementation shapes. Cognitive heart of the meta-authoring loop:
-# this is where "you have these tools — here's how I'd compose them"
-# gets articulated.
-#
-# Output is a list of candidate shapes for the downstream
-# `cap.gate.human-pick-shape` to dispatch on.
 
 workflows:
   cap.plan.compose-implementation:
@@ -14,21 +6,28 @@ workflows:
     lifecycle: experimental
     description: >
       From a goal + inventory, draft 2-3 candidate implementation
-      shapes. Each candidate is a typed structure naming the verbs,
-      state count, snippet contract, and tool stack it'd use.
+      shapes with tradeoffs for the operator to pick between.
     snippet:
       inputs:
         goal:      { type: string, required: true }
         inventory: { type: object, required: true }
       outputs:
         candidates: { type: array }
-    initialState: composed
-    initialContext:
-      candidates:
-        - id: "stub-candidate-a"
-          verb: "research"
-          snippet_inputs:  {}
-          snippet_outputs: {}
-          state_count: 1
+    skills: [plan.compose-implementation]
+    initialState: ready
     states:
-      composed: { terminal: true }
+      ready:
+        goal: Propose 2-4 distinct shapes; cite tools from inventory.
+        transitions:
+          submit_candidates:
+            target: done
+            actor: agent
+            inputSchema:
+              type: object
+              required: [candidates]
+              properties:
+                candidates: { type: array, minItems: 2, maxItems: 4 }
+            executor: { kind: noop }
+            output:
+              candidates: "$.arguments.candidates"
+      done: { terminal: true }

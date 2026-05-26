@@ -1,14 +1,11 @@
 # capabilities/cap.coordinate.label-and-route.yaml
-#
-# Apply labels + route to the resolved component team. Used by
-# `flow.triage-issue` as the terminal coordination step.
 
 workflows:
   cap.coordinate.label-and-route:
     verb: coordinate
     lifecycle: experimental
     description: >
-      Apply severity + component labels and assign the issue to the
+      Apply severity + component labels to an issue and assign the
       resolved owner team.
     snippet:
       inputs:
@@ -18,10 +15,21 @@ workflows:
         owner_team: { type: string, required: true }
       outputs:
         applied: { type: object }
-    initialState: applied
-    initialContext:
-      applied:
-        labels: ["stub"]
-        assignee: "stub-team"
+    initialState: ready
     states:
-      applied: { terminal: true }
+      ready:
+        transitions:
+          apply:
+            target: done
+            actor: deterministic
+            executor:
+              kind: mcp
+              connection: github_mcp
+              tool: update_issue
+              arguments:
+                issue:      "$.context.issue"
+                labels:     ["$.context.severity", "$.context.component"]
+                assignees:  ["$.context.owner_team"]
+            output:
+              applied: "$.output"
+      done: { terminal: true }

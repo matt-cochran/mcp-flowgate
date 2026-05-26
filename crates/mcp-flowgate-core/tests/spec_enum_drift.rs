@@ -184,7 +184,7 @@ fn extract_code_block_roots(text: &str) -> Vec<String> {
             continue;
         }
         // Drop everything before the colon (the label).
-        let payload = line.splitn(2, ':').nth(1).unwrap_or(line);
+        let payload = line.split_once(':').map(|x| x.1).unwrap_or(line);
         for tok in payload.split(',') {
             let tok = tok.trim();
             if tok.is_empty() {

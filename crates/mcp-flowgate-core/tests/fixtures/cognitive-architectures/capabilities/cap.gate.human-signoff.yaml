@@ -1,32 +1,41 @@
 # capabilities/cap.gate.human-signoff.yaml
 #
-# HITL approval gate. Used by `flow.add-feature` before implementation
-# (operator approves plan), and any orchestrator that needs a human
-# checkpoint.
-#
-# Per spec §4.1, `gate` verb requires at least one initial-state
-# transition with `actor: human` OR `purpose: ask`. v0.6 stubs this
-# as a terminal initial state plus a self-loop ask transition that
-# satisfies V6 without blocking the e2e walk.
+# HITL approval gate. The primary transition uses `actor: human`
+# which satisfies V6 for the `gate` verb. The HumanExecutor surfaces
+# the prompt to the operator via whatever HITL surface the gateway
+# is wired to (TUI, dashboard, etc.); the human submits decision +
+# rationale.
 
 workflows:
   cap.gate.human-signoff:
     verb: gate
     lifecycle: experimental
     description: >
-      Block until a human approves the supplied artifact. v0.6 stub
-      auto-approves; v0.7 wires real HITL via the runtime's
-      enable_human_ask injection.
+      Block until a human approves the supplied artifact. Emits the
+      decision + rationale.
     snippet:
       inputs:
         artifact: { type: object, required: true }
         prompt:   { type: string, default: "Approve?" }
       outputs:
-        decision:   { type: string, enum: [approved, rejected] }
-        rationale:  { type: string }
-    initialState: signed_off
-    initialContext:
-      decision:  "approved"
-      rationale: "v0.6 stub auto-approval"
+        decision:  { type: string, enum: [approved, rejected] }
+        rationale: { type: string }
+    initialState: awaiting_human
     states:
-      signed_off: { terminal: true }
+      awaiting_human:
+        goal: Block; surface the artifact + prompt to the operator.
+        transitions:
+          signoff:
+            target: done
+            actor: human
+            inputSchema:
+              type: object
+              required: [decision]
+              properties:
+                decision:  { type: string, enum: [approved, rejected] }
+                rationale: { type: string, default: "" }
+            executor: { kind: human }
+            output:
+              decision:  "$.arguments.decision"
+              rationale: "$.arguments.rationale"
+      done: { terminal: true }

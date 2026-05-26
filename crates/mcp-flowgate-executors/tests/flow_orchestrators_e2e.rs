@@ -1,28 +1,35 @@
-//! M4 acceptance test — walk each of the four shipping orchestrators
-//! (`flow.add-feature`, `flow.bugfix-from-error-log`, `flow.safe-refactor`,
-//! `flow.triage-issue`) through their full lifecycle to a terminal
-//! state, against the vendored cognitive-architectures fixture.
+//! M4 acceptance — walk each of cognitive-architectures v0.2's four
+//! shipping orchestrators (`flow.add-feature`, `flow.bugfix-from-error-log`,
+//! `flow.safe-refactor`, `flow.triage-issue`) through their full lifecycle
+//! to a terminal state.
 //!
-//! ## Test location note
+//! ## Fixture executor (NOT WorkflowExecutor)
 //!
-//! The plan places this test in `mcp-flowgate-core::tests::flow_orchestrators_e2e`,
-//! but the orchestrator transitions invoke capabilities via
-//! `kind: workflow`, which requires the [`WorkflowExecutor`] from this
-//! crate. Making `mcp-flowgate-core` depend on `mcp-flowgate-executors`
-//! even as a dev-dep would be a build cycle. We host the test here in
-//! the executors crate; the acceptance condition (each orchestrator
-//! reaches its terminal state) is identical.
+//! In production, the orchestrator's `kind: workflow` transitions are
+//! dispatched by `WorkflowExecutor`, which `runtime.start`s the cap
+//! sub-workflow and polls until completion. Cognitive caps are
+//! agent-driven (`kind: noop + actor: agent`); they'd block forever
+//! without an LLM driver submitting per-cap arguments.
 //!
-//! ## Fixture freshness
+//! Tests can't supply an LLM. So we register a fixture executor for
+//! `kind: workflow` that short-circuits: receives the orchestrator's
+//! `executor_config` (including `_snippetOutputs` embedded by the
+//! config-resolve pass), synthesizes valid outputs per the snippet
+//! schema, returns them directly. The orchestrator's projection layer
+//! merges them as if the cap had really run.
 //!
-//! The fixture lives at `crates/mcp-flowgate-core/tests/fixtures/cognitive-architectures/`
-//! as a vendored copy of the sibling `/home/mc/working/cognitive-architectures` repo.
-//! When cognitive-architectures ships a release, the fixture is updated
-//! by hand (see CONTRIBUTING.md). Symlinks would be fragile across
-//! checkouts; the vendored copy keeps the test self-contained.
+//! This proves the orchestrator state machine + use-binding projection
+//! work end-to-end. Cap-internal behavior is tested by each cap's own
+//! integration tests (operator-owned, not part of M4).
+//!
+//! ## Test location
+//!
+//! Lives in mcp-flowgate-executors (not -core) to avoid a build cycle:
+//! the test uses helpers from this crate's tests/ folder pattern and
+//! must NOT add a core→executors dev-dep.
 
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
@@ -35,54 +42,96 @@ use mcp_flowgate_core::runtime::WorkflowRuntime;
 use mcp_flowgate_core::store::{
     ConfigDefinitionStore, InMemoryEvidenceStore, InMemoryWorkflowStore,
 };
-use mcp_flowgate_executors::workflow::WorkflowExecutor;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-/// Custom registry: WorkflowExecutor for `kind: workflow` once installed;
-/// NoopExecutor for everything else. The OnceLock pattern bridges the
-/// circular dependency between WorkflowRuntime (needs a registry) and
-/// WorkflowExecutor (needs a runtime to spawn into).
-struct M4Registry {
-    workflow_executor: OnceLock<Arc<WorkflowExecutor>>,
-}
-impl M4Registry {
-    fn new() -> Self {
-        Self { workflow_executor: OnceLock::new() }
+/// Fixture executor for `kind: workflow` — short-circuits cap invocation
+/// by synthesizing outputs per the embedded `_snippetOutputs` schema.
+/// Returns a result keyed by capability output name (matching what
+/// `WorkflowExecutor` would have produced post-projection, so the
+/// orchestrator's synthesized transition output mapping projects to
+/// host slots correctly).
+struct CapShortCircuit;
+
+#[async_trait]
+impl Executor for CapShortCircuit {
+    async fn execute(&self, request: ExecuteRequest) -> Result<ExecuteResult, ExecutorError> {
+        // The expand_use_bindings pass embeds the target capability's
+        // snippet.outputs as `_snippetOutputs` on the executor config.
+        // We use that schema to synthesize a valid example value per
+        // declared output.
+        let snippet_outputs = request
+            .executor_config
+            .get("_snippetOutputs")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let outputs = synthesize_outputs(&snippet_outputs);
+        Ok(ExecuteResult {
+            output: outputs,
+            evidence: vec![],
+            child_workflow_id: Some("fixture-cap-instance".to_string()),
+        })
     }
-    fn install(&self, exec: Arc<WorkflowExecutor>) {
-        self.workflow_executor.set(exec).map_err(|_| ()).unwrap();
-    }
 }
-impl ExecutorRegistry for M4Registry {
-    fn get(&self, kind: &str) -> Option<Arc<dyn Executor>> {
-        if kind == "workflow" {
-            return self
-                .workflow_executor
-                .get()
-                .map(|w| w.clone() as Arc<dyn Executor>);
+
+/// Walk the snippet outputs schema; emit a valid example value for
+/// each declared output. Keyed by cap output name (NOT host path) —
+/// the synthesized transition output mapping in the orchestrator
+/// projects from `$.output.<cap_output_name>` to host slots.
+fn synthesize_outputs(snippet_outputs: &Value) -> Value {
+    let Some(obj) = snippet_outputs.as_object() else {
+        return json!({});
+    };
+    let mut out = serde_json::Map::new();
+    for (name, schema) in obj {
+        out.insert(name.clone(), synthesize_one(schema));
+    }
+    Value::Object(out)
+}
+
+fn synthesize_one(schema: &Value) -> Value {
+    let ty = schema.get("type").and_then(Value::as_str).unwrap_or("string");
+    // Enum constraint wins — use first allowed value.
+    if let Some(enum_vals) = schema.get("enum").and_then(Value::as_array) {
+        if let Some(first) = enum_vals.first() {
+            return first.clone();
         }
-        Some(Arc::new(NoopExecutor))
+    }
+    match ty {
+        "string" => json!("fixture-value"),
+        "integer" => json!(0),
+        "number" => json!(0.0),
+        "boolean" => json!(true),
+        "array" => json!([]),
+        "object" => json!({}),
+        _ => Value::Null,
     }
 }
+
 struct NoopExecutor;
 #[async_trait]
 impl Executor for NoopExecutor {
     async fn execute(&self, _r: ExecuteRequest) -> Result<ExecuteResult, ExecutorError> {
-        // The cognitive-architectures v0.6 caps don't actually invoke
-        // these via mcp/script/cli — every cap is a terminal-initialState
-        // stub that auto-completes against initialContext. NoopExecutor is
-        // here purely as a registry fallback so any cap that does grow a
-        // real executor later doesn't blow up the e2e.
         Ok(ExecuteResult::default())
     }
 }
 
-/// Absolute path to the vendored cognitive-architectures fixture.
+/// Registry: `kind: workflow` short-circuits via CapShortCircuit;
+/// everything else returns NoopExecutor.
+struct FixtureRegistry;
+impl ExecutorRegistry for FixtureRegistry {
+    fn get(&self, kind: &str) -> Option<Arc<dyn Executor>> {
+        match kind {
+            "workflow" => Some(Arc::new(CapShortCircuit)),
+            _ => Some(Arc::new(NoopExecutor)),
+        }
+    }
+}
+
 fn fixture_path() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.pop(); // crates/mcp-flowgate-executors → crates
-    p.pop(); // crates → workspace root
+    p.pop();
+    p.pop();
     p.push("crates");
     p.push("mcp-flowgate-core");
     p.push("tests");
@@ -91,10 +140,6 @@ fn fixture_path() -> PathBuf {
     p
 }
 
-/// Build a host gateway config that loads the fixture repo and write
-/// it to a tempfile; return its path. Repo paths in `repos:` resolve
-/// relative to the host file's directory, so we hand it an absolute
-/// path to the fixture.
 fn write_host_config(td: &TempDir) -> PathBuf {
     let body = format!(
         "version: \"1.0.0\"\nrepos:\n  - path: \"{}\"\n",
@@ -105,37 +150,25 @@ fn write_host_config(td: &TempDir) -> PathBuf {
     p
 }
 
-async fn build_runtime(config: &Value) -> (WorkflowRuntime, Arc<MemoryAuditSink>) {
+async fn build_runtime(config: &Value) -> WorkflowRuntime {
     let audit = Arc::new(MemoryAuditSink::new());
     let definitions = Arc::new(ConfigDefinitionStore::from_config(config));
     let store: Arc<dyn WorkflowStore> = Arc::new(InMemoryWorkflowStore::new());
     let evidence = Arc::new(InMemoryEvidenceStore::new());
     let guards = Arc::new(DefaultGuardEvaluator::with_evidence(evidence.clone()));
-    let registry = Arc::new(M4Registry::new());
-    let runtime = WorkflowRuntime::new(
+    let registry = Arc::new(FixtureRegistry) as Arc<dyn ExecutorRegistry>;
+    WorkflowRuntime::new(
         definitions,
-        store.clone(),
-        registry.clone() as Arc<dyn ExecutorRegistry>,
+        store,
+        registry,
         guards,
-        audit.clone() as Arc<dyn AuditSink>,
+        audit as Arc<dyn AuditSink>,
     )
-    .with_evidence(evidence);
-    registry.install(Arc::new(WorkflowExecutor::new(
-        runtime.clone(),
-        audit.clone() as Arc<dyn AuditSink>,
-    )));
-    (runtime, audit)
+    .with_evidence(evidence)
 }
 
-/// Drive one orchestrator to its terminal state and assert. Returns
-/// the final response so individual tests can spot-check projected
-/// slots if useful.
-async fn walk_to_terminal(
-    definition_id: &str,
-    input: Value,
-    config: &Value,
-) -> Value {
-    let (runtime, _audit) = build_runtime(config).await;
+async fn walk_to_terminal(definition_id: &str, input: Value, config: &Value) -> Value {
+    let runtime = build_runtime(config).await;
     let resp = runtime
         .start(StartWorkflow {
             definition_id: definition_id.to_string(),
@@ -147,14 +180,8 @@ async fn walk_to_terminal(
         .await
         .unwrap_or_else(|e| panic!("start({definition_id}): {e}"));
 
-    let status = resp
-        .pointer("/result/status")
-        .and_then(Value::as_str)
-        .unwrap_or("?");
-    let state = resp
-        .pointer("/workflow/state")
-        .and_then(Value::as_str)
-        .unwrap_or("?");
+    let status = resp.pointer("/result/status").and_then(Value::as_str).unwrap_or("?");
+    let state = resp.pointer("/workflow/state").and_then(Value::as_str).unwrap_or("?");
     assert_eq!(
         state, "done",
         "{definition_id} should walk to terminal 'done'; got state='{state}' status='{status}'. \
@@ -162,8 +189,7 @@ async fn walk_to_terminal(
     );
     assert_eq!(
         status, "completed",
-        "{definition_id} should report status=completed at terminal; got '{status}'. \
-         resp: {resp:#}"
+        "{definition_id} status; resp: {resp:#}"
     );
     resp
 }
@@ -183,14 +209,13 @@ async fn flow_add_feature_walks_to_terminal() {
         &config,
     )
     .await;
-    // The terminal `opening_pr → done` transition writes pr_url; a
-    // present-and-non-empty value proves the use.outputs projection
-    // wired end-to-end through every preceding state.
+    // pr_url projected onto host context proves the full chain wired up
+    // through every preceding cap invocation.
     let pr_url = resp
         .pointer("/context/pr_url")
         .and_then(Value::as_str)
         .unwrap_or("");
-    assert!(!pr_url.is_empty(), "pr_url should be projected onto host context");
+    assert!(!pr_url.is_empty(), "pr_url should be projected; got {resp:#}");
 }
 
 #[tokio::test]

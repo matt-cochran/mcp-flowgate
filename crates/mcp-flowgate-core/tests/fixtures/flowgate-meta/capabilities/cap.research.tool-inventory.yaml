@@ -1,12 +1,4 @@
 # capabilities/cap.research.tool-inventory.yaml
-#
-# Introspect what's reachable from the calling gateway: declared MCP
-# connections + their exposed tools, scripts in the library, skills
-# in the library, and existing capabilities other orchestrators
-# could compose. The output drives every downstream meta-cap.
-#
-# Operators bring their own tool stack — this is the cap that turns
-# "what's loaded" into a typed inventory the planner can reason over.
 
 workflows:
   cap.research.tool-inventory:
@@ -20,13 +12,21 @@ workflows:
         filter: { type: object, default: {} }
       outputs:
         inventory: { type: object }
-    initialState: surveyed
-    initialContext:
-      inventory:
-        mcp_tools: []
-        cli_scripts: []
-        skills: []
-        capabilities: []
-        connections: []
+    skills: [research.tool-inventory.assemble]
+    initialState: ready
     states:
-      surveyed: { terminal: true }
+      ready:
+        goal: Build the typed inventory of reachable tooling.
+        transitions:
+          submit_inventory:
+            target: done
+            actor: agent
+            inputSchema:
+              type: object
+              required: [inventory]
+              properties:
+                inventory: { type: object }
+            executor: { kind: noop }
+            output:
+              inventory: "$.arguments.inventory"
+      done: { terminal: true }

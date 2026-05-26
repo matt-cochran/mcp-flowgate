@@ -644,6 +644,14 @@ fn check_skills_refs(
 ) {
     const REF_WARN_THRESHOLD: usize = 4;
 
+    // SPEC §9 — a workflow loaded via a `repos:` manifest has an id of
+    // the form `<ns>/<stem>`. A bare-subject skill reference like
+    // `plan.draft` MAY resolve either to the bare key `plan.draft` OR
+    // to the namespace-prefixed `<ns>/plan.draft` — same fall-through
+    // pattern PR1 uses for `kind: workflow` references. Pre-compute the
+    // workflow's own namespace here so the per-entry check stays O(1).
+    let own_namespace: Option<&str> = id.split_once('/').map(|(ns, _)| ns);
+
     let mut check_scope = |scope: &str, refs: &Value| {
         let Some(arr) = refs.as_array() else { return };
         if arr.len() > REF_WARN_THRESHOLD {
@@ -655,12 +663,21 @@ fn check_skills_refs(
         }
         for entry in arr {
             let Some(subject) = entry.as_str() else { continue };
-            if !skill_subjects.contains(subject) {
-                out.push(Diagnostic::Error(format!(
-                    "workflow '{id}': {scope} references skills entry '{subject}' \
-                     which is not declared in the top-level `skills:` library (SPEC §11)"
-                )));
+            // Direct match first (bare subject, OR already-prefixed).
+            if skill_subjects.contains(subject) {
+                continue;
             }
+            // Fall through: try the workflow's own-namespace prefix.
+            if let Some(ns) = own_namespace {
+                let prefixed = format!("{}/{}", ns, subject);
+                if skill_subjects.contains(prefixed.as_str()) {
+                    continue;
+                }
+            }
+            out.push(Diagnostic::Error(format!(
+                "workflow '{id}': {scope} references skills entry '{subject}' \
+                 which is not declared in the top-level `skills:` library (SPEC §11)"
+            )));
         }
     };
 

@@ -86,6 +86,7 @@ impl WorkflowRuntime {
     ///
     /// Returns `Ok(Some(rerouted_target))` when re-entry fires;
     /// `Ok(None)` when the workflow proceeds normally.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn apply_while_loop(
         &self,
         definition: &Value,

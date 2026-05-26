@@ -31,10 +31,12 @@ description: |
   `gateway.lexicon.*` MCP tools so authored content stays
   vocabulary-consistent.
 
-# v0.1 ships only capabilities and orchestrators through the manifest.
 layout:
   capabilities:  capabilities
   orchestrators: orchestrators
-  skills:        ._unused_v01_skills
-  scripts:       ._unused_v01_scripts
+  skills:        skills
+  scripts:       scripts-library
+  # Operators wire their own MCP connections (gateway_self,
+  # github_mcp, etc.) in the gateway config; this repo ships no
+  # connection definitions of its own at v0.1.
   connections:   ._unused_v01_connections

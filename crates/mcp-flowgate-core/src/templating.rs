@@ -15,14 +15,11 @@ use serde_json::Value;
 /// - `$.workflow.state`               → `instance.state`
 /// - `$.workflow.version`             → `instance.definition_version`
 /// - `$.flowgate.authoring.*`         → operator's authoring preferences,
-///                                      stamped onto the snapshot at
-///                                      config-resolve time (SPEC §17.x).
-///                                      Advisory only — typical use:
-///                                      `{{$.flowgate.authoring.preferred_script_language}}`
-///                                      inside a skill body so the LLM
-///                                      sees the operator's preferred
-///                                      language when generating new
-///                                      scripts.
+///   stamped onto the snapshot at config-resolve time (SPEC §17.x).
+///   Advisory only — typical use:
+///   `{{$.flowgate.authoring.preferred_script_language}}` inside a skill
+///   body so the LLM sees the operator's preferred language when
+///   generating new scripts.
 ///
 /// **Single-pass, non-recursive.** A substituted value that itself contains
 /// `{{ … }}` is written verbatim into the output and is NOT re-scanned.

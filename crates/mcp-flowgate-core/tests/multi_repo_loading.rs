@@ -2,15 +2,15 @@
 //! accepts/rejects pairs.
 //!
 //! Fixtures live under `tests/fixtures/repos/`:
-//!   - `swe-core/`        : namespace `swe`, ships `cap.plan.vet` +
-//!                          `flow.add-feature` (the latter references the
-//!                          capability via an UNPREFIXED `cap.plan.vet`,
-//!                          which `load_repo` rewrites to `swe/cap.plan.vet`).
-//!   - `quality-core/`    : namespace `quality`, ships its own `cap.plan.vet`
-//!                          — proves two namespaces can share an id without
-//!                          collision (M1).
-//!   - `dupe-namespace-{a,b}/` : both declare `namespace: dupe` — used to
-//!                          assert V20 fires.
+//! - `swe-core/` — namespace `swe`, ships `cap.plan.vet` +
+//!   `flow.add-feature` (the latter references the capability via an
+//!   UNPREFIXED `cap.plan.vet`, which `load_repo` rewrites to
+//!   `swe/cap.plan.vet`).
+//! - `quality-core/` — namespace `quality`, ships its own
+//!   `cap.plan.vet`. Proves two namespaces can share an id without
+//!   collision (M1).
+//! - `dupe-namespace-{a,b}/` — both declare `namespace: dupe`; used
+//!   to assert V20 fires.
 //!
 //! Tests construct host gateway-config YAML on the fly (via tempfile) so
 //! the test owns the `repos:` declarations and any host-level overrides.

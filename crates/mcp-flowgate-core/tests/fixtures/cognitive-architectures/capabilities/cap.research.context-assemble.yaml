@@ -1,26 +1,32 @@
 # capabilities/cap.research.context-assemble.yaml
-#
-# Assemble a code-context bundle from a scope description (paths,
-# component, search query). Used by `flow.safe-refactor` as the first
-# read step before any edit is proposed.
 
 workflows:
   cap.research.context-assemble:
     verb: research
     lifecycle: experimental
     description: >
-      Walk symbols, dependencies, and tests touching the declared
-      scope; emit a bundle a refactor planner can consume.
+      Assemble a code-context bundle from a scope description: symbols,
+      dependencies, tests, ownership.
     snippet:
       inputs:
         scope_description: { type: object, required: true }
       outputs:
         context: { type: object }
-    initialState: assembled
-    initialContext:
-      context:
-        symbols: []
-        dependencies: []
-        tests: []
+    skills: [research.context.assemble]
+    initialState: ready
     states:
-      assembled: { terminal: true }
+      ready:
+        goal: Walk symbols + dependencies + tests; emit a bundled context.
+        transitions:
+          submit_context:
+            target: done
+            actor: agent
+            inputSchema:
+              type: object
+              required: [context]
+              properties:
+                context: { type: object }
+            executor: { kind: noop }
+            output:
+              context: "$.arguments.context"
+      done: { terminal: true }

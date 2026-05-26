@@ -10,6 +10,176 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+(none currently — see 0.2.0 below)
+
+## [0.2.0] — 2026-05-26
+
+First public release since 0.1.1. Ships the **two-tier composition
+model** (capabilities + orchestrators) as the v0.6 spec lands, plus
+multi-repo loading, a 24-verb capability cloud, a typed slot table,
+contract-hash pinning, and an end-to-end acceptance suite against the
+sibling [cognitive-architectures](https://github.com/matt-cochran/cognitive-architectures)
+library and the new [flowgate-meta](https://github.com/matt-cochran/flowgate-meta)
+self-authoring repo.
+
+This release also bundles every internal version marker between 0.1.1
+and 0.2.0 (the `[0.4.0]`, `[0.3.0]`, and `[0.2.0] - 2026-05-25`
+sections preserved below are historical development markers — none of
+them were ever publicly tagged). Cumulative public diff from 0.1.1:
+
+- The typed skills surface (SPEC §5)
+- The scripts surface (SPEC §22) and the verb-taxonomy expansion
+- The lexicon / ubiquitous-language primitive (SPEC §30)
+- Deterministic chaining, hot-reload via SIGHUP, dynamic fan-out
+- The mcp-flowgate-tui crate
+- Trace/run id plumbing, evidence enrichment
+- — plus the v0.6 composition headline below
+
+### Added — Multi-repo loading (SPEC §9)
+
+- **Repo manifest** (`flowgate.repo.yaml`) declares a `namespace`,
+  `version`, and `layout` of directories where capabilities,
+  orchestrators, skills, scripts, and connections live. Each repo's
+  loaded definitionIds are namespace-prefixed `<namespace>/<id>`
+  before being merged into the gateway registry.
+- **Top-level `repos:` block** on gateway configs accepts an array of
+  `{ path: <dir> }` entries. Relative paths resolve against the host
+  config's directory; `~/` expands to `$HOME`.
+- **Top-level `overrides:` block** lists fully-qualified ids the host
+  config explicitly shadows after a repo provides them. Anonymous
+  shadowing — defining `<ns>/<id>` locally without listing it in
+  `overrides:` — is a config-load error (V23). Stale overrides that
+  don't collide are also rejected.
+- **Cross-namespace references**: `kind: workflow` `definitionId:`
+  references inside a repo-loaded workflow are namespace-prefixed at
+  load time. Unprefixed names bind to the workflow's own namespace;
+  unresolved refs fail at load (V22).
+- **Load-time rules V19–V23** enforced by
+  `mcp-flowgate-core::repo` and `config::load_resolved_with_repos`.
+  Binary's `serve` and `check` subcommands now call the multi-repo
+  loader transparently.
+
+### Added — Two-tier composition (SPEC §3, §5–§6)
+
+- **Capability workflows** (`cap.<verb>.<name>`) declare a typed
+  `snippet: { inputs, outputs }` contract. Capabilities are
+  composition leaves and may NOT invoke other workflows (V10).
+- **Orchestrator workflows** (`flow.<name>`) declare an `inputs:`
+  block defining their entry signature. Orchestrators invoke
+  capabilities via `kind: workflow` executors with `use: { inputs,
+  outputs }` bindings. Orchestrators may not invoke other
+  orchestrators (V11).
+- **`use:` bindings** thread typed inputs from host context to the
+  capability's snippet, and project declared outputs back into host
+  slots at the LHS paths. Capabilities run in their own private
+  blackboard (the scoping firewall); only declared outputs propagate.
+- **Snippet output validation (V17)** — every projected cap output is
+  schema-checked against `snippet.outputs` at runtime. A failure
+  emits `cap.output.schema_violation` audit, returns the new
+  `ExecutorError::SchemaViolation` variant, and leaves the host
+  blackboard untouched (no partial projection).
+- **Capability termination semantics (V18)** — abnormal cap
+  termination emits `cap.terminated` with `error_kind` +
+  `parent_correlation_id`, no partial output projection.
+- **The 24-verb cloud** (`cap_verb` module) — 10 cognitive + 12
+  deterministic + 2 coordination tokens (`gate`, `coordinate`).
+  V6 primary-executor verb-shape check enforces per-category
+  executor kinds (Cognitive→mcp/noop, Deterministic→script/mcp,
+  Gate→human/ask actor, Coordinate→mcp).
+
+### Added — Slot table + contract hash (SPEC §6.2, §7)
+
+- **Per-orchestrator slot table** (`slot_table` module) seeded from
+  the orchestrator's `inputs:` block + every state's `use:.outputs`
+  declarations. Powers V13 reachability (every `use:.inputs` host
+  path must resolve to a declared slot) and V14 type consistency
+  (two states writing the same host slot must declare structurally
+  identical schemas).
+- **Contract hash** (`contract_hash` module) — sorted-key canonical
+  JSON + SHA-256 over a capability's `snippet:` block, formatted as
+  `sha256:<hex>`. Stability is part of the public contract; pinned
+  by `tests/contract_hash_canonical.rs` so refactors that change the
+  encoding surface as test failures.
+- **`expects_contract_hash:` pin** on `use:` blocks. V15 fires when
+  the pin doesn't match the loaded capability's hash; V16 fires when
+  a `stable`-lifecycle capability is invoked without any pin.
+
+### Added — Validation cloud V1–V23
+
+- Rule-keyed dispatcher in `validate.rs` with one private fn per
+  rule. Centralised via `validate_workflows` and called from the
+  `check` subcommand.
+- **Validation-rule parity scanner** (`scripts/check-validation-parity.sh`)
+  enforces that every rule V1–V23 has at least one accepts test AND
+  one rejects test. Wired into CI before `cargo test`.
+
+### Added — Library content (sibling repos)
+
+- **cognitive-architectures v0.6** — 22 capabilities + 4 lifecycle
+  orchestrators (`flow.add-feature`, `flow.bugfix-from-error-log`,
+  `flow.safe-refactor`, `flow.triage-issue`) covering the main
+  inbound surfaces of an engineering team. Loaded by operators via
+  `repos: [{ path: /repos/cognitive-architectures }]`.
+- **flowgate-meta v0.1** — new sibling repo shipping four
+  meta-authoring orchestrators (`flow.author-capability`,
+  `flow.author-flow`, `flow.optimize-capability`,
+  `flow.optimize-flow`) that compose 10 meta caps including
+  introspect-the-gateway primitives (`cap.research.tool-inventory`)
+  + typed wrappers over `gateway.lexicon.{lookup,define}`. Adapts
+  to whatever tools the operator actually has reachable rather
+  than assuming a fixed stack.
+- **Vendored fixtures** under `crates/mcp-flowgate-core/tests/fixtures/`
+  for both libraries; e2e tests walk every shipping orchestrator to
+  its terminal state.
+
+### Changed
+
+- Binary entrypoints (`serve`, `check`) now call
+  `load_resolved_with_repos` instead of `load_resolved`. Hosts with
+  no `repos:` block round-trip unchanged.
+- `ExecutorError::SchemaViolation(String)` variant added; classifies
+  as `ErrorClass::Permanent` (never retryable). All `class()`
+  dispatch sites picked up automatically.
+- Config-resolve gains `expand_use_bindings` pass: walks every
+  transition with a `kind: workflow` + `use:` executor; synthesises
+  the transition-level `output:` mapping from `use.outputs` so the
+  existing `merge_output` projection layer drives writes; embeds
+  the target capability's `snippet.outputs` schema as `_snippetOutputs`
+  on the executor config (no DefinitionStore lookup needed at run
+  time).
+- Workspace cleared of all `clippy --workspace --all-targets -- -D
+  warnings` errors. CI's clippy gate now passes.
+
+### Fixed
+
+- WorkflowExecutor previously polled `runtime.get` indefinitely when
+  a sub-workflow's start auto-chain failed (start returned
+  `status: failed` but subsequent get returned
+  `status: waiting_for_action`). Now detects the failed start
+  response and short-circuits with `ExecutorError::Permanent` +
+  `cap.terminated` audit event.
+
+### Test surface
+
+- **30+ new integration tests** across `multi_repo_loading`,
+  `snippet_contract`, `use_binding`, `validation_rules`,
+  `slot_table_rules`, `contract_hash_canonical`,
+  `cap_output_violation`, `cap_terminated`,
+  `scoped_capability_io_roundtrip`, `flow_orchestrators_e2e`,
+  `meta_orchestrators_e2e`. Cumulative workspace test count: 826.
+- New unit-test modules for `cap_verb`, `tier`, `slot_table`,
+  `contract_hash`, `use_binding`, `repo`.
+
+## [Historical / development markers (pre-0.2.0 — never released)]
+
+The version bumps below were internal development markers in the
+0.1.1 → 0.2.0 window. They never received public tags. The cumulative
+diff is rolled up into the 0.2.0 release above.
+
+## [0.4.0-dev] - 2026-05-25
+
+(Originally marked `[0.4.0]`. Renamed to clarify it never shipped.)
+
 ### Added — Lexicon / Ubiquitous Language primitive (SPEC §30)
 
 - **`lexicon:` top-level config block** — typed vocabulary store
@@ -37,7 +207,10 @@ covered by a stability commitment.
 - `stable_tool_surface.rs` invariant test updated from 7 → 10 names
   (additive; the original 7 retain Tier 1 commitments).
 
-## [0.4.0] - 2026-05-25
+## [0.4.0-dev / continued] - 2026-05-25
+
+(Continuation of the `[0.4.0-dev]` development marker above; the
+lexicon block landed first, then the additive surfaces below.)
 
 Substantial additive release. New executor surface, new URI schemes,
 new state-machine primitives, real `flowgate walk` wiring. All
@@ -171,7 +344,10 @@ changes additive; no breaking changes to v0.3 surfaces.
   covers construction + a `#[ignore]`-gated live-spawn test (requires
   `ANTHROPIC_API_KEY` and a live `mcp-flowgate` on PATH).
 
-## [0.3.0] - 2026-05-25
+## [0.3.0-dev] - 2026-05-25
+
+(Originally marked `[0.3.0]`. Renamed to clarify it never shipped.)
+
 
 A substantial additive release adding the scripts surface (SPEC §22),
 the verb taxonomy expansion (skills 8 → 10, scripts 8 → 12), the
@@ -334,7 +510,10 @@ most-recent context is on top.
 - README adds a `## The TUI agent — commodity models outperform frontier`
   section after the "What the model sees" walkthrough.
 
-## [0.2.0] - 2026-05-25
+## [0.2.0-dev] - 2026-05-25
+
+(Originally marked `[0.2.0]`. Renamed to clarify it never shipped;
+the public 0.2.0 is the 2026-05-26 release above.)
 
 A substantial additive release. Adds the skills / typed-blackboard /
 versioned-definitions surfaces from SPEC §5 and §17–§20, ships the

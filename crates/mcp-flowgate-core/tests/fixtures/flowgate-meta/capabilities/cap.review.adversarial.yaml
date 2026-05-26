@@ -1,32 +1,48 @@
 # capabilities/cap.review.adversarial.yaml
 #
-# Adversarial review of the candidate YAML body. STUB SHADOW of the
-# cap with the same definitionId in cognitive-architectures —
-# operators who load both repos should declare this in their
-# top-level `overrides:` to win the collision deliberately:
+# STUB SHADOW of the cognitive-architectures cap with the same
+# definitionId stem. Operators who also load cognitive-architectures
+# should declare this in their top-level `overrides:` block to win the
+# collision deliberately:
 #
 #   overrides:
-#     - cognitive/cap.review.adversarial   # use cognitive's richer version
+#     - cognitive/cap.review.adversarial
 #
-# Then meta/cap.review.adversarial stays loadable standalone for
-# operators who don't have cognitive-architectures installed.
+# This shadow exists so flowgate-meta is loadable standalone. It binds
+# to the cognitive-architectures review skill IF that library is also
+# loaded; falls back to the shape-only skill body otherwise.
 
 workflows:
   cap.review.adversarial:
     verb: review
     lifecycle: experimental
     description: >
-      Adversarial review of a candidate YAML body. v0.1 stub
-      auto-approves; real review wires to a critic-agent.
+      Adversarial review of the authored YAML. Operators with
+      cognitive-architectures loaded should override this with
+      `cognitive/cap.review.adversarial` for the richer version.
     snippet:
       inputs:
         diff_against: { type: string, default: "" }
       outputs:
         verdict:  { type: string, enum: [approved, needs-revision, rejected] }
         findings: { type: array }
-    initialState: reviewed
-    initialContext:
-      verdict: "approved"
-      findings: []
+    skills: [review.code.adversarial]
+    initialState: ready
     states:
-      reviewed: { terminal: true }
+      ready:
+        goal: Attack the authored YAML; cite findings; emit verdict.
+        transitions:
+          submit_review:
+            target: done
+            actor: agent
+            inputSchema:
+              type: object
+              required: [verdict]
+              properties:
+                verdict:  { type: string, enum: [approved, needs-revision, rejected] }
+                findings: { type: array, default: [] }
+            executor: { kind: noop }
+            output:
+              verdict:  "$.arguments.verdict"
+              findings: "$.arguments.findings"
+      done: { terminal: true }

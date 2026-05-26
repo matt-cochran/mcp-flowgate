@@ -449,6 +449,7 @@ impl Executor for ParallelExecutor {
 ///   n }`. The executor must return an output containing
 ///   `verdict: "succeeded" | "failed" | "threshold_not_met"`;
 ///   missing / invalid verdict yields `AGGREGATOR_INVALID_VERDICT`.
+#[allow(clippy::too_many_arguments)]
 async fn compute_verdict(
     join: &JoinCondition,
     n: usize,
@@ -643,8 +644,8 @@ impl JoinCondition {
     /// down to 1 when the operator clearly meant "more than half".
     fn percent_threshold(p: u8, n: usize) -> usize {
         let p = p as usize;
-        // ceil(p * n / 100) = (p * n + 99) / 100, integer math.
-        (p * n + 99) / 100
+        // ceil(p * n / 100) via integer div_ceil.
+        (p * n).div_ceil(100)
     }
 }
 

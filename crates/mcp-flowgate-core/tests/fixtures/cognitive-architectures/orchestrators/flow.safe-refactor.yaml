@@ -50,7 +50,7 @@ workflows:
             actor: deterministic
             executor:
               kind: workflow
-              definitionId: cap.tests.baseline-snapshot
+              definitionId: cap.test.baseline-snapshot
               use:
                 inputs:
                   scope_paths: "$.context.scope_paths"
@@ -79,7 +79,7 @@ workflows:
             actor: deterministic
             executor:
               kind: workflow
-              definitionId: cap.tests.compare-baseline
+              definitionId: cap.test.compare-baseline
               use:
                 inputs:
                   baseline: "$.context.baseline"

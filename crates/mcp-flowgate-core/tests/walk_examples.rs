@@ -631,7 +631,7 @@ async fn tdd_next_advance_fires_single_non_deterministic_link() {
     // The walker auto-fires the single obvious path.
     let resolved = load_example("pattern-circuit-breaker/gateway.yaml");
     let runtime = build_runtime(&resolved);
-    let (_id, v0, start_resp) = start_workflow(&runtime, "circuit_breaker_demo").await;
+    let (_id, _v0, start_resp) = start_workflow(&runtime, "circuit_breaker_demo").await;
     // circuit_breaker_demo starts at `action`. With noop output {ok:true},
     // result = {ok:true} → not 'ok', not 'fail' → no guard matches.
     // But the start call may have already chained. The key invariant:
@@ -691,7 +691,7 @@ async fn tdd_walk_workflow_respects_max_steps() {
     // must not burn CPU forever.
     let resolved = load_example("pattern-circuit-breaker/gateway.yaml");
     let runtime = build_runtime(&resolved);
-    let (final_state, steps, terminal) = walk_workflow(&runtime, "circuit_breaker_demo", 3).await;
+    let (final_state, steps, _terminal) = walk_workflow(&runtime, "circuit_breaker_demo", 3).await;
     // The circuit breaker with noop output has no matching guard
     // (result is {ok:true}, not 'ok' or 'fail'). So the only link
     // the walker can fire is the first non-deterministic one.
