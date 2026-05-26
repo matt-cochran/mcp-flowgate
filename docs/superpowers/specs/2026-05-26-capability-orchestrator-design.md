@@ -273,24 +273,14 @@ acceptance test `tests/cap_output_violation.rs` is required (see
 §12.4 M3) and exercises a deliberately bad capability to assert the
 audit event fires and the host blackboard remains untouched.
 
-### 5.4 Authoring guidance: I/O cap
+### 5.4 Authoring guidance
 
-A capability with > 5 inputs or > 5 outputs is a strong signal that
-the capability is doing more than one thing and should split. The
-runtime emits a structured warning at load time:
-
-```
-warning: cap.<id> declares <N> inputs (recommended max 5).
-  Consider splitting along a natural axis.
-  See cognitive-architectures CONTRIBUTING.md §<...>
-```
-
-`mcp-flowgate check --strict` converts this warning to a load-time
-error. Library CI (cognitive-architectures and any third-party
-resource repo with strict authoring standards) MUST run `--strict`;
-one-off operator configs may continue to load with the advisory
-warning. This is the asymmetric-strict-mode resolution: enforce in
-authoring contexts, advise in operator contexts.
+Capability shape, vocabulary, and quality conventions belong in
+cognitive-architectures `CONTRIBUTING.md`, not in the flowgate
+runtime. A capability with 6 inputs isn't broken, just smelly; code
+review catches smelly. The runtime enforces correctness
+(contract-typing, slot reachability, verb-subject consistency,
+no-nesting); the library style guide enforces taste.
 
 ### 5.5 Capability failure semantics
 
@@ -845,25 +835,23 @@ print but allow startup.
 | V4 | `snippet:` block has BOTH `inputs:` AND `outputs:` keys (may be `{}`) | cap | error | load |
 | V5 | Each input/output is JSON-schema-shaped | cap | error | load |
 | V6 | Primary-executor verb-shape check (§4.1) | cap | error | load |
-| V7 | Capability I/O ≤ 5 each | cap | warning (`--strict` → error) | load |
-| V8 | `definitionId` matches `flow.<name>` | flow | error | load |
-| V9 | `snippet:` block absent | flow | error | load |
-| V10 | `verb:` absent | flow | error | load |
-| V11 | Capability invokes another workflow | cap | error | load (Rule 1) |
-| V12 | Orchestrator invokes another orchestrator | flow | error | load (Rule 1) |
-| V13 | `kind: workflow` executor targeting `cap.*` without `use:` | both | error | load |
-| V14 | `use:.inputs` paths resolve to slot table (Check A) | both | error | load (§7.3) |
-| V15 | `use:.outputs` writes to a slot already typed differently (Check B) | both | error | load (§7.3) |
-| V16 | `expects_contract_hash` matches actual | both | error | load |
-| V17 | `use:` block omits `expects_contract_hash` for `stable`-lifecycle target | both | error | load |
-| V18 | Output value matches declared output schema | cap | runtime audit event `cap.output.schema_violation`; executor returns `SchemaViolation` | runtime |
-| V19 | Capability abnormal termination → `cap.terminated` audit event, no partial output projection | cap | runtime audit event | runtime |
-| V20 | Repo manifest schema valid | repo | error | load |
-| V21 | Two repos with same `namespace` | gateway | error | load |
-| V22 | Duplicate `definitionId` in one repo | repo | error | load |
-| V23 | Unprefixed cross-repo ref | gateway | error | load |
-| V24 | `include:` shadows a repo-provided id without `overrides:` declaration | gateway | error | load (§9.4) |
-| V25 | Legacy id (neither `cap.*` nor `flow.*`) | gateway | deprecation warning naming EOL version | load |
+| V7 | `definitionId` matches `flow.<name>` | flow | error | load |
+| V8 | `snippet:` block absent | flow | error | load |
+| V9 | `verb:` absent | flow | error | load |
+| V10 | Capability invokes another workflow | cap | error | load (Rule 1) |
+| V11 | Orchestrator invokes another orchestrator | flow | error | load (Rule 1) |
+| V12 | `kind: workflow` executor targeting `cap.*` without `use:` | both | error | load |
+| V13 | `use:.inputs` paths resolve to slot table (Check A) | both | error | load (§7.3) |
+| V14 | `use:.outputs` writes to a slot already typed differently (Check B) | both | error | load (§7.3) |
+| V15 | `expects_contract_hash` matches actual | both | error | load |
+| V16 | `use:` block omits `expects_contract_hash` for `stable`-lifecycle target | both | error | load |
+| V17 | Output value matches declared output schema | cap | runtime audit event `cap.output.schema_violation`; executor returns `SchemaViolation` | runtime |
+| V18 | Capability abnormal termination → `cap.terminated` audit event, no partial output projection | cap | runtime audit event | runtime |
+| V19 | Repo manifest schema valid | repo | error | load |
+| V20 | Two repos with same `namespace` | gateway | error | load |
+| V21 | Duplicate `definitionId` in one repo | repo | error | load |
+| V22 | Unprefixed cross-repo ref | gateway | error | load |
+| V23 | `include:` shadows a repo-provided id without `overrides:` declaration | gateway | error | load (§9.4) |
 
 `mcp-flowgate check --config <path>` exposes all load-time checks for
 CI use.
@@ -886,59 +874,54 @@ project outputs back through `use:.outputs`. Crates:
 `mcp-flowgate-core::validate`, `mcp-flowgate-executors`. Depends on
 PR1's infrastructure but not its semantics.
 
-**PR3 — Pokayoke rule + verb additions + slot-table validation (~200 LOC).**
-Tier check (Rule 1), 24-verb cloud (add `gate` + `coordinate`), slot-table
-construction (§7.2) + reachability check + type-consistency check,
-optional `expects_contract_hash:` pinning, runtime output validation.
-Crate: `mcp-flowgate-core::validate`, `mcp-flowgate-core::lexicon`.
-Depends on PR2.
+**PR3 — Pokayoke rule + verb additions + slot-table validation (~150 LOC).**
+Tier check (Rule 1), 24-verb cloud (add `gate` + `coordinate`),
+slot-table construction (§7.2) + reachability check (Check A) +
+type-consistency check (Check B), `expects_contract_hash:` pinning
+(optional for experimental, mandatory for stable per §6.2), runtime
+output validation (V17) + abnormal-termination handling (V18),
+primary-executor verb-shape check (§4.1), explicit `overrides:`
+declaration check (V23). Crates: `mcp-flowgate-core::validate`,
+`mcp-flowgate-core::lexicon`. Depends on PR2.
 
-Estimated total: ~800 lines of additive change. SPEC updates required
-for new verbs and two-tier model.
+Estimated total: ~700 lines of additive change in flowgate. SPEC
+updates required for new verbs and two-tier model.
 
-### 12.2 Changes in `cognitive-architectures`
+### 12.2 cognitive-architectures v0.6 release
 
-- Add `flowgate.repo.yaml` declaring `namespace: cognitive`.
-- Reorganize: existing `workflows/*.yaml` split into `capabilities/`
-  and `orchestrators/` per §3.2. Existing demos (`tdd.yaml`,
-  `vet-plan.yaml`, `parallel-review.yaml`, …) become capabilities;
-  `swe-agent.yaml` becomes an orchestrator.
-- Rename `definitionId` to match the prefix convention.
-- Ship the worked `flow.add-feature` orchestrator plus its eight
-  capabilities.
+The library is restructured as the canonical first resource repo:
+
+- Add `flowgate.repo.yaml` declaring `namespace: cognitive`, version,
+  and layout.
+- Reorganize into `capabilities/`, `orchestrators/`, plus the existing
+  `skills/`, `scripts/`, `connections/` per §3.2.
+- Existing demos (`tdd.yaml`, `vet-plan.yaml`, `parallel-review.yaml`,
+  …) recast as capabilities under the `cap.<verb>.<name>` convention.
+  The existing `swe-agent.yaml` becomes the basis of
+  `flow.add-feature` (refactored to use the typed `use:` bindings).
+- Ship the four lifecycle orchestrators (§12.6) and the ~22
+  capabilities they collectively require. The set MUST be complete
+  and runnable at release — no orchestrator may reference a
+  capability that isn't shipped.
 - Update `README.md` and `MATTPOCOCK-COVERAGE.md` to reference the
-  two-tier model.
-- Add a verb-appropriateness CI lint to `scripts/validate.sh` (checks
-  that each capability's primary executor kind matches its verb
-  category: cognitive verb → LLM executor present; deterministic →
-  script/MCP; gate → ask_human transition; coordinate → MCP /
-  external-effect executor). This catches semantic verb drift without
-  putting heuristic checks into the flowgate runtime.
+  two-tier model and the new lifecycle orchestrators (this is the
+  point at which the library claims "composable, not just per-skill"
+  parity).
+- Add a verb-appropriateness CI lint to `scripts/validate.sh` for
+  library-side richer checks (the per-cap primary-executor check is
+  in flowgate runtime per §4.1; the library's lint catches the more
+  nuanced "is this REALLY the right verb for this body" cases).
+- Add a CONTRIBUTING.md section covering capability authoring style:
+  ≤5 I/O guidance, naming, verb selection, scope discipline.
 
-### 12.3 Migration / deprecation grace period
+### 12.3 Initial release (v0.6)
 
-The `repos:` field is additive. Existing gateway configs continue to
-work without changes. To opt in, an operator:
-
-1. Updates to `mcp-flowgate` ≥ 0.6 (the version shipping this).
-2. Adds `repos:` to their gateway config.
-3. Removes per-file `include:` lines pointing at the now-managed
-   directories.
-
-Workflows whose ids don't match `cap.*` or `flow.*` get a one-time
-deprecation warning at startup containing the **hard-coded EOL
-version**:
-
-```
-deprecation: workflow `<id>` does not match cap.* or flow.*
-conventions; tier checks skipped. This will be a config-load error
-in mcp-flowgate v0.7.
-```
-
-They continue to function under v0.6. Under v0.7, the same condition
-is a hard error — implementers MUST switch the warning to an error
-in the v0.7 release branch. The CHANGELOG entry for v0.6 and v0.7
-both call this out.
+mcp-flowgate is pre-1.0; the v0.6 release is the first version with
+the capability/orchestrator model and is the canonical baseline. No
+deprecation grace period and no migration shim for pre-v0.6 workflow
+shapes — every workflow loaded in v0.6 MUST be `cap.*` or `flow.*`
+shaped and is subject to all V1–V23 validation rules. CHANGELOG names
+v0.6 as the introduction of the two-tier model.
 
 ### 12.4 Acceptance milestones
 
@@ -951,9 +934,8 @@ test passes against the merged code on `main`.
 |---|---|---|---|
 | M1 | Multi-repo loading | `tests/multi_repo_loading.rs::two_repos_with_distinct_namespaces_load_both_capabilities` — loads two fixture repos and asserts both prefixed ids are reachable via `gateway.describe`. Also asserts duplicate-namespace fixture errors at load. | PR1 |
 | M2 | Scoped capability blackboard + `use:` bindings | `tests/walk_examples.rs::scoped_capability_io_roundtrip` — runs a host orchestrator that invokes a capability whose internal blackboard sets a "secret" slot; asserts the secret slot is NOT present in the host blackboard post-cap and that declared outputs ARE projected at the host paths declared in `use:.outputs`. | PR2 |
-| M3 | Validation rule coverage | `tests/validation_rules.rs` — one positive + one negative test per validation rule in §11 (rules V1–V25 except V18, V19 which are runtime). Test count parity enforced per §12.5. Plus `tests/cap_output_violation.rs` for V18 and `tests/cap_terminated.rs` for V19. | PR3 |
-| M4 | End-to-end orchestrator | `tests/flow_add_feature_e2e.rs::flow_add_feature_runs_against_fixture_repo` — loads a fixture cognitive-architectures-shaped repo containing the eight capabilities from §10 plus `flow.add-feature`; runs the orchestrator against a synthetic feature brief; asserts every state transitions correctly and the final `pr_url` slot is populated by the (mocked) `cap.coordinate.pr-open`. | cognitive-architectures migration PR |
-| M5 | Deprecation surface | `tests/deprecation_warning.rs::legacy_id_emits_warning_with_eol_version` — loads a fixture workflow whose `definitionId` does not match `cap.*` or `flow.*`; asserts the load succeeds, a warning is emitted, and the warning message contains the literal string `"v0.7"`. | PR3 |
+| M3 | Validation rule coverage | `tests/validation_rules.rs` — one positive + one negative test per validation rule V1–V16 + V19–V23 (the load-time rules). Plus `tests/cap_output_violation.rs` for V17 and `tests/cap_terminated.rs` for V18. Test count parity enforced per §12.5. | PR3 |
+| M4 | Library completeness — end-to-end orchestrators | `crates/mcp-flowgate-core/tests/flow_orchestrators_e2e.rs` runs each of the four shipping orchestrators (§12.6) against a fixture cognitive-architectures repo and asserts each transitions correctly through its full lifecycle to its terminal state. | cognitive-architectures release PR |
 
 A milestone is NOT considered complete on the basis of "the
 implementation looks right" or "manual smoke test passes." The named
@@ -962,9 +944,9 @@ milestone(s) they advance and link to the new test files.
 
 ### 12.5 TDD coverage parity rule
 
-Every validation rule in §11 (rules V1–V25) MUST have at least one
-positive test (rule accepts a valid input) AND at least one negative
-test (rule rejects a specifically crafted bad input) in
+Every validation rule in §11 (V1–V23) MUST have at least one positive
+test (rule accepts a valid input) AND at least one negative test
+(rule rejects a specifically crafted bad input) in
 `crates/mcp-flowgate-core/tests/`. Test naming convention:
 
 ```
@@ -977,19 +959,48 @@ For example:
 ```
 v6_accepts_cognitive_verb_with_mcp_executor
 v6_rejects_cognitive_verb_with_only_script_executor
-v17_rejects_stable_target_without_contract_hash
-v17_accepts_stable_target_with_contract_hash
+v16_rejects_stable_target_without_contract_hash
+v16_accepts_stable_target_with_contract_hash
 ```
 
 CI enforces the parity invariant: count of test functions matching
-the convention must be ≥ 2 × count of distinct rule ids referenced
-in test names, and that count of distinct rule ids must equal the
-count of rules in §11. The PR introducing the rule must introduce the
-tests in the same commit. A PR that adds a validation rule without
-the corresponding accepts/rejects pair fails CI.
+the convention must be ≥ 2 × 23 = 46, with at least one accepts and
+one rejects per rule id V1 through V23. The PR introducing a rule
+must introduce the test pair in the same commit. A PR that adds a
+validation rule without the corresponding accepts/rejects pair fails
+CI.
 
-For runtime rules (V18, V19) the same parity applies to integration
+For runtime rules (V17, V18) the same parity applies to integration
 tests in `tests/`, not unit tests.
+
+### 12.6 Library deliverables (cognitive-architectures v0.6)
+
+The library MUST ship with four lifecycle orchestrators at v0.6
+release, covering the main inbound surfaces of an engineering team.
+Each orchestrator is publicly invokable, has e2e test coverage (M4),
+and ships with the capabilities it requires.
+
+| Orchestrator | Lifecycle | Trigger | Capabilities required |
+|---|---|---|---|
+| `flow.add-feature` | Plan-driven feature delivery | Feature brief from operator | `cap.plan.draft`, `cap.plan.vet`, `cap.gate.human-signoff`, `cap.implement.tdd-loop`, `cap.plan.track-gaps`, `cap.verify.workspace-green`, `cap.review.adversarial`, `cap.coordinate.pr-open` (the eight from §10) |
+| `flow.bugfix-from-error-log` | Incident response | Error log / stack trace | `cap.diagnose.parse-error`, `cap.diagnose.reproduce`, `cap.diagnose.localize`, `cap.plan.fix`, `cap.implement.scope-bounded`, `cap.verify.regression-tests`, `cap.review.adversarial`, `cap.coordinate.pr-open` |
+| `flow.safe-refactor` | Code-health | Scope description (paths or component) | `cap.research.context-assemble`, `cap.refactor.draft`, `cap.tests.baseline-snapshot`, `cap.implement.scope-bounded`, `cap.tests.compare-baseline`, `cap.review.adversarial`, `cap.coordinate.pr-open` |
+| `flow.triage-issue` | Intake | New issue / ticket | `cap.triage.classify-severity`, `cap.triage.route-component`, `cap.gate.human-disambiguate` (HITL on ambiguity), `cap.coordinate.label-and-route` |
+
+Shared capabilities across orchestrators (e.g., `cap.review.adversarial`,
+`cap.coordinate.pr-open`) are defined once and referenced by all
+consumers — this is the composition the two-tier model exists to
+enable.
+
+Capabilities total at v0.6: ~22 distinct (eight unique to add-feature,
+six new to bugfix, five new to refactor, three new to triage, with
+adversarial-review and PR-open shared across the first three).
+
+Additional orchestrators (`flow.security-review`, `flow.docs-sync`,
+`flow.dependency-upgrade`, `flow.incident-postmortem`,
+`flow.architecture-review`, `flow.prd-to-issues`,
+`flow.test-coverage-improvement`) are scoped for v0.7+ as community
+contributions or follow-up library work.
 
 ---
 
