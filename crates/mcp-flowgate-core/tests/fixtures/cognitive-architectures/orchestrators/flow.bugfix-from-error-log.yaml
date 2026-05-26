@@ -1,8 +1,7 @@
 # orchestrators/flow.bugfix-from-error-log.yaml
 #
-# Incident response lifecycle: parse → reproduce → localize → plan-fix
-# → scope-bounded edit → regression test → adversarial review → PR.
-# See SPEC §12.6 for the lifecycle table.
+# State-shape note: see flow.add-feature.yaml for the execute+branch
+# split pattern. Same applies here.
 
 workflows:
   flow.bugfix-from-error-log:
@@ -91,7 +90,7 @@ workflows:
       verifying:
         transitions:
           verify:
-            target: reviewing
+            target: verified
             actor: deterministic
             executor:
               kind: workflow
@@ -104,10 +103,25 @@ workflows:
                   "$.context.regression_ok":          ok
                   "$.context.regression_tests_added": tests_added
 
+      verified:
+        transitions:
+          advance:
+            target: reviewing
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.regression_ok == true"
+          abort:
+            target: failed
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.regression_ok == false"
+
       reviewing:
         transitions:
           review:
-            target: opening_pr
+            target: reviewed
             actor: deterministic
             executor:
               kind: workflow
@@ -118,6 +132,21 @@ workflows:
                 outputs:
                   "$.context.review_verdict":  verdict
                   "$.context.review_findings": findings
+
+      reviewed:
+        transitions:
+          advance:
+            target: opening_pr
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.review_verdict == 'approved'"
+          abort:
+            target: failed
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.review_verdict == 'rejected'"
 
       opening_pr:
         transitions:
@@ -137,4 +166,7 @@ workflows:
                   "$.context.pr_number": pr_number
 
       done:
+        terminal: true
+
+      failed:
         terminal: true

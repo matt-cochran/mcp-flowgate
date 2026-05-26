@@ -3,7 +3,7 @@
 [![CI](https://github.com/matt-cochran/mcp-flowgate/actions/workflows/ci.yml/badge.svg)](https://github.com/matt-cochran/mcp-flowgate/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with seven.**
+**Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with ten.**
 
 Wire in any number of MCP servers, CLI commands, and REST APIs. The
 model never sees them in its tool list. It searches for what it needs,
@@ -31,17 +31,18 @@ governance. You get a flat list and a prayer.
 
 ---
 
-## The fix: seven tools, any number of capabilities
+## The fix: ten tools, any number of capabilities
 
-mcp-flowgate exposes exactly seven MCP tools regardless of how many
+mcp-flowgate exposes exactly ten MCP tools regardless of how many
 capabilities you wire in:
 
 | Layer | Tools | Purpose |
 |-------|-------|---------|
 | **Discovery** | `gateway.home`, `gateway.search`, `gateway.describe` | Find capabilities by keyword, get schemas on demand |
 | **Action** | `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain` | Execute capabilities through governed state machines |
+| **Vocabulary** | `gateway.lexicon.search`, `gateway.lexicon.lookup`, `gateway.lexicon.define` | Persistent ubiquitous-language store; vocabulary accumulates across runs (SPEC §30) |
 
-The model's tool list is always seven entries. Your 50 capabilities
+The model's tool list is always ten entries. Your 50 capabilities
 surface through search results and response links — loaded one at a
 time, only when relevant.
 
@@ -65,7 +66,7 @@ verify with the included `checksums.sha256`:
 
 ```bash
 # Linux x86_64 example:
-curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/mcp-flowgate-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/mcp-flowgate-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
 tar xzf mcp-flowgate-*.tar.gz
 ./mcp-flowgate --help
 ```
@@ -128,7 +129,59 @@ schema validation, and audit built in.
 | Zed | `~/.config/zed/settings.json` | [`examples/zed-gateway/`](examples/zed-gateway/) |
 
 That was one tool. The interesting part is what happens when you add
-fifty — and the model's tool list stays at seven.
+fifty — and the model's tool list stays at ten.
+
+---
+
+## v0.2 — two-tier composition
+
+The biggest addition in v0.2 is **capabilities + orchestrators**:
+typed sub-workflows you compose into lifecycle pipelines instead of
+re-authoring every workflow from scratch.
+
+- A **capability** (`cap.<verb>.<name>`) declares a typed
+  `snippet: { inputs, outputs }` contract. It's a composition leaf
+  — it runs cognitive work, deterministic scripts, HITL gates, or
+  external coordination, but never invokes another workflow.
+- An **orchestrator** (`flow.<name>`) declares an `inputs:` entry
+  signature and composes capabilities via `kind: workflow`
+  executors with `use: { inputs, outputs }` bindings. The
+  capability runs in its own scoped blackboard; only declared
+  outputs propagate back to host slots.
+- A **repo manifest** (`flowgate.repo.yaml`) declares a namespace,
+  version, and layout. Operators load any number of repos via the
+  gateway's top-level `repos:` block; every loaded definitionId
+  is namespace-prefixed `<ns>/<id>`.
+
+Two sibling libraries demonstrate the shape:
+
+- [**cognitive-architectures**](https://github.com/matt-cochran/cognitive-architectures) —
+  4 lifecycle orchestrators (`flow.add-feature`,
+  `flow.bugfix-from-error-log`, `flow.safe-refactor`,
+  `flow.triage-issue`) composing 22 reusable capabilities.
+- [**flowgate-meta**](https://github.com/matt-cochran/flowgate-meta) —
+  4 meta-authoring orchestrators (`flow.author-capability`,
+  `flow.author-flow`, `flow.optimize-capability`,
+  `flow.optimize-flow`) that survey the operator's reachable
+  tooling before proposing a shape. Self-bootstrapping authoring
+  loop.
+
+Operators load both with a single top-level block:
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+repos:
+  - path: /repos/cognitive-architectures
+  - path: /repos/flowgate-meta
+```
+
+Validation runs at load (`mcp-flowgate check`). The validation
+cloud V1–V23 catches verb misuse, slot reachability, type
+consistency, missing snippet contracts, anonymous shadowing, and
+more — bad configs fail at startup with named violations.
+
+Spec: [docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md](docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md).
 
 ---
 

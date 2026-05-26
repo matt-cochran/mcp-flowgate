@@ -32,7 +32,7 @@ workflows:
       routing:
         transitions:
           route:
-            target: applying
+            target: routed
             actor: deterministic
             executor:
               kind: workflow
@@ -45,6 +45,37 @@ workflows:
                   "$.context.owner_team":           owner_team
                   "$.context.route_confidence":     confidence
                   "$.context.route_is_ambiguous":   is_ambiguous
+
+      routed:
+        transitions:
+          advance:
+            target: applying
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.route_is_ambiguous == false"
+          disambiguate:
+            target: disambiguated
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.route_is_ambiguous == true"
+            executor:
+              kind: workflow
+              definitionId: cap.gate.human-disambiguate
+              use:
+                inputs:
+                  candidates: "$.context.issue"
+                  prompt:     "Pick the owner team"
+                outputs:
+                  "$.context.disambiguation":           chosen
+                  "$.context.disambiguation_rationale": rationale
+
+      disambiguated:
+        transitions:
+          advance:
+            target: applying
+            actor: deterministic
 
       applying:
         transitions:

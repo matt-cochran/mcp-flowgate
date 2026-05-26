@@ -75,7 +75,7 @@ workflows:
       comparing:
         transitions:
           compare:
-            target: reviewing
+            target: compared
             actor: deterministic
             executor:
               kind: workflow
@@ -87,10 +87,25 @@ workflows:
                   "$.context.compare_ok":    ok
                   "$.context.compare_drift": drift
 
+      compared:
+        transitions:
+          advance:
+            target: reviewing
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.compare_ok == true"
+          abort:
+            target: failed
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.compare_ok == false"
+
       reviewing:
         transitions:
           review:
-            target: opening_pr
+            target: reviewed
             actor: deterministic
             executor:
               kind: workflow
@@ -101,6 +116,21 @@ workflows:
                 outputs:
                   "$.context.review_verdict":  verdict
                   "$.context.review_findings": findings
+
+      reviewed:
+        transitions:
+          advance:
+            target: opening_pr
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.review_verdict == 'approved'"
+          abort:
+            target: failed
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.review_verdict == 'rejected'"
 
       opening_pr:
         transitions:
@@ -120,4 +150,7 @@ workflows:
                   "$.context.pr_number": pr_number
 
       done:
+        terminal: true
+
+      failed:
         terminal: true
