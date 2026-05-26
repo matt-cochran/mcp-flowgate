@@ -15,12 +15,13 @@
 //! All Aether modes are supported: TUI (default), headless, ACP (editor),
 //! and agent management.
 
-mod flowgate_mcp;
 mod theme;
 
-// Library surface (interpreter, agent_config, tui_config, sub_agent)
-// lives in src/lib.rs so integration tests can `use mcp_flowgate_tui::…`.
-use mcp_flowgate_tui::{agent_config, tui_config};
+// Library surface (interpreter, agent_config, tui_config, sub_agent,
+// flowgate_mcp) lives in src/lib.rs so integration tests + the
+// sub-agent spawner can reach them.
+use mcp_flowgate_tui::interpreter::McpToolCaller;
+use mcp_flowgate_tui::{agent_config, flowgate_mcp, tui_config};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +65,25 @@ enum Command {
     /// interpreter (SPEC §21). Spawns isolated sub-agents per delegate
     /// state; auto-advances states with no delegate.
     Walk(WalkArgs),
+    /// Pre-flight checks for `flowgate walk` — binary discovery, config
+    /// resolution, workflow declared, agent API keys, script file URIs.
+    /// Exits 0 if all pass; 1 if any fail. Run before `walk` to catch
+    /// env / config issues before the workflow starts.
+    Doctor(DoctorCliArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DoctorCliArgs {
+    /// Path to the gateway YAML config (defaults to $FLOWGATE_CONFIG).
+    #[arg(long)]
+    pub config: Option<String>,
+    /// Workflow id that walk will run — checked against declared workflows.
+    #[arg(long)]
+    pub workflow: Option<String>,
+    /// Agent specs (same as walk's --agent). Each agent's provider's
+    /// API key env var presence is verified.
+    #[arg(long = "agent")]
+    pub agents: Vec<String>,
 }
 
 /// CLI args for `flowgate walk` — drives a workflow end-to-end through
@@ -91,7 +111,13 @@ pub struct WalkArgs {
     #[arg(long)]
     pub max_sub_agent_seconds: Option<u64>,
 
-    /// Hard ceiling on tool calls per sub-agent. No default by design.
+    /// **Advisory** tool-call hint per sub-agent (no default; must be
+    /// set explicitly so operators declare a number they consider
+    /// reasonable). Currently logged + surfaced for observability;
+    /// not enforced — aether's headless API has no per-tool-call
+    /// hook, so the enforced cap is `--max-sub-agent-seconds`. The
+    /// hint will be enforced once aether exposes a step callback;
+    /// the CLI contract stays valid either way.
     #[arg(long)]
     pub max_sub_agent_steps: Option<usize>,
 
@@ -100,6 +126,13 @@ pub struct WalkArgs {
     /// block the spawn.
     #[arg(long)]
     pub max_blackboard_bytes: Option<usize>,
+
+    /// Path to the flowgate.yaml config used by the spawned
+    /// `mcp-flowgate` child process. Becomes `FLOWGATE_CONFIG` on the
+    /// child env. When unset, mcp-flowgate falls back to its own
+    /// resolution (cwd `flowgate.yaml`).
+    #[arg(long)]
+    pub config: Option<String>,
 }
 
 #[tokio::main]
@@ -112,15 +145,15 @@ async fn main() -> Result<ExitCode> {
         Some(Command::Acp(args)) => run_acp(args).await,
         Some(Command::Agent(cmd)) => run_agent(cmd).await,
         Some(Command::Walk(args)) => run_walk(args).await,
+        Some(Command::Doctor(args)) => run_doctor(args).await,
     }
 }
 
 /// Walk a workflow to completion via the deterministic interpreter
-/// (SPEC §21). Resolves agent configs from `--agent` flags, validates
-/// timeout poka-yoke, then drives `walk_workflow`. Sub-agent spawning
-/// uses the production `AetherSubAgentSpawner` (presently a stub that
-/// surfaces SubAgentTimeout — see `sub_agent.rs` for the integration
-/// note).
+/// (SPEC §21). Validates args, builds the agent registry, spawns
+/// mcp-flowgate as an rmcp child process, starts the workflow, then
+/// drives it through `walk_workflow` against the real
+/// `AetherSubAgentSpawner`.
 async fn run_walk(args: WalkArgs) -> Result<ExitCode> {
     let tui_cfg = tui_config::TuiConfig::from_cli(
         args.max_sub_agent_seconds,
@@ -131,18 +164,54 @@ async fn run_walk(args: WalkArgs) -> Result<ExitCode> {
     let agents = agent_config::build_registry(&args.agents)
         .map_err(|e| anyhow::anyhow!("agent config parse error: {e}"))?;
 
-    let _ = (tui_cfg, agents, args.workflow, args.input);
-    // The McpToolCaller production impl (rmcp child-process client) is
-    // wired in the same shape as `flowgate_mcp::set_as_sole_mcp` —
-    // creating that client + spawning `walk_workflow` is mechanical
-    // wiring follow-on (separate commit). The interpreter itself is
-    // exercised end-to-end via the mock in `tests/interpreter.rs`.
-    eprintln!(
-        "flowgate walk: CLI args parsed and validated. The runtime wiring \
-         (rmcp child-process client + AetherSubAgentSpawner) is a follow-on \
-         commit — for now, exercise the interpreter via `cargo test -p \
-         mcp-flowgate-tui --test interpreter`."
+    let input_value: serde_json::Value = serde_json::from_str(&args.input)
+        .map_err(|e| anyhow::anyhow!("--input is not valid JSON: {e}"))?;
+
+    let spawner = mcp_flowgate_tui::sub_agent::AetherSubAgentSpawner::new(tui_cfg);
+
+    let caller = mcp_flowgate_tui::mcp_caller::FlowgateChildCaller::spawn(
+        args.config.as_deref(),
+        std::collections::HashMap::new(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("spawning mcp-flowgate child for walk: {e}"))?;
+
+    // Start the workflow to acquire a workflowId.
+    let start_resp = caller
+        .call(
+            "workflow.start",
+            serde_json::json!({ "definition": args.workflow, "input": input_value }),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("workflow.start failed: {e}"))?;
+
+    let workflow_id = start_resp
+        .pointer("/workflow/id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "workflow.start response missing /workflow/id: {start_resp}"
+            )
+        })?
+        .to_string();
+
+    tracing::info!(workflow = %args.workflow, %workflow_id, "walking workflow");
+
+    let final_ctx = mcp_flowgate_tui::interpreter::walk_workflow(
+        &caller,
+        &spawner,
+        &workflow_id,
+        &agents,
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("walk failed: {e}"))?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&final_ctx)
+            .unwrap_or_else(|_| final_ctx.to_string())
     );
+
     Ok(ExitCode::SUCCESS)
 }
 
@@ -242,4 +311,20 @@ async fn run_agent(cmd: aether_cli::agent::AgentCommand) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// `flowgate doctor` — pre-flight checks. Exits 0 if all pass; 1 if any fail.
+async fn run_doctor(args: DoctorCliArgs) -> Result<ExitCode> {
+    let doctor_args = mcp_flowgate_tui::doctor::DoctorArgs {
+        config: args.config,
+        workflow: args.workflow,
+        agents: args.agents,
+    };
+    let results = mcp_flowgate_tui::doctor::run_doctor(&doctor_args).await;
+    print!("{}", mcp_flowgate_tui::doctor::render_results(&results));
+    if mcp_flowgate_tui::doctor::count_failures(&results) > 0 {
+        Ok(ExitCode::FAILURE)
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
 }

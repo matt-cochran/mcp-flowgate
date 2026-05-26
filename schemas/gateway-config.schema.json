@@ -508,7 +508,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop", "script", "parallel"]
+          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop", "script", "parallel", "pipeline"]
         },
         "connection": { "type": "string" },
         "capability": { "type": "string" },
@@ -531,10 +531,12 @@
           ]
         },
         "join": {
-          "description": "SPEC §24.2 (kind: parallel only) — join condition. `all` (default), `any`, or `{at_least: K}` where K is a positive integer.",
+          "description": "SPEC §24.2 (kind: parallel only) — join condition. `all` (default), `any`, `{at_least: K}` (K positive), `{percent: P}` (P in 0..=100), or `{expression: \"<expr>\"}` evaluated post-completion against the aggregated {branches, summary, ok_count, failed_count, cancelled_count, n} value.",
           "oneOf": [
             { "type": "string", "enum": ["all", "any"] },
-            { "$ref": "#/$defs/parallelAtLeast" }
+            { "$ref": "#/$defs/parallelAtLeast" },
+            { "$ref": "#/$defs/parallelPercent" },
+            { "$ref": "#/$defs/parallelExpression" }
           ]
         },
         "max_concurrency": {
@@ -569,7 +571,7 @@
       "type": "object",
       "required": ["for_each", "do"],
       "additionalProperties": false,
-      "description": "SPEC §24.2 — dynamic `branches` form. `for_each` is a path expression resolving to a JSON array against the workflow's `$.context`, `$.workflow.input`, or `$.arguments`. `do` is an executor template; `$.branch.value` and `$.branch.index` are substituted per element.",
+      "description": "SPEC §24.2 — dynamic `branches` form. `for_each` is a path expression resolving to a JSON array against the workflow's `$.context`, `$.workflow.input`, or `$.arguments`. `do` is an executor template; `$.branch.value` and `$.branch.index` are substituted per element. Optional `where:` filter drops elements before fan-out.",
       "properties": {
         "for_each": {
           "type": "string",
@@ -578,6 +580,11 @@
         "do": {
           "$ref": "#/$defs/executor",
           "description": "Per-branch executor template. `$.branch.value` and `$.branch.index` are substituted per array element."
+        },
+        "where": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pre-fan-out predicate. Each element of `for_each` is evaluated with `$.value` and `$.index` as the operand surface (same binary-comparison syntax as `expr` guards / `join.expression`). Falsy elements are dropped BEFORE branches spawn. `$.branch.index` inside `do:` templates still substitutes the ORIGINAL source-array index for matched elements."
         }
       }
     },
@@ -591,6 +598,64 @@
           "type": "integer",
           "minimum": 1,
           "description": "Minimum number of branches that must succeed for the parallel executor to return Ok."
+        }
+      }
+    },
+    "slotConstraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "SPEC §28 — declarative slot constraints evaluated at write time. JSON Schema primitives (regex, min/max, length, enum) belong in the slot's `type:` field; §28 covers only what JSON Schema cannot express. Multiple constraint kinds on one slot compose conjunctively.",
+      "properties": {
+        "path_allowlist": {
+          "type": "object",
+          "required": ["allow"],
+          "additionalProperties": false,
+          "description": "Slot value is an array of strings; every element must match an `allow:` glob and no `deny:` glob.",
+          "properties": {
+            "allow": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Gitignore-syntax glob patterns. At least one required — empty allowlist is misconfiguration."
+            },
+            "deny": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Optional. Applied within `allow:` — any element matching a deny glob fails even if it also matches an allow glob."
+            }
+          }
+        },
+        "subset_of": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dynamic reference path (e.g. `$.context.declared_features`) resolving to an array. The constrained slot's elements must all appear in that referenced array. Unresolvable reference is fail-fast (not silent-pass)."
+        }
+      }
+    },
+    "parallelPercent": {
+      "type": "object",
+      "required": ["percent"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — percentage-quorum join condition. Threshold computed as ceil(percent * n / 100); vacuous fan-out (n=0) succeeds.",
+      "properties": {
+        "percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Minimum percent of branches that must succeed (0..=100). Threshold uses ceiling division to avoid silent rounding."
+        }
+      }
+    },
+    "parallelExpression": {
+      "type": "object",
+      "required": ["expression"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — operator-supplied expression evaluated post-completion against `{branches, ok_count, failed_count, cancelled_count, n}`. Same binary-comparison surface as `expr` guards. NO early exit — expression cannot observe a still-running branch (structural answer to SPEC §24.8 amendment concern).",
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Either a bare path (`$.ok_count`) checked for truthiness, or a binary expression (`$.ok_count >= 3`, `$.branches[0].output.passed == true`). Operators: literals (string/number/bool/null) and `$.<path>` references."
         }
       }
     },
@@ -610,7 +675,9 @@
         "join": {
           "oneOf": [
             { "type": "string", "enum": ["all", "any"] },
-            { "$ref": "#/$defs/parallelAtLeast" }
+            { "$ref": "#/$defs/parallelAtLeast" },
+            { "$ref": "#/$defs/parallelPercent" },
+            { "$ref": "#/$defs/parallelExpression" }
           ],
           "default": "all"
         },

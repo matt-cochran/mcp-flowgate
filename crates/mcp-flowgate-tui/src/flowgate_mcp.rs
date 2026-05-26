@@ -11,7 +11,7 @@
 //!
 //! ## How it works
 //!
-//! ```
+//! ```text
 //! Model (Claude, OpenAI, Ollama...)
 //!   │  calls: gateway.home / gateway.search / gateway.describe
 //!   │          workflow.start / workflow.get / workflow.submit / workflow.explain

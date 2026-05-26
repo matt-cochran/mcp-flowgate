@@ -14,7 +14,8 @@ use crate::args::{
     StartArgs, SubmitArgs,
 };
 use crate::{
-    TOOL_DESCRIBE, TOOL_EXPLAIN, TOOL_GET, TOOL_HOME, TOOL_SCRIPTS_SEARCH, TOOL_SEARCH,
+    TOOL_DESCRIBE, TOOL_EXPLAIN, TOOL_GET, TOOL_HOME, TOOL_LEXICON_DEFINE,
+    TOOL_LEXICON_LOOKUP, TOOL_LEXICON_SEARCH, TOOL_SCRIPTS_SEARCH, TOOL_SEARCH,
     TOOL_SKILLS_SEARCH, TOOL_START, TOOL_SUBMIT,
 };
 
@@ -75,7 +76,76 @@ pub fn tool_definitions() -> Vec<Tool> {
             Cow::Borrowed("Explain whether a transition is currently allowed."),
             schema_for_args::<ExplainArgs>(&["workflowId", "transition"]),
         ),
+        lexicon_search_tool_definition(),
+        lexicon_lookup_tool_definition(),
+        lexicon_define_tool_definition(),
     ]
+}
+
+/// SPEC §30.5 — gateway.lexicon.search definition.
+pub fn lexicon_search_tool_definition() -> Tool {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "query":            { "type": "string", "description": "substring match against term + definition" },
+            "bounded_context":  { "type": "string", "description": "optional DDD bounded context filter" },
+            "limit":            { "type": "integer", "description": "max hits (default 10)" }
+        }
+    });
+    Tool::new(
+        Cow::Borrowed(TOOL_LEXICON_SEARCH),
+        Cow::Borrowed(
+            "Search the lexicon (ubiquitous language store) for terms matching a query. \
+             Returns hits with definitions, refs, and governance level.",
+        ),
+        Arc::new(schema.as_object().cloned().unwrap()),
+    )
+}
+
+/// SPEC §30.5 — gateway.lexicon.lookup definition.
+pub fn lexicon_lookup_tool_definition() -> Tool {
+    let schema = json!({
+        "type": "object",
+        "required": ["term"],
+        "properties": {
+            "term":            { "type": "string", "description": "exact term name" },
+            "bounded_context": { "type": "string", "description": "optional filter; rejects entries with a different bounded_context" }
+        }
+    });
+    Tool::new(
+        Cow::Borrowed(TOOL_LEXICON_LOOKUP),
+        Cow::Borrowed(
+            "Exact lexicon lookup by term name. Returns the term's entry \
+             (definition, examples, refs, governance) or null when absent.",
+        ),
+        Arc::new(schema.as_object().cloned().unwrap()),
+    )
+}
+
+/// SPEC §30.6 — gateway.lexicon.define definition.
+/// Agents calling against `human-only` terms get rejected.
+pub fn lexicon_define_tool_definition() -> Tool {
+    let schema = json!({
+        "type": "object",
+        "required": ["term", "definition"],
+        "properties": {
+            "term":             { "type": "string", "minLength": 1 },
+            "definition":       { "type": "string", "minLength": 1 },
+            "bounded_context":  { "type": "string" },
+            "refs":             { "type": "array", "items": { "type": "string" } },
+            "governance":       { "type": "string", "enum": ["human-only", "agent-may-propose"] }
+        }
+    });
+    Tool::new(
+        Cow::Borrowed(TOOL_LEXICON_DEFINE),
+        Cow::Borrowed(
+            "Propose or set a lexicon term. Governance-gated: agents writing \
+             against a `human-only` term are rejected with \
+             LEXICON_DEFINE_REQUIRES_HUMAN. Writes land in the runtime overlay; \
+             operators persist by editing flowgate.yaml.",
+        ),
+        Arc::new(schema.as_object().cloned().unwrap()),
+    )
 }
 
 /// SPEC §22 — definition for the authoring-time `gateway.scripts.search`

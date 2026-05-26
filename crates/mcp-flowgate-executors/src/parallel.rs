@@ -296,7 +296,7 @@ impl Executor for ParallelExecutor {
         let join_result = match cfg.total_timeout {
             Some(d) => timeout(d, drive_joinset(
                 &mut joinset,
-                cfg.join,
+                &cfg.join,
                 cfg.on_branch_failure,
                 n,
                 &current_in_flight,
@@ -306,7 +306,7 @@ impl Executor for ParallelExecutor {
             .map_err(|_| ExecutorError::Timeout(cfg.total_timeout.map(|d| d.as_millis() as u64).unwrap_or(0)))?,
             None => drive_joinset(
                 &mut joinset,
-                cfg.join,
+                &cfg.join,
                 cfg.on_branch_failure,
                 n,
                 &current_in_flight,
@@ -329,7 +329,6 @@ impl Executor for ParallelExecutor {
         // Build aggregated output + evidence.
         let elapsed_ms = start.elapsed().as_millis() as u64;
         let JoinOutcome {
-            verdict,
             branch_results,
             aggregated_evidence,
             ok_count,
@@ -337,6 +336,22 @@ impl Executor for ParallelExecutor {
             cancelled_count,
             first_failure_index,
         } = join_result;
+
+        // Compute verdict — closed shortcuts are cheap; aggregator
+        // dispatches through the registry (kind: expression evaluates
+        // inline, kind: script/mcp/rest/etc invokes the registered
+        // executor with branches as input).
+        let verdict = compute_verdict(
+            &cfg.join,
+            n,
+            ok_count,
+            failed_count,
+            cancelled_count,
+            &branch_results,
+            registry.as_ref(),
+            &request,
+        )
+        .await;
 
         // SPEC §24.4 (GAP-G) — emit a `parallel.branch.cancelled` audit
         // event for each branch whose result slot ended as cancelled (the
@@ -423,9 +438,162 @@ impl Executor for ParallelExecutor {
     }
 }
 
+/// SPEC §24.2 — compute the verdict after fan-out completes.
+///
+/// Closed shortcuts (All / Any / AtLeast / Percent) compute inline.
+/// The `Aggregator` variant dispatches:
+/// - `kind: expression` evaluates the expression in-process (no
+///   registry dispatch — fastest path for the common case).
+/// - Any other `kind:` invokes the registered executor with
+///   `arguments = { branches, ok_count, failed_count, cancelled_count,
+///   n }`. The executor must return an output containing
+///   `verdict: "succeeded" | "failed" | "threshold_not_met"`;
+///   missing / invalid verdict yields `AGGREGATOR_INVALID_VERDICT`.
+async fn compute_verdict(
+    join: &JoinCondition,
+    n: usize,
+    ok_count: usize,
+    failed_count: usize,
+    cancelled_count: usize,
+    branch_results: &[Value],
+    registry: &dyn ExecutorRegistry,
+    request: &ExecuteRequest,
+) -> Verdict {
+    match join {
+        JoinCondition::All => {
+            if failed_count == 0 && cancelled_count == 0 && ok_count == n {
+                Verdict::Succeeded
+            } else {
+                Verdict::Failed
+            }
+        }
+        JoinCondition::Any => {
+            if ok_count >= 1 {
+                Verdict::Succeeded
+            } else {
+                Verdict::Failed
+            }
+        }
+        JoinCondition::AtLeast(k) => {
+            if ok_count >= *k {
+                Verdict::Succeeded
+            } else {
+                Verdict::ThresholdNotMet
+            }
+        }
+        JoinCondition::Percent(p) => {
+            if n == 0 {
+                Verdict::Succeeded
+            } else {
+                let threshold = JoinCondition::percent_threshold(*p, n);
+                if ok_count >= threshold {
+                    Verdict::Succeeded
+                } else {
+                    Verdict::ThresholdNotMet
+                }
+            }
+        }
+        JoinCondition::Aggregator(cfg) => {
+            let aggregator_input = json!({
+                "branches":        branch_results,
+                "ok_count":        ok_count,
+                "failed_count":    failed_count,
+                "cancelled_count": cancelled_count,
+                "n":               n,
+            });
+            let kind = cfg.get("kind").and_then(Value::as_str).unwrap_or("");
+
+            // Fast path: inline expression evaluation (no registry).
+            if kind == "expression" {
+                let expr = match cfg.get("expr").and_then(Value::as_str) {
+                    Some(e) => e,
+                    None => {
+                        tracing::warn!("aggregator kind=expression missing `expr` field");
+                        return Verdict::Failed;
+                    }
+                };
+                return match mcp_flowgate_core::guards::evaluate_join_expression(
+                    expr,
+                    &aggregator_input,
+                ) {
+                    Ok(true) => Verdict::Succeeded,
+                    Ok(false) => Verdict::Failed,
+                    Err(e) => {
+                        tracing::warn!(
+                            join_expression = %expr,
+                            error = %e,
+                            "join expression evaluation errored — treating as failed"
+                        );
+                        Verdict::Failed
+                    }
+                };
+            }
+
+            // General path: dispatch through the executor registry.
+            let executor = match registry.get(kind) {
+                Some(e) => e,
+                None => {
+                    tracing::warn!(
+                        aggregator_kind = %kind,
+                        "aggregator kind not registered — treating verdict as failed"
+                    );
+                    return Verdict::Failed;
+                }
+            };
+            let agg_request = ExecuteRequest {
+                workflow: request.workflow.clone(),
+                transition: request.transition.clone(),
+                arguments: aggregator_input,
+                executor_config: cfg.clone(),
+                idempotency_key: request
+                    .idempotency_key
+                    .as_ref()
+                    .map(|k| format!("{k}:aggregator")),
+                correlation_id: request.correlation_id.clone(),
+            };
+            match executor.execute(agg_request).await {
+                Ok(res) => {
+                    let v = res
+                        .output
+                        .get("verdict")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    match v {
+                        "succeeded" => Verdict::Succeeded,
+                        "threshold_not_met" => Verdict::ThresholdNotMet,
+                        "failed" | "" => Verdict::Failed,
+                        other => {
+                            tracing::warn!(
+                                aggregator_verdict = %other,
+                                "AGGREGATOR_INVALID_VERDICT: aggregator returned unknown verdict; treating as failed"
+                            );
+                            Verdict::Failed
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        aggregator_kind = %kind,
+                        error = %e,
+                        "aggregator execution errored — treating verdict as failed"
+                    );
+                    Verdict::Failed
+                }
+            }
+        }
+    }
+}
+
 // ── join / failure / output types ─────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
+/// Join condition. Closed shortcuts (`All`, `Any`, `AtLeast`,
+/// `Percent`) are the ergonomic surface for the common cases.
+/// `Aggregator` is the **general form** — any executor-shaped value
+/// invoked post-fan-out that consumes `{branches[], ok_count, ...}`
+/// and returns a verdict. Aggregator subsumes the `expression` join:
+/// `expression: "<expr>"` is sugar for `aggregator: { kind: expression,
+/// expr: "<expr>" }`.
+#[derive(Debug, Clone)]
 enum JoinCondition {
     /// Every branch must succeed.
     All,
@@ -433,15 +601,50 @@ enum JoinCondition {
     Any,
     /// At least K branches must succeed.
     AtLeast(usize),
+    /// At least P percent of branches must succeed (`0..=100`).
+    /// Vacuous fan-out (n=0) succeeds. Early exit symmetric to AtLeast.
+    Percent(u8),
+    /// General aggregator. Holds an executor-shaped config; verdict is
+    /// computed post-fan-out by invoking the configured aggregator with
+    /// the branches map as input.
+    ///
+    /// Built-in `kind: expression` evaluates inline (no registry
+    /// dispatch). Every other `kind:` goes through the executor
+    /// registry, so operators can write aggregators as scripts, MCP
+    /// tools, REST calls, or nested workflows.
+    Aggregator(Value),
 }
 
 impl JoinCondition {
-    fn as_token(self) -> &'static str {
+    fn as_token(&self) -> &'static str {
         match self {
             JoinCondition::All => "all",
             JoinCondition::Any => "any",
             JoinCondition::AtLeast(_) => "at_least",
+            JoinCondition::Percent(_) => "percent",
+            JoinCondition::Aggregator(cfg) => cfg
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(|k| match k {
+                    "expression" => "expression",
+                    "script" => "aggregator_script",
+                    "mcp" => "aggregator_mcp",
+                    "rest" => "aggregator_rest",
+                    "workflow" => "aggregator_workflow",
+                    "cli" => "aggregator_cli",
+                    _ => "aggregator",
+                })
+                .unwrap_or("aggregator"),
         }
+    }
+
+    /// Compute the integer success threshold for percent. Uses
+    /// ceiling division to avoid silently rounding 51% of 3 (=1.53)
+    /// down to 1 when the operator clearly meant "more than half".
+    fn percent_threshold(p: u8, n: usize) -> usize {
+        let p = p as usize;
+        // ceil(p * n / 100) = (p * n + 99) / 100, integer math.
+        (p * n + 99) / 100
     }
 }
 
@@ -470,8 +673,10 @@ impl Verdict {
     }
 }
 
+/// What `drive_joinset` returns — counts + raw branch results. The
+/// final verdict is computed by [`compute_verdict`] which dispatches
+/// to the aggregator pattern when configured.
 struct JoinOutcome {
-    verdict: Verdict,
     branch_results: Vec<Value>,
     aggregated_evidence: Vec<Evidence>,
     ok_count: usize,
@@ -482,7 +687,7 @@ struct JoinOutcome {
 
 async fn drive_joinset(
     joinset: &mut JoinSet<(usize, Result<ExecuteResult, ExecutorError>)>,
-    join: JoinCondition,
+    join: &JoinCondition,
     on_failure: OnBranchFailure,
     n: usize,
     in_flight: &Arc<std::sync::atomic::AtomicUsize>,
@@ -528,12 +733,24 @@ async fn drive_joinset(
                 }
                 // Join: at_least K → if reached, succeed early.
                 if let JoinCondition::AtLeast(k) = join {
-                    if ok_count >= k {
+                    if ok_count >= *k {
                         joinset.abort_all();
                         early_exit = true;
                         break;
                     }
                 }
+                // Join: percent → if threshold reached, succeed early.
+                if let JoinCondition::Percent(p) = join {
+                    let threshold = JoinCondition::percent_threshold(*p, n);
+                    if ok_count >= threshold {
+                        joinset.abort_all();
+                        early_exit = true;
+                        break;
+                    }
+                }
+                // Join: expression → NO early exit. Expression evaluates
+                // post-completion to keep semantics structurally clean
+                // (no mid-flight branch reads — SPEC §24.8).
             }
             Err(err) => {
                 if first_failure_index.is_none() {
@@ -556,12 +773,23 @@ async fn drive_joinset(
                 // join: at_least:K + a failure that makes K unreachable → bail early.
                 if let JoinCondition::AtLeast(k) = join {
                     let remaining = n - ok_count - failed_count;
-                    if ok_count + remaining < k {
+                    if ok_count + remaining < *k {
                         joinset.abort_all();
                         early_exit = true;
                         break;
                     }
                 }
+                // join: percent + a failure that makes the threshold unreachable → bail.
+                if let JoinCondition::Percent(p) = join {
+                    let threshold = JoinCondition::percent_threshold(*p, n);
+                    let remaining = n - ok_count - failed_count;
+                    if ok_count + remaining < threshold {
+                        joinset.abort_all();
+                        early_exit = true;
+                        break;
+                    }
+                }
+                // join: expression → no early exit (see Ok-branch comment).
             }
         }
     }
@@ -617,30 +845,6 @@ async fn drive_joinset(
         .saturating_sub(ok_count)
         .saturating_sub(failed_count);
 
-    let verdict = match join {
-        JoinCondition::All => {
-            if failed_count == 0 && cancelled_count == 0 && ok_count == n {
-                Verdict::Succeeded
-            } else {
-                Verdict::Failed
-            }
-        }
-        JoinCondition::Any => {
-            if ok_count >= 1 {
-                Verdict::Succeeded
-            } else {
-                Verdict::Failed
-            }
-        }
-        JoinCondition::AtLeast(k) => {
-            if ok_count >= k {
-                Verdict::Succeeded
-            } else {
-                Verdict::ThresholdNotMet
-            }
-        }
-    };
-
     // Fill any unfilled (cancelled-before-completion) slots with a stub.
     let branch_results: Vec<Value> = branch_results
         .into_iter()
@@ -657,7 +861,6 @@ async fn drive_joinset(
         .collect();
 
     JoinOutcome {
-        verdict,
         branch_results,
         aggregated_evidence,
         ok_count,
@@ -682,7 +885,17 @@ struct ParallelConfig {
 
 enum BranchesSpec {
     Literal(Vec<Value>),
-    ForEach { for_each: String, do_template: Value },
+    ForEach {
+        for_each: String,
+        do_template: Value,
+        /// SPEC §24.2 — optional pre-fan-out filter. When `Some(expr)`,
+        /// each element of `for_each` is evaluated by
+        /// [`mcp_flowgate_core::guards::evaluate_join_expression`] with
+        /// the element's `{value, index, ...}` projection as the root
+        /// value. Falsy elements are dropped BEFORE branches spawn.
+        /// Avoids the "add a state just to filter" antipattern.
+        where_clause: Option<String>,
+    },
 }
 
 impl ParallelConfig {
@@ -718,10 +931,32 @@ impl ParallelConfig {
                     )
                 })?
                 .clone();
+            let where_clause = obj
+                .get("where")
+                .map(|w| {
+                    w.as_str().ok_or_else(|| {
+                        ExecutorError::Permanent(
+                            "INVALID_PARALLEL_CONFIG: dynamic `branches.where` must be a \
+                             string expression (paths `$.value`, `$.index`, plus literals \
+                             and binary comparisons)"
+                                .into(),
+                        )
+                    })
+                })
+                .transpose()?
+                .map(|s| s.to_string());
+            if let Some(w) = &where_clause {
+                if w.trim().is_empty() {
+                    return Err(ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: dynamic `branches.where` must be non-empty when present".into(),
+                    ));
+                }
+            }
             (
                 BranchesSpec::ForEach {
                     for_each: for_each.clone(),
                     do_template,
+                    where_clause,
                 },
                 Some(for_each),
             )
@@ -747,11 +982,93 @@ impl ParallelConfig {
                                 .into(),
                         )
                     })?;
+                if k == 0 {
+                    return Err(ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: `join.at_least` must be > 0 (got 0)".into(),
+                    ));
+                }
                 JoinCondition::AtLeast(k as usize)
+            }
+            Some(Value::Object(o)) if o.contains_key("percent") => {
+                let p = o
+                    .get("percent")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| {
+                        ExecutorError::Permanent(
+                            "INVALID_PARALLEL_CONFIG: `join.percent` must be an integer in 0..=100"
+                                .into(),
+                        )
+                    })?;
+                if p > 100 {
+                    return Err(ExecutorError::Permanent(format!(
+                        "INVALID_PARALLEL_CONFIG: `join.percent` must be in 0..=100 (got {p})"
+                    )));
+                }
+                JoinCondition::Percent(p as u8)
+            }
+            Some(Value::Object(o)) if o.contains_key("expression") => {
+                // Backward-compat sugar — `expression: "..."` desugars
+                // to `aggregator: { kind: expression, expr: "..." }`.
+                let e = o
+                    .get("expression")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        ExecutorError::Permanent(
+                            "INVALID_PARALLEL_CONFIG: `join.expression` must be a string"
+                                .into(),
+                        )
+                    })?;
+                if e.trim().is_empty() {
+                    return Err(ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: `join.expression` must be non-empty".into(),
+                    ));
+                }
+                JoinCondition::Aggregator(json!({
+                    "kind": "expression",
+                    "expr": e,
+                }))
+            }
+            Some(Value::Object(o)) if o.contains_key("aggregator") => {
+                let agg = o
+                    .get("aggregator")
+                    .ok_or_else(|| {
+                        ExecutorError::Permanent(
+                            "INVALID_PARALLEL_CONFIG: `join.aggregator` must be an object".into(),
+                        )
+                    })?
+                    .clone();
+                if !agg.is_object() {
+                    return Err(ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: `join.aggregator` must be an executor-shaped \
+                         object with at least `kind:`"
+                            .into(),
+                    ));
+                }
+                let kind = agg.get("kind").and_then(Value::as_str).unwrap_or("");
+                if kind.is_empty() {
+                    return Err(ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: `join.aggregator.kind` is required (e.g. \
+                         `expression`, `script`, `mcp`, `rest`, `workflow`, `cli`)"
+                            .into(),
+                    ));
+                }
+                if kind == "expression" {
+                    let expr = agg.get("expr").and_then(Value::as_str).unwrap_or("");
+                    if expr.trim().is_empty() {
+                        return Err(ExecutorError::Permanent(
+                            "INVALID_PARALLEL_CONFIG: `join.aggregator.kind = expression` \
+                             requires non-empty `expr:` field"
+                                .into(),
+                        ));
+                    }
+                }
+                JoinCondition::Aggregator(agg)
             }
             Some(other) => {
                 return Err(ExecutorError::Permanent(format!(
-                    "INVALID_PARALLEL_CONFIG: unknown `join` value: {other}. Allowed: \"all\", \"any\", {{at_least: K}}"
+                    "INVALID_PARALLEL_CONFIG: unknown `join` value: {other}. Allowed: \"all\", \
+                     \"any\", {{at_least: K}}, {{percent: 0..=100}}, \
+                     {{aggregator: {{kind: ..., ...}}}}, or sugar {{expression: \"<expr>\"}}"
                 )));
             }
         };
@@ -818,6 +1135,7 @@ fn resolve_branches(
         BranchesSpec::ForEach {
             for_each,
             do_template,
+            where_clause,
         } => {
             let resolved = read_in_scopes(
                 for_each,
@@ -839,9 +1157,27 @@ fn resolve_branches(
                     short_kind(&resolved)
                 ))
             })?;
-            let branches: Vec<Value> = arr
-                .iter()
-                .enumerate()
+            // Pre-fan-out filter (SPEC §24.2). Drop elements where the
+            // `where:` predicate evaluates falsy. Filter runs BEFORE
+            // branches spawn so we never pay the fan-out cost for
+            // elements the operator already knows to skip.
+            let filtered: Vec<(usize, &Value)> = if let Some(expr) = where_clause {
+                arr.iter()
+                    .enumerate()
+                    .filter(|(index, value)| {
+                        let probe = json!({ "value": value, "index": index });
+                        mcp_flowgate_core::guards::evaluate_join_expression(expr, &probe)
+                            .unwrap_or(false)
+                    })
+                    .collect()
+            } else {
+                arr.iter().enumerate().collect()
+            };
+            // NB: branches keep the original element index (not the
+            // post-filter position) so audit logs map back to the
+            // source-array index unambiguously.
+            let branches: Vec<Value> = filtered
+                .into_iter()
                 .map(|(index, value)| substitute_branch_template(do_template, index, value))
                 .collect();
             Ok(branches)

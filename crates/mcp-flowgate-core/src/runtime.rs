@@ -555,9 +555,28 @@ impl WorkflowRuntime {
             record["executor"] = executor;
         }
 
+        // SPEC §29 — lightweight transitions emit a different event
+        // type so consumers can separate state-change records from
+        // interaction-style self-loops (e.g. `ask_human`). The
+        // `purpose:` field (when declared) propagates into the audit
+        // payload for downstream filtering.
+        let lightweight = params
+            .transition_def
+            .get("lightweight")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if let Some(purpose) = params.transition_def.get("purpose").and_then(Value::as_str) {
+            record["purpose"] = Value::String(purpose.to_string());
+        }
+        let event_type = if lightweight {
+            "workflow.interaction"
+        } else {
+            "workflow.transition"
+        };
+
         let mut event = params
             .instance
-            .audit_event("workflow.transition")
+            .audit_event(event_type)
             .with_correlation(params.correlation_id)
             .with_payload(record);
         if let Some(principal) = params.principal {

@@ -221,8 +221,19 @@ async fn serve(config_path: PathBuf) -> anyhow::Result<()> {
         "starting mcp-flowgate stdio server"
     );
 
+    // SPEC §30 — pull the top-level `lexicon:` block out of the
+    // resolved config and pass it as the lexicon base. Empty when no
+    // block declared. Runtime writes via `gateway.lexicon.define`
+    // land in the in-memory overlay; operators persist by editing
+    // flowgate.yaml.
+    let lexicon_base = config
+        .get("lexicon")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
     let server = FlowgateServer::new(runtime.clone())
-        .with_discovery(swappable_discovery.clone() as Arc<dyn DiscoveryIndex>);
+        .with_discovery(swappable_discovery.clone() as Arc<dyn DiscoveryIndex>)
+        .with_lexicon(lexicon_base);
     let service = server
         .serve(stdio())
         .await

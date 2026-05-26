@@ -1,11 +1,16 @@
 //! Library surface for the Flowgate TUI crate. Modules that have public
-//! contracts (`interpreter`, `agent_config`, `tui_config`) live here so
-//! integration tests in `tests/` can `use mcp_flowgate_tui::…`.
+//! contracts (`interpreter`, `agent_config`, `tui_config`, `sub_agent`,
+//! `flowgate_mcp`) live here so integration tests and the sub-agent
+//! spawner can reach them. The bin's `main.rs` re-imports via
+//! `use mcp_flowgate_tui::…`.
 //!
-//! Runtime-only modules (`flowgate_mcp`, `theme`) stay in `main.rs` —
-//! they have no test surface and the bin doesn't need to share them.
+//! Runtime-only modules with no test surface (e.g. `theme`) stay in
+//! `main.rs`.
 
 pub mod agent_config;
+pub mod doctor;
+pub mod flowgate_mcp;
 pub mod interpreter;
+pub mod mcp_caller;
 pub mod sub_agent;
 pub mod tui_config;

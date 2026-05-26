@@ -106,7 +106,7 @@ fn swe_agent_delegate_fields_present_on_four_model_driven_states() {
         .pointer("/workflows/swe_agent/states")
         .and_then(serde_json::Value::as_object)
         .expect("states");
-    // These four states delegate to TUI sub-agents per WIP.md Phase 3.
+    // These four states delegate to TUI sub-agents per docs/TUI-AGENT-DESIGN.md Phase 3.
     let delegated = &[
         ("planning", "planning-agent"),
         ("retrieving", "retrieval-agent"),

@@ -1,7 +1,7 @@
 //! Agent config — a `name → (provider, model)` mapping consumed by the
 //! sub-agent spawner. v1 ships CLI-only via `--agent name=provider/model`
 //! (repeated). TOML files at `~/.flowgate/agents/*.toml` are deferred to
-//! v2 (WIP.md §2.3).
+//! v2 (see docs/TUI-AGENT-DESIGN.md §2.3 for the design note).
 //!
 //! Resolution: `delegate: <name>` on a workflow state lookups this map.
 //! Missing name → `InterpreterError::UnknownAgent(name)` so the operator

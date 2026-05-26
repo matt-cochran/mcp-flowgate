@@ -55,6 +55,14 @@ fn validate_one_workflow(
     skill_subjects: &HashSet<&str>,
     out: &mut Vec<Diagnostic>,
 ) {
+    // SPEC §28 — slot constraint shape validation. Catches typos like
+    // unknown constraint kinds, malformed globs, empty allowlists at
+    // load time so they don't surface as runtime
+    // SLOT_CONSTRAINT_VIOLATED errors on the first transition.
+    if let Err(e) = crate::slot_constraint::validate_constraints_in_definition(def) {
+        out.push(Diagnostic::Error(format!("workflow '{id}': {e}")));
+    }
+
     let Some(initial_state) = def.get("initialState").and_then(Value::as_str) else {
         out.push(Diagnostic::Error(format!(
             "workflow '{id}': missing 'initialState'"

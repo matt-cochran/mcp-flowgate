@@ -186,19 +186,22 @@ cognitive-architecture thesis).
 
 ## What's deferred to v2
 
-The Aether session integration in `sub_agent.rs` currently surfaces
-`SubAgentTimeout` (the trait scaffolding is in place; the concrete
-`run_headless` invocation is mechanical wiring for a follow-on commit).
-The interpreter itself is fully tested via the scripted-double pattern
-in `tests/interpreter.rs` (11 atomic assertions, one per branch). To
-exercise the interpreter against real Aether sessions today, write a
-custom `SubAgentSpawner` impl pointing at your model client of choice.
+The `AetherSubAgentSpawner` now invokes `aether_cli::headless::run_headless`
+directly (GAP-C closed in v0.3 cycle). The interpreter remains fully
+tested via the scripted-double pattern in `tests/interpreter.rs`
+(11 atomic assertions, one per branch). The remaining gap for an
+end-to-end `flowgate walk` against a live `mcp-flowgate` is the rmcp
+child-process `McpToolCaller` — `flowgate walk` currently fails loud
+with `WALK_NOT_WIRED` when invoked, by design, so the absence is
+discoverable instead of silently no-op.
 
 Other v2 work: a thin LLM-based branch picker when guards can't resolve
 to a single path (v1 uses the deterministic first-non-escalate fallback,
 which works in practice because the critic cycle corrects wrong picks);
-TOML agent config files; a benchmark of sub-agent ensemble vs single
-frontier model.
+TOML agent config files; a real benchmark spike of sub-agent ensemble
+vs single frontier model (scaffold + methodology lives at
+`docs/BENCHMARK-COGNITIVE-ARCHITECTURE.md`; running it requires API
+budget).
 
 ## See also
 

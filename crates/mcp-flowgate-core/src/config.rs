@@ -239,7 +239,132 @@ pub fn resolve_with_diagnostics(mut config: Value) -> anyhow::Result<(Value, Vec
     //        preferences via template substitution `{{$.flowgate.authoring.*}}`.
     stamp_authoring_preferences(&mut config);
 
+    // 7-quater. SPEC §29 — when a workflow declares `enable_human_ask: true`,
+    //           inject a self-loop `ask_human` transition into every
+    //           non-terminal state. Lets the agent ask mid-reasoning
+    //           clarifying questions without per-state authoring burden.
+    inject_human_ask_transitions(&mut config);
+
+    // 7-quinquies. SPEC §30 — validate + stamp the lexicon library.
+    //              Every workflow gets a `_lexiconLibrary` snapshot
+    //              so in-flight reads are deterministic (same
+    //              invariant as `_skillsLibrary` / `_scriptsLibrary`).
+    crate::lexicon::validate_lexicon(&config)?;
+    crate::lexicon::stamp_lexicon_library(&mut config);
+
     Ok((config, diagnostics))
+}
+
+/// SPEC §29 — for every workflow with `enable_human_ask: true`, inject
+/// a self-loop `ask_human` transition into every non-terminal state.
+/// The injected transition:
+/// - target = same state (self-loop, doesn't advance)
+/// - actor: human (only humans can submit; gates the answer)
+/// - purpose: ask (TUI/dashboard filtering tag)
+/// - lightweight: true (audit emits `workflow.interaction` not `.transition`)
+/// - max_fires_per_visit: <workflow's `human_ask_cap` field, default 5>
+/// - inputSchema requires the agent to fill question + context_summary +
+///   attempted_alternatives so questions arrive WITH context
+/// - outputSchema requires a string answer
+///
+/// Idempotent: if the state already declares an `ask_human` transition,
+/// the injection is skipped (operator override takes precedence).
+fn inject_human_ask_transitions(config: &mut Value) {
+    use serde_json::json;
+    let Some(workflows) = config
+        .pointer_mut("/workflows")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for (_id, def) in workflows {
+        let enabled = def
+            .get("enable_human_ask")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !enabled {
+            continue;
+        }
+        let cap = def
+            .get("human_ask_cap")
+            .and_then(Value::as_u64)
+            .unwrap_or(5);
+        let Some(states) = def
+            .pointer_mut("/states")
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        for (state_name, state_def) in states {
+            // Skip terminal states — no point asking questions on a state
+            // the workflow can never leave.
+            if state_def
+                .get("terminal")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let Some(state_obj) = state_def.as_object_mut() else {
+                continue;
+            };
+            // Ensure transitions: {} exists.
+            let transitions = state_obj
+                .entry("transitions")
+                .or_insert(Value::Object(Default::default()))
+                .as_object_mut()
+                .expect("transitions must be an object");
+            // Operator override — don't clobber an existing ask_human.
+            if transitions.contains_key("ask_human") {
+                continue;
+            }
+            transitions.insert(
+                "ask_human".to_string(),
+                json!({
+                    "target":              state_name,
+                    "actor":               "human",
+                    "purpose":             "ask",
+                    "lightweight":         true,
+                    "max_fires_per_visit": cap,
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["question", "context_summary", "attempted_alternatives"],
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000,
+                                "description": "The question for the human. Be specific; the human can't see your reasoning chain."
+                            },
+                            "context_summary": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1000,
+                                "description": "Brief context — what you're trying to do, what state you're in."
+                            },
+                            "attempted_alternatives": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1000,
+                                "description": "What you already tried (docs, scripts, other tools) before asking. SPEC §29.6 — agents must demonstrate effort before interrupting humans."
+                            }
+                        }
+                    },
+                    "outputSchema": {
+                        "type": "object",
+                        "required": ["answer"],
+                        "properties": {
+                            "answer": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "The human's answer."
+                            }
+                        }
+                    }
+                }),
+            );
+        }
+    }
 }
 
 /// Audit-resolution C.2 — return the blessed root closest to `candidate`
@@ -656,19 +781,49 @@ fn validate_scripts(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow
                         )
                     })?;
                 validate_hash_format(stored_hash, subject)?;
-                if !uri_str.starts_with("file://") {
+                if !(uri_str.starts_with("file://")
+                    || uri_str.starts_with("https://")
+                    || uri_str.starts_with("git+https://"))
+                {
                     let scheme = uri_str.split("://").next().unwrap_or(uri_str);
                     bail!(
                         "UNSUPPORTED_SCRIPT_URI_SCHEME: scripts entry '{subject}' uri \
-                         '{uri_str}' uses scheme '{scheme}://' — v1 supports `file://` only. \
-                         `https://` and `git+https://...@<ref>` are deferred to v2 (SPEC §22.2)."
+                         '{uri_str}' uses scheme '{scheme}://' — supported schemes are \
+                         `file://` (relative to config), `https://` (load-time fetch), \
+                         and `git+https://...@<ref>#<path>` (load-time `git archive` \
+                         extraction). All non-file URIs require sha256 verification per \
+                         SPEC §22.2."
                     );
+                }
+                if uri_str.starts_with("git+https://") {
+                    // Cheap structural check at validate time — we want
+                    // the load-time error if the shape is wrong, not a
+                    // confusing git CLI failure later. Required form:
+                    // git+https://<host>/<repo>(.git)?@<ref>#<path>
+                    let body = uri_str.trim_start_matches("git+https://");
+                    let (repo_at_ref, _path) = body.split_once('#').ok_or_else(|| {
+                        anyhow!(
+                            "INVALID_GIT_HTTPS_URI: scripts entry '{subject}' uri \
+                             '{uri_str}' is missing the `#<path>` fragment. Required \
+                             form: git+https://<host>/<repo>(.git)?@<ref>#<path>"
+                        )
+                    })?;
+                    if !repo_at_ref.contains('@') {
+                        bail!(
+                            "INVALID_GIT_HTTPS_URI: scripts entry '{subject}' uri \
+                             '{uri_str}' is missing the `@<ref>` revision. Required \
+                             form: git+https://<host>/<repo>(.git)?@<ref>#<path>. \
+                             Pinning to a ref is mandatory — branches drift, tags can \
+                             be re-pointed, only a SHA or signed tag is reproducible."
+                        );
+                    }
                 }
                 // file:// resolution + hash verification happens at
                 // stamp_scripts_library time (Tranche N) — needs the config
                 // file path for relative-path resolution, which validate
-                // doesn't have. Shape is locked here; integrity is enforced
-                // there.
+                // doesn't have. https:// is also resolved there (no
+                // base-dir rewrite needed; URLs are already absolute).
+                // Shape is locked here; integrity is enforced there.
             }
         }
     }
@@ -995,15 +1150,15 @@ fn stamp_scripts_library(config: &mut Value) -> anyhow::Result<()> {
                         )
                     })?
                     .to_string();
-                let body = read_file_uri(uri, subject)?;
+                let body = read_script_uri(uri, subject)?;
                 let computed = compute_script_hash(&body);
                 if computed != declared_hash {
                     bail!(
                         "SCRIPT_HASH_MISMATCH: scripts entry '{subject}' uri '{uri}' \
                          resolved to a body whose content-hash is '{computed}' but the \
-                         declared hash is '{declared_hash}'. Either the external file has \
-                         drifted since the workflow was authored, or the declared hash is \
-                         wrong (SPEC §22.2)."
+                         declared hash is '{declared_hash}'. Either the external source \
+                         has drifted since the workflow was authored, or the declared \
+                         hash is wrong (SPEC §22.2)."
                     );
                 }
                 (body, declared_hash)
@@ -1089,21 +1244,180 @@ fn collect_script_subject_from(scope: Option<&Value>, out: &mut HashSet<String>)
     }
 }
 
-/// SPEC §22.2 — read a `file://` URI's contents. The URI must be absolute
-/// by the time this is called ([`rewrite_script_uris_to_absolute`] runs at
-/// load time). Surfaces a clear error naming the subject + path for
-/// missing-file / permission failures.
-fn read_file_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
-    let path = uri
-        .strip_prefix("file://")
-        .ok_or_else(|| anyhow!(
-            "scripts entry '{subject}' uri '{uri}' missing file:// prefix — \
-             validate_scripts should have caught this"
-        ))?;
-    std::fs::read_to_string(path).with_context(|| {
-        format!(
-            "reading scripts entry '{subject}' from {uri} (resolved path: {path})"
-        )
+/// SPEC §22.2 — read a script URI's contents. Dispatches by scheme:
+/// - `file://` → local filesystem (absolute path post-rewrite).
+/// - `https://` → blocking HTTP GET via reqwest::blocking. The
+///   declared `hash:` is what makes this safe — we verify the
+///   fetched bytes match the operator's declaration, so a hijacked
+///   endpoint can't silently swap the script.
+///
+/// Other schemes are validator-rejected upstream; this function
+/// errors on them as a defense-in-depth assertion.
+fn read_script_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
+    if let Some(path) = uri.strip_prefix("file://") {
+        return std::fs::read_to_string(path).with_context(|| {
+            format!(
+                "reading scripts entry '{subject}' from {uri} (resolved path: {path})"
+            )
+        });
+    }
+    if uri.starts_with("https://") {
+        return read_https_uri(uri, subject);
+    }
+    if uri.starts_with("git+https://") {
+        return read_git_https_uri(uri, subject);
+    }
+    bail!(
+        "UNSUPPORTED_SCRIPT_URI_SCHEME: scripts entry '{subject}' uri '{uri}' \
+         reached read_script_uri with an unsupported scheme — validate_scripts \
+         should have caught this. Supported: file://, https://, git+https://."
+    )
+}
+
+/// Resolve a `git+https://<host>/<repo>(.git)?@<ref>#<path>` URI by
+/// invoking `git archive --remote=<https-url> <ref> <path> | tar`.
+/// This avoids a full clone — only the requested ref+path is fetched.
+///
+/// Many forges (GitHub, GitLab.com) do NOT support `git archive` over
+/// https for security reasons (it's `git upload-archive` permission,
+/// often disabled). When that's the case, this function emits a
+/// `GIT_ARCHIVE_NOT_SUPPORTED` error suggesting the operator either
+/// host the script via plain `https://` (raw.githubusercontent.com,
+/// gist raw URL) or run a local mirror that allows `upload-archive`.
+///
+/// Hash-verified by the caller; we don't trust the network or git's
+/// integrity guarantees — operator-declared sha256 is the gate.
+fn read_git_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
+    let body = uri
+        .strip_prefix("git+https://")
+        .expect("validate_scripts ensures git+https:// prefix");
+    let (repo_at_ref, path) = body
+        .split_once('#')
+        .ok_or_else(|| anyhow!("missing #<path> in {uri}"))?;
+    let (repo, gitref) = repo_at_ref
+        .rsplit_once('@')
+        .ok_or_else(|| anyhow!("missing @<ref> in {uri}"))?;
+    let repo_url = format!("https://{repo}");
+
+    // `git archive --remote=<url> <ref> <path>` writes a tar to stdout.
+    // We pipe to `tar -x -O -f -` to extract <path> only and dump
+    // contents to stdout in one shot.
+    //
+    // Two child processes connected via a pipe. We capture tar's
+    // stdout as the script body.
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut git = Command::new("git")
+        .arg("archive")
+        .arg("--format=tar")
+        .arg(format!("--remote={repo_url}"))
+        .arg(gitref)
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| {
+            format!(
+                "spawning `git archive` for scripts entry '{subject}' uri '{uri}'. \
+                 The `git` binary must be on PATH for git+https:// script URIs."
+            )
+        })?;
+
+    let git_stdout = git.stdout.take().ok_or_else(|| {
+        anyhow!("scripts entry '{subject}' git archive missing stdout pipe")
+    })?;
+
+    let mut tar = Command::new("tar")
+        .arg("-x")
+        .arg("-O")
+        .arg("-f")
+        .arg("-")
+        .arg(path)
+        .stdin(Stdio::from(git_stdout))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| {
+            format!(
+                "spawning `tar` to extract scripts entry '{subject}' from git archive"
+            )
+        })?;
+
+    let mut body = String::new();
+    let mut tar_stdout = tar
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("tar missing stdout pipe"))?;
+    tar_stdout.read_to_string(&mut body).with_context(|| {
+        format!("reading scripts entry '{subject}' body from tar stdout")
+    })?;
+
+    let git_status = git.wait().with_context(|| {
+        format!("waiting on `git archive` for scripts entry '{subject}'")
+    })?;
+    let tar_status = tar.wait().with_context(|| {
+        format!("waiting on `tar` for scripts entry '{subject}'")
+    })?;
+
+    if !git_status.success() {
+        bail!(
+            "GIT_ARCHIVE_NOT_SUPPORTED: scripts entry '{subject}' uri '{uri}' — \
+             `git archive --remote={repo_url}` exited with code {:?}. Many forges \
+             (GitHub, GitLab.com) disable `upload-archive` over https for security. \
+             Workarounds: host the script via plain https:// (e.g. \
+             raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>), or use a \
+             self-hosted mirror that permits upload-archive.",
+            git_status.code()
+        );
+    }
+    if !tar_status.success() {
+        bail!(
+            "scripts entry '{subject}' uri '{uri}' — `tar -x -O` exited with code \
+             {:?}. The git archive may not contain '{path}', or the path uses an \
+             unsupported format.",
+            tar_status.code()
+        );
+    }
+    if body.is_empty() {
+        bail!(
+            "scripts entry '{subject}' uri '{uri}' resolved to an empty body. \
+             Check that '{path}' exists in the repo at ref '{gitref}'."
+        );
+    }
+    Ok(body)
+}
+
+/// Blocking HTTP GET for an `https://` script URI. 30-second hard
+/// timeout (script bodies are small; long blocking calls at config
+/// load are an operator-visible problem). Non-200 responses fail
+/// with a clear error naming the URL + status code.
+///
+/// The fetched body is hash-verified by the caller; no need to
+/// trust the network — operator-declared sha256 is the integrity gate.
+fn read_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(concat!("mcp-flowgate/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .with_context(|| {
+            format!("building blocking HTTP client for scripts entry '{subject}' {uri}")
+        })?;
+    let resp = client.get(uri).send().with_context(|| {
+        format!("fetching scripts entry '{subject}' from {uri}")
+    })?;
+    let status = resp.status();
+    if !status.is_success() {
+        bail!(
+            "SCRIPT_URI_FETCH_FAILED: scripts entry '{subject}' uri '{uri}' returned \
+             HTTP {} — expected 2xx. Caller may have moved/deleted the resource, or \
+             the host requires authentication (not currently supported; the v1 https \
+             fetcher is anonymous).",
+            status.as_u16()
+        );
+    }
+    resp.text().with_context(|| {
+        format!("decoding body for scripts entry '{subject}' from {uri}")
     })
 }
 

@@ -63,6 +63,14 @@ pub const TOOL_SKILLS_SEARCH: &str = "gateway.skills.search";
 /// `FlowgateServer::with_scripts_search(true)` is set; default off (same
 /// reasoning as skills).
 pub const TOOL_SCRIPTS_SEARCH: &str = "gateway.scripts.search";
+/// SPEC §30 — lexicon search (always advertised; lexicon is a runtime
+/// concept used INSIDE workflows, not authoring-time-only).
+pub const TOOL_LEXICON_SEARCH: &str = "gateway.lexicon.search";
+/// SPEC §30 — lexicon lookup.
+pub const TOOL_LEXICON_LOOKUP: &str = "gateway.lexicon.lookup";
+/// SPEC §30 — lexicon define. Governance-gated; agents calling against
+/// a `human-only` term get `LEXICON_DEFINE_REQUIRES_HUMAN`.
+pub const TOOL_LEXICON_DEFINE: &str = "gateway.lexicon.define";
 
 /// The complete set of MCP tool names this server exposes by default
 /// (without authoring-time flags). Stable across configs by design — see
@@ -75,6 +83,9 @@ pub const STABLE_TOOL_NAMES: &[&str] = &[
     TOOL_GET,
     TOOL_SUBMIT,
     TOOL_EXPLAIN,
+    TOOL_LEXICON_SEARCH,
+    TOOL_LEXICON_LOOKUP,
+    TOOL_LEXICON_DEFINE,
 ];
 
 #[derive(Clone)]
@@ -101,6 +112,18 @@ pub struct FlowgateServer {
     /// audit records but the guard cannot be satisfied (returns false).
     pub(crate) script_ack_store:
         Option<Arc<dyn mcp_flowgate_core::ports::ScriptAcknowledgmentStore>>,
+    /// SPEC §30.5 — runtime overlay over the config-stamped lexicon.
+    /// `gateway.lexicon.define` writes here; `search` / `lookup` read
+    /// the union (overlay wins on collision). Survives only for the
+    /// runtime's lifetime — operators persist by editing
+    /// `flowgate.yaml` and reloading.
+    pub(crate) lexicon_overlay:
+        Arc<std::sync::RwLock<std::collections::HashMap<String, Value>>>,
+    /// SPEC §30 — the config-loaded lexicon block (the persistent base).
+    /// Empty when no `lexicon:` block was declared in the config.
+    /// `search` / `lookup` read `lexicon_base` ∪ `lexicon_overlay`;
+    /// overlay wins on collision.
+    pub(crate) lexicon_base: Arc<Value>,
 }
 
 impl FlowgateServer {
@@ -116,7 +139,21 @@ impl FlowgateServer {
             skills_search_enabled: false,
             scripts_search_enabled: false,
             script_ack_store: None,
+            lexicon_overlay: Arc::new(std::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            lexicon_base: Arc::new(json!({})),
         }
+    }
+
+    /// SPEC §30 — wire the persistent (config-loaded) lexicon base.
+    /// Callers pass the resolved config's `lexicon:` block (or an empty
+    /// object when none was declared). Runtime writes via
+    /// `gateway.lexicon.define` go into a separate overlay; reads
+    /// merge both.
+    pub fn with_lexicon(mut self, lexicon: Value) -> Self {
+        self.lexicon_base = Arc::new(lexicon);
+        self
     }
 
     pub fn with_discovery(mut self, discovery: Arc<dyn DiscoveryIndex>) -> Self {
@@ -215,6 +252,9 @@ impl FlowgateServer {
                 }
                 self.handle_scripts_search(args).await
             }
+            TOOL_LEXICON_SEARCH => self.handle_lexicon_search(args).await,
+            TOOL_LEXICON_LOOKUP => self.handle_lexicon_lookup(args).await,
+            TOOL_LEXICON_DEFINE => self.handle_lexicon_define(args, principal).await,
             other => {
                 return Err(McpError::invalid_params(
                     format!("Unknown tool '{other}'. Use list_tools to discover."),

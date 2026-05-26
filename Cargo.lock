@@ -3458,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3478,15 +3478,17 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
  "criterion",
  "futures",
+ "globset",
  "jsonschema",
  "rand 0.8.6",
+ "reqwest 0.13.3",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3503,7 +3505,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-executors"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3526,7 +3528,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-mcp-server"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3545,7 +3547,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-schema"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3560,7 +3562,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-flowgate-tui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -3571,7 +3573,10 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs 5.0.1",
+ "mcp-flowgate-core",
+ "rmcp",
  "serde_json",
+ "serde_yaml",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -4551,6 +4556,7 @@ checksum = "62e0021ea2c22aed41653bc7e1419abb2c97e038ff2c33d0e1309e49a97deec0"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2 0.4.14",

@@ -531,6 +531,87 @@ pub(crate) fn path_to_pointer(path: &str) -> String {
     result
 }
 
+/// SPEC §24.2 — evaluate a `parallel` `join: { expression: <expr> }`
+/// condition against the just-aggregated executor output value. The
+/// expression surface mirrors `expr` guards: binary comparisons
+/// (`==`, `!=`, `<`, `<=`, `>`, `>=`, `starts_with`, `contains`) over
+/// operands that are literals (numeric / quoted string / bool / null)
+/// OR `$.<path>` references resolved against `output`.
+///
+/// **Evaluation timing.** The parallel executor calls this **after**
+/// every branch has completed (or been cancelled / failed). Expression
+/// joins do NOT support early-exit cancellation of siblings — by
+/// construction, the expression cannot observe a still-running branch.
+/// This is the structural answer to the SPEC §24.8 amendment criterion
+/// concern about expression-based joins reading mid-flight state.
+///
+/// Returns `Ok(true)` if the expression evaluates truthy, `Ok(false)`
+/// for falsy or unparseable input. `Err` is reserved for cases that
+/// should hard-fail (currently none — the implementation is
+/// intentionally tolerant of malformed expressions, mirroring `expr`
+/// guards which return `false` on parse failure).
+pub fn evaluate_join_expression(expr: &str, output: &Value) -> anyhow::Result<bool> {
+    // Trim a leading `$.` if the operator passed a bare path expecting
+    // truthiness check. Bare paths are convenience syntax for
+    // "is this truthy?"; binary expressions get full operator handling.
+    let trimmed = expr.trim();
+    if parse_binary_expr(trimmed).is_none() {
+        // Pure path → resolve and check truthiness.
+        if let Some(path) = trimmed.strip_prefix("$.") {
+            let resolved = output
+                .pointer(&path_to_pointer(path))
+                .cloned()
+                .unwrap_or(Value::Null);
+            return Ok(is_truthy(&resolved));
+        }
+        return Ok(false);
+    }
+    let Some((left, op, right)) = parse_binary_expr(trimmed) else {
+        return Ok(false);
+    };
+    let l = resolve_output_operand(left, output);
+    let r = resolve_output_operand(right, output);
+    Ok(compare_values(&l, op, &r))
+}
+
+fn resolve_output_operand(s: &str, output: &Value) -> Value {
+    let s = s.trim();
+    if (s.starts_with('"') && s.ends_with('"') && s.len() >= 2)
+        || (s.starts_with('\'') && s.ends_with('\'') && s.len() >= 2)
+    {
+        return Value::String(s[1..s.len() - 1].to_string());
+    }
+    match s {
+        "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        "null" => return Value::Null,
+        _ => {}
+    }
+    if let Ok(n) = s.parse::<f64>() {
+        return serde_json::Number::from_f64(n)
+            .map(Value::Number)
+            .unwrap_or(Value::Null);
+    }
+    if let Some(path) = s.strip_prefix("$.") {
+        return output
+            .pointer(&path_to_pointer(path))
+            .cloned()
+            .unwrap_or(Value::Null);
+    }
+    Value::Null
+}
+
+fn is_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+    }
+}
+
 fn compare_values(a: &Value, op: &str, b: &Value) -> bool {
     // Numeric comparisons work whenever both sides are numbers.
     if let (Some(an), Some(bn)) = (a.as_f64(), b.as_f64()) {

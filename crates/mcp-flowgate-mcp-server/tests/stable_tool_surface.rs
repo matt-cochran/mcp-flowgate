@@ -1,10 +1,12 @@
-//! Invariant 9 from INIT-1 §17:
+//! Invariant 9 from INIT-1 §17 (extended through SPEC §30):
 //! "MCP-facing tools remain stable."
 //!
-//! No matter what's in the gateway config, the rmcp tool list is exactly
-//! `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain`.
-//! All capability surfacing happens through HATEOAS links inside response
-//! payloads, never through new MCP tools.
+//! The original seven (gateway.* + workflow.*) are joined by three v0.4.x
+//! lexicon tools (SPEC §30.5). The invariant is preserved: the surface
+//! grows ADDITIVELY via SPEC amendments; no removals, no shape changes
+//! to existing tools. All capability surfacing for configs still happens
+//! through HATEOAS links inside response payloads — the gateway.* and
+//! workflow.* tools never multiply per config.
 
 use mcp_flowgate_mcp_server::{tool_definitions, STABLE_TOOL_NAMES};
 
@@ -16,10 +18,11 @@ fn tool_list_matches_stable_names_exactly() {
 }
 
 #[test]
-fn stable_tool_names_are_the_documented_seven() {
+fn stable_tool_names_are_the_documented_ten() {
     assert_eq!(
         STABLE_TOOL_NAMES,
         &[
+            // Original 7 — INIT-1 §17, locked by deprecation cycle (Tier 1).
             "gateway.home",
             "gateway.search",
             "gateway.describe",
@@ -27,6 +30,10 @@ fn stable_tool_names_are_the_documented_seven() {
             "workflow.get",
             "workflow.submit",
             "workflow.explain",
+            // Lexicon trio — SPEC §30.5 (v0.4.x).
+            "gateway.lexicon.search",
+            "gateway.lexicon.lookup",
+            "gateway.lexicon.define",
         ]
     );
 }

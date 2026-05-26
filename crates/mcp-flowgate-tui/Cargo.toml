@@ -37,6 +37,17 @@ dirs = "5"
 async-trait.workspace = true
 thiserror.workspace = true
 
+# SPEC §21 — production `McpToolCaller` impl: rmcp client that talks to
+# a `mcp-flowgate` child process over stdio. Same workspace dep + same
+# feature set the executors crate uses for outbound MCP calls.
+rmcp = { workspace = true }
+
+# Tranche 3 (flowgate doctor) — pre-flight checks call core's config
+# resolver and parse YAML directly to surface resolve-time errors
+# without spinning the runtime.
+mcp-flowgate-core = { workspace = true }
+serde_yaml = { workspace = true }
+
 # Library surface: `interpreter`, `agent_config`, `tui_config`, `sub_agent`
 # (see src/lib.rs). Integration tests import via `mcp_flowgate_tui::…`.
 [lib]

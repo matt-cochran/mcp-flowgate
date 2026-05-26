@@ -12,9 +12,16 @@ pub struct TuiConfig {
     /// DEFAULT — must be set via `--max-sub-agent-seconds`.
     pub max_sub_agent_seconds: u64,
 
-    /// Maximum tool calls a sub-agent may make before the interpreter
-    /// forces a stop. NO DEFAULT — must be set via
-    /// `--max-sub-agent-steps`.
+    /// **Advisory** step-count hint surfaced to the operator (and
+    /// logged at every spawn). NOT currently enforced by the
+    /// interpreter: `aether_cli::headless::run_headless` runs the
+    /// sub-agent to its own `AgentMessage::Done` OR the wall-clock
+    /// timeout (`max_sub_agent_seconds`) — there is no in-band hook to
+    /// abort on the Nth tool call. The wall-clock timeout is the
+    /// enforced cap. NO DEFAULT — must be set via
+    /// `--max-sub-agent-steps` so operators are forced to declare what
+    /// they consider reasonable, even though the runtime can only
+    /// honour the time bound today.
     pub max_sub_agent_steps: usize,
 
     /// Warn-level threshold for sub-agent blackboard size (serialized

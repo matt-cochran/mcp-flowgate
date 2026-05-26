@@ -10,6 +10,95 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — Lexicon / Ubiquitous Language primitive (SPEC §30)
+
+- **`lexicon:` top-level config block** — typed vocabulary store
+  embedded in `flowgate.yaml` (Tier 1, per-config). Each entry:
+  `{definition, bounded_context?, examples?, refs?, governance?}`.
+  Validated at config load (`INVALID_LEXICON_ENTRY`).
+- **Snapshot stamping** — every workflow gets `_lexiconLibrary` on
+  its definition snapshot, mirroring `_skillsLibrary` per SPEC §8.2.
+  In-flight workflows immune to mid-flight lexicon edits.
+- **Three new MCP tools** added to the always-advertised set
+  (becoming 10 total): `gateway.lexicon.search`,
+  `gateway.lexicon.lookup`, `gateway.lexicon.define`.
+- **Governance default: `human-only`** — agents calling
+  `gateway.lexicon.define` against `human-only` terms get
+  `LEXICON_DEFINE_REQUIRES_HUMAN`. Workflows route through an
+  `actor: human` transition to commit. `agent-may-propose` is the
+  opt-in alternative for scratch / sandbox vocabularies.
+- **Runtime overlay** — `gateway.lexicon.define` writes land in an
+  in-memory overlay (gateway lifetime only). Operators persist by
+  editing `flowgate.yaml` and reloading. `lexicon.defined` audit
+  event records each successful define.
+- **STABILITY Tier 1 entries** for the config shape, MCP tools, and
+  governance default.
+- 20 new tests in `crates/mcp-flowgate-core/tests/lexicon.rs`.
+- `stable_tool_surface.rs` invariant test updated from 7 → 10 names
+  (additive; the original 7 retain Tier 1 commitments).
+
+## [0.4.0] - 2026-05-25
+
+Substantial additive release. New executor surface, new URI schemes,
+new state-machine primitives, real `flowgate walk` wiring. All
+changes additive; no breaking changes to v0.3 surfaces.
+
+### Added — Workflow primitives
+
+- **`pipeline` executor kind** (SPEC §25) — sequential composition of
+  N executor steps inside one transition; each step's `output` threads
+  as the next step's `$.input`. `on_step_failure: bail | continue`.
+- **`while:` loop on a state** (SPEC §26) — state-level guard
+  re-evaluated after each transition; truthy → re-enter the state.
+  `max_iterations:` REQUIRED. Iteration counter cleared on actual exit.
+- **State-local blackboard slots** (SPEC §27) — slots may declare
+  `scope: state`. Cleared on state exit; preserved across `while:`
+  re-entry. Closes the long-standing SPEC §15 open question.
+
+### Added — Parallel executor enhancements
+
+- **Aggregator pattern** — `join: { aggregator: { kind: ..., ... } }`
+  is the general form for verdict computation. Any executor kind can
+  be an aggregator. `expression` is one built-in kind (inline eval);
+  others dispatch through the registry.
+- **`{percent: P}` join** — quorum as percentage with ceiling division.
+- **`{expression: "<expr>"}` join** — operator-supplied predicate
+  evaluated post-completion (sugar for aggregator).
+- **`branches.where: <predicate>` filter on `for_each`** — pre-fan-out
+  predicate; falsy elements dropped BEFORE branches spawn.
+
+### Added — Script URI schemes (SPEC §22.2)
+
+- **`https://` script URIs** — load-time blocking HTTP GET, 30 s
+  timeout, sha256-verified.
+- **`git+https://<host>/<repo>(.git)?@<ref>#<path>` script URIs** —
+  load-time `git archive --remote` extraction. `<ref>` MUST be
+  specified for reproducibility.
+
+### Added — TUI walker end-to-end wiring
+
+- **`flowgate walk` is wired end-to-end.** The CLI subcommand now
+  spawns `mcp-flowgate` as an rmcp child, starts the workflow, drives
+  it through `walk_workflow` against the real `AetherSubAgentSpawner`,
+  and prints the final context. Previously printed a stderr message
+  and exited 0.
+- **`FlowgateChildCaller`** (production `McpToolCaller` impl) wraps
+  an rmcp client over `TokioChildProcess`.
+
+### Documentation reconciliation
+
+- STABILITY Tier 1 entries for: noop first-class semantics, `(unset)`
+  template graceful-degradation, parallel join enum, pipeline, while
+  loop, state-local slots, `branches.where`.
+- `docs/TUI-AGENT.md` no longer claims the spawner is a stub.
+- `docs/LLM-LINK-FIDELITY.md` downgraded from "production blocker"
+  framing to "open research question."
+- `docs/BENCHMARK-COGNITIVE-ARCHITECTURE.md` (new) — methodology +
+  cost estimate ($300-500) + runbook for the cheap-models-vs-frontier
+  benchmark spike. Scaffold ready; runs need API budget.
+- `docs/TUI-AGENT-DESIGN.md` archives the former WIP.md scratch pad.
+  `SPEC_RESEARCH_GAPS.md` deleted (superseded by SPEC.md proper).
+
 ### Added — Parallel / fan-out execution (SPEC §24)
 
 - **`parallel` executor kind** — fan-out N concurrent branches inside
@@ -65,6 +154,22 @@ covered by a stability commitment.
   fan-out executors can emit per-branch events with the parent's
   linkage. Existing executors that don't care continue to ignore the
   field.
+
+### Added — TUI sub-agent + walk hardening (GAP-C closure)
+
+- **`AetherSubAgentSpawner` is no longer a stub.** Previously surfaced
+  `SubAgentTimeout` unconditionally; now invokes
+  `aether_cli::headless::run_headless` with a wall-clock timeout
+  driven by `TuiConfig::max_sub_agent_seconds`. The trait scaffolding
+  was correct; only the concrete call site changed.
+- **`flowgate walk` fails loud when not wired.** The CLI subcommand
+  now returns `ExitCode::FAILURE` with `WALK_NOT_WIRED` when the rmcp
+  child-process `McpToolCaller` hasn't been wired (still pending),
+  instead of silently returning `Ok` with an eprintln message.
+  Discoverable absence > silent success.
+- **Smoke test** `crates/mcp-flowgate-tui/tests/sub_agent_smoke.rs`
+  covers construction + a `#[ignore]`-gated live-spawn test (requires
+  `ANTHROPIC_API_KEY` and a live `mcp-flowgate` on PATH).
 
 ## [0.3.0] - 2026-05-25
 

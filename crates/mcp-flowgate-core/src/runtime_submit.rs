@@ -123,6 +123,52 @@ impl WorkflowRuntime {
                 .await);
         }
 
+        // SPEC §29 — generic per-state fire cap. A transition may declare
+        // `max_fires_per_visit: N` to bound how many times it can fire
+        // before the workflow advances to a different state. Counter
+        // lives in synthetic context slot `_fire_count.<state>.<transition>`
+        // and resets on state exit (handled in clear_state_local_slots_on_exit
+        // — synthetic slots whose state matches the leaving state get
+        // scrubbed). Useful for `ask_human` self-loops (prevent agent
+        // spamming) but generic — applies to any transition.
+        if let Some(max_fires) = transition
+            .get("max_fires_per_visit")
+            .and_then(Value::as_u64)
+        {
+            let key = format!(
+                "_fire_count.{}.{}",
+                instance.state, request.transition
+            );
+            let current = instance
+                .context
+                .get(&key)
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if current >= max_fires {
+                return Ok(self
+                    .record_rejected(
+                        &definition,
+                        &instance,
+                        "TRANSITION_FIRE_CAP_EXCEEDED",
+                        format!(
+                            "Transition '{}' has fired {} times in state '{}' \
+                             (max_fires_per_visit = {}). Cap is per-state-entry \
+                             and resets when the workflow advances. Either raise \
+                             the cap, or have the workflow advance to a different \
+                             state before re-firing.",
+                            request.transition,
+                            current,
+                            instance.state,
+                            max_fires
+                        ),
+                        &request.transition,
+                        &correlation_id,
+                        &request.principal,
+                    )
+                    .await);
+            }
+        }
+
         let mut arguments = request.arguments;
         apply_schema_defaults(transition.pointer("/inputSchema"), &mut arguments);
         if let Err(err) = validate_schema(
@@ -266,6 +312,31 @@ impl WorkflowRuntime {
                             )
                             .await);
                     }
+
+                    // SPEC §28: declarative slot constraints evaluated at
+                    // write-time. Catches violations at the agent's edit
+                    // site, not at downstream guard read. Compose with
+                    // typed-schema validation above (which handles regex /
+                    // min / max / length / enum); §28 adds the things
+                    // JSON Schema can't express (path_allowlist,
+                    // subset_of dynamic reference).
+                    if let Err(v) = crate::slot_constraint::evaluate_constraints(
+                        &definition,
+                        &instance.state,
+                        &next.context,
+                    ) {
+                        return Ok(self
+                            .record_rejected(
+                                &definition,
+                                &instance,
+                                "SLOT_CONSTRAINT_VIOLATED",
+                                v.message,
+                                &request.transition,
+                                &correlation_id,
+                                &request.principal,
+                            )
+                            .await);
+                    }
                     child_workflow_id = result.child_workflow_id.clone();
                     // SPEC §20.1 — validate every evidence record's
                     // confidence range BEFORE accepting it into the
@@ -331,12 +402,35 @@ impl WorkflowRuntime {
             }
         }
 
+        // SPEC §29 — increment per-state fire counter on successful fire.
+        // The pre-check at the top of submit consults this counter to
+        // enforce `max_fires_per_visit`. Stored in synthetic context
+        // slot `_fire_count.<state>.<transition>`; scrubbed on state exit.
+        if transition
+            .get("max_fires_per_visit")
+            .and_then(Value::as_u64)
+            .is_some()
+        {
+            let key = format!(
+                "_fire_count.{}.{}",
+                instance.state, request.transition
+            );
+            if let Some(ctx) = next.context.as_object_mut() {
+                let n = ctx
+                    .get(&key)
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .saturating_add(1);
+                ctx.insert(key, json!(n));
+            }
+        }
+
         // Pick the destination state. By default it's the transition's
         // `target`, but `branches: [{ when, target }]` can override based on
         // the executor's result and the post-output context. First branch
         // whose `when` guard passes wins; otherwise the declared target.
         let from_state = next.state.clone();
-        let target = self
+        let mut target = self
             .resolve_target(
                 &transition,
                 &next,
@@ -345,6 +439,41 @@ impl WorkflowRuntime {
                 &correlation_id,
             )
             .await?;
+
+        // SPEC §26 — `while: <guard>` loop. When the FROM state declares
+        // a while-guard AND that guard evaluates truthy against the
+        // post-transition context, re-route target to from_state so the
+        // workflow re-enters the same state. Tracks iteration count in
+        // the synthetic `_while_iter.<state>` context slot; resets when
+        // we actually leave. `max_iterations` cap is REQUIRED on while:
+        // and enforced here — exceeding it fails with WHILE_ITERATION_CAP_EXCEEDED.
+        if let Some(rerouted) = self
+            .apply_while_loop(
+                &definition,
+                &from_state,
+                &target,
+                &mut next,
+                &arguments,
+                &request.principal,
+                &correlation_id,
+            )
+            .await?
+        {
+            target = rerouted;
+        }
+
+        // SPEC §27 — clear state-local slots when actually leaving the
+        // state. No-op for self-loops / while: re-entry (target == from).
+        self.clear_state_local_slots_on_exit(
+            &definition,
+            &from_state,
+            &target,
+            &mut next,
+            &correlation_id,
+            &request.principal,
+        )
+        .await;
+
         next.state = target;
         next.version += 1;
 

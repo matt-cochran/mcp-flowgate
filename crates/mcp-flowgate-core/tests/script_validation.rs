@@ -279,15 +279,17 @@ fn uri_without_hash_rejects_with_missing_script_hash() {
 
 #[test]
 fn uri_with_unsupported_scheme_rejects() {
+    // SPEC §22.2 — supported schemes: file://, https://, git+https://.
+    // Other schemes (s3, ftp, gs, ssh, etc.) reject at validate time.
     let yaml = cfg(
         r#"  build.cargo.release:
     verb: build
     lifecycle: stable
-    uri: https://example.com/build.sh
+    uri: s3://example-bucket/build.sh
     hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 "#,
     );
-    assert_load_error(&yaml, "UNSUPPORTED_SCRIPT_URI_SCHEME", "https");
+    assert_load_error(&yaml, "UNSUPPORTED_SCRIPT_URI_SCHEME", "s3");
 }
 
 // ── hash format ────────────────────────────────────────────────────────────
@@ -406,4 +408,101 @@ fn script_hash_distinguishes_internal_whitespace_changes() {
         compute_script_hash("if [[ x ]]"),
         compute_script_hash("if [[  x  ]]"),
     );
+}
+
+// ── https:// + git+https:// URI schemes (SPEC §22.2) ──────────────────────
+
+#[test]
+fn https_uri_passes_validate_phase_when_hash_declared() {
+    // Validation accepts the scheme. The actual fetch+hash check
+    // happens at stamp time — resolve_str will fail with a network
+    // error (invalid host), but NOT with UNSUPPORTED_SCRIPT_URI_SCHEME,
+    // proving the validator accepted https://.
+    let yaml = cfg(
+        r#"  build.example.from-net:
+    verb: build
+    lifecycle: stable
+    uri: https://example.invalid/path/to/script.sh
+    hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+"#,
+    );
+    let err = resolve_str(&yaml).expect_err("network fetch must fail for invalid host");
+    let s = format!("{err:?}");
+    assert!(
+        !s.contains("UNSUPPORTED_SCRIPT_URI_SCHEME"),
+        "validator wrongly rejected https://; got: {s}"
+    );
+}
+
+#[test]
+fn https_uri_rejects_without_hash() {
+    let yaml = cfg(
+        r#"  build.example.from-net:
+    verb: build
+    lifecycle: stable
+    uri: https://example.invalid/path/to/script.sh
+"#,
+    );
+    assert_load_error(&yaml, "MISSING_SCRIPT_HASH", "build.example.from-net");
+}
+
+#[test]
+fn git_https_uri_passes_validate_phase_when_well_formed() {
+    // Same pattern as the https test: validator must accept the
+    // shape; stamp-time `git archive` against a nonexistent repo
+    // will fail with GIT_ARCHIVE_NOT_SUPPORTED (or git-spawn error),
+    // but NOT with INVALID_GIT_HTTPS_URI / UNSUPPORTED_SCRIPT_URI_SCHEME.
+    let yaml = cfg(
+        r#"  build.example.from-git:
+    verb: build
+    lifecycle: stable
+    uri: git+https://github.invalid/example/repo.git@v1.2.3#scripts/build.sh
+    hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+"#,
+    );
+    let err = resolve_str(&yaml).expect_err("git archive must fail for invalid host");
+    let s = format!("{err:?}");
+    assert!(
+        !s.contains("UNSUPPORTED_SCRIPT_URI_SCHEME") && !s.contains("INVALID_GIT_HTTPS_URI"),
+        "validator wrongly rejected git+https shape; got: {s}"
+    );
+}
+
+#[test]
+fn git_https_uri_rejects_without_path_fragment() {
+    let yaml = cfg(
+        r#"  build.example.no-frag:
+    verb: build
+    lifecycle: stable
+    uri: git+https://github.com/example/repo.git@v1.2.3
+    hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+"#,
+    );
+    assert_load_error(&yaml, "INVALID_GIT_HTTPS_URI", "missing the `#<path>`");
+}
+
+#[test]
+fn git_https_uri_rejects_without_ref() {
+    let yaml = cfg(
+        r#"  build.example.no-ref:
+    verb: build
+    lifecycle: stable
+    uri: git+https://github.com/example/repo.git#scripts/build.sh
+    hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+"#,
+    );
+    assert_load_error(&yaml, "INVALID_GIT_HTTPS_URI", "missing the `@<ref>`");
+}
+
+#[test]
+fn unsupported_uri_scheme_rejects() {
+    let yaml = cfg(
+        r#"  build.example.bad-scheme:
+    verb: build
+    lifecycle: stable
+    uri: ftp://example.invalid/path/to/script.sh
+    hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
+"#,
+    );
+    assert_load_error(&yaml, "UNSUPPORTED_SCRIPT_URI_SCHEME", "ftp://");
 }

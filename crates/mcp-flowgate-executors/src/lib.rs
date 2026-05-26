@@ -8,6 +8,7 @@ pub mod ingest;
 pub mod mcp;
 pub mod noop;
 pub mod parallel;
+pub mod pipeline;
 pub mod registry;
 pub mod registry_executor;
 pub mod rest;
@@ -23,6 +24,7 @@ pub use ingest::IngestExecutor;
 pub use mcp::{McpConnection, McpConnections, McpExecutor};
 pub use noop::NoopExecutor;
 pub use parallel::ParallelExecutor;
+pub use pipeline::PipelineExecutor;
 
 /// SPEC §24 GAP-E mitigation — the canonical list of executor kinds the
 /// default registry builders wire in. Tooling (drift tests, schema
@@ -40,6 +42,7 @@ pub const REGISTERED_EXECUTOR_KINDS: &[&str] = &[
     "mcp",
     "noop",
     "parallel",
+    "pipeline",
     "rest",
     "script",
     "workflow",
@@ -87,6 +90,7 @@ pub fn default_registry_with_mcp(
     // with a clone, then wire the registry back into the parallel executor
     // after the registry Arc exists.
     let parallel = Arc::new(ParallelExecutor::new(audit.clone()));
+    let pipeline = Arc::new(PipelineExecutor::new(audit.clone()));
     let registry = HashMapExecutorRegistry::new()
         .with("cli", Arc::new(CliExecutor::new(cli_connections)))
         .with(
@@ -97,10 +101,12 @@ pub fn default_registry_with_mcp(
         .with("human", Arc::new(HumanExecutor::with_audit(audit)))
         .with("noop", Arc::new(NoopExecutor))
         .with("script", Arc::new(ScriptExecutor::new()))
-        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
+        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>)
+        .with("pipeline", pipeline.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
 
     let registry: Arc<dyn ExecutorRegistry> = Arc::new(registry);
     parallel.set_registry(registry.clone());
+    pipeline.set_registry(registry.clone());
     registry
 }
 
@@ -115,6 +121,7 @@ pub fn default_registry_with_workflow(
 ) -> Arc<dyn ExecutorRegistry> {
     let rest_connections = Arc::new(RestConnections::from_config(config));
     let parallel = Arc::new(ParallelExecutor::new(audit.clone()));
+    let pipeline = Arc::new(PipelineExecutor::new(audit.clone()));
     let registry = HashMapExecutorRegistry::new()
         .with("cli", Arc::new(CliExecutor::new(cli_connections)))
         .with(
@@ -126,9 +133,11 @@ pub fn default_registry_with_workflow(
         .with("noop", Arc::new(NoopExecutor))
         .with("script", Arc::new(ScriptExecutor::new()))
         .with("workflow", Arc::new(WorkflowExecutor::new(runtime, audit)))
-        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
+        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>)
+        .with("pipeline", pipeline.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
 
     let registry: Arc<dyn ExecutorRegistry> = Arc::new(registry);
     parallel.set_registry(registry.clone());
+    pipeline.set_registry(registry.clone());
     registry
 }

@@ -26,6 +26,20 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+# SPEC §22.2 — load-time HTTP fetch for https:// script URIs.
+# Blocking client because config loading is synchronous and we don't
+# want to bubble async up through every load_yaml call. The fetch
+# happens exactly once at load + snapshot-stamp time; the body is
+# then materialized into the snapshot per §8.2 so the network is not
+# touched again for that script. We override the workspace reqwest
+# locally to add `blocking` (the workspace dep is async-only because
+# the executors crate uses the async client).
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls", "blocking"] }
+
+# SPEC §28 — path_allowlist constraint kind uses gitignore-syntax
+# glob matching. `globset` is the same matcher ripgrep/cargo use;
+# proven, fast (compiled trie).
+globset = "0.4"
 
 [[bench]]
 name = "workflow_bench"

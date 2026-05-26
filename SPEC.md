@@ -676,7 +676,7 @@ introduced (§4).
 - **Per-run outcome tag** — a success/failure signal per run would make the §5.6
   loop quantitative. Derivable from terminal states in the records today; a
   first-class tag is deferred until there is demand.
-- **State-local blackboard slots** — deferred (lifecycle complexity).
+- **State-local blackboard slots** — **closed** in §27. Phase 1 (declaration, exit-cleanup, audit event) shipped; full-validator support (`INVALID_SLOT_REDECLARATION`) follows in the next cycle.
 - **Structured `summary`** — `summary` is a plain string; a schema'd summary is
   a later option.
 - **Request-schema unification** (§10) — separate tech-debt ticket.
@@ -1070,11 +1070,21 @@ reference) is required.
 - **Inline `body:`** — the literal script content. Hash is computed at
   load time. If the author also provides `hash:`, mismatch is
   `SCRIPT_HASH_MISMATCH`. v1 supports only `body:` and `uri: file://`.
-- **External `uri:`** — `file://` URI resolved at load time. Path is
-  relative to the config file that declared it. `hash:` is **required**;
-  the runtime fetches the body, computes its hash, and rejects on
-  mismatch (`SCRIPT_HASH_MISMATCH`). Deferred to v2: `https://` and
-  `git+https://...@<ref>`.
+- **External `uri:`** — `hash:` is **required**; the runtime fetches
+  the body, computes its hash, and rejects on mismatch
+  (`SCRIPT_HASH_MISMATCH`). Three schemes:
+  - `file://<path>` — resolved relative to the config file at load time.
+  - `https://<url>` — load-time HTTP GET (blocking, 30 s timeout,
+    anonymous). The declared `hash:` is what makes this safe — fetched
+    bytes are verified before they enter the snapshot.
+  - `git+https://<host>/<repo>(.git)?@<ref>#<path>` — load-time
+    `git archive --remote=<https-url> <ref> <path>` extraction.
+    `<ref>` MUST be specified (no implicit `HEAD` / `main`) so the
+    snapshot is reproducible. Many forges (GitHub, GitLab.com) disable
+    `upload-archive` for security; when that happens the load fails
+    with `GIT_ARCHIVE_NOT_SUPPORTED` and the operator's workaround is
+    to host via plain `https://` (raw.githubusercontent.com URLs etc.)
+    or run a self-hosted mirror that permits `upload-archive`.
 
 **Normalization** is stricter than the skill hash. Shell scripts treat
 whitespace as load-bearing (`if [[ x ]]` ≠ `if [[  x  ]]`), so the
@@ -1379,7 +1389,8 @@ executor:
     - { kind: script, subject: ... }
     - { kind: mcp,    connection: ..., tool: ... }
     - { kind: workflow, definitionId: critique-agent, input: { ... } }
-  join: all                            # all (default) | any | { at_least: K }
+  join: all                            # all (default) | any | { at_least: K } |
+                                       # { percent: P } | { expression: "<expr>" }
   max_concurrency: 4                   # REQUIRED when branches.len() >= 10
   on_branch_failure: bail              # bail (default) | continue
   total_timeout_ms: 60000              # optional
@@ -1407,6 +1418,18 @@ markers replaced per branch when the `do:` template is expanded.
 - `any` — first success wins; siblings cancelled.
 - `{at_least: K}` — succeeds iff K or more branches succeed; failures
   making K unreachable fail early.
+- `{percent: P}` — succeeds iff `ok_count >= ceil(P * n / 100)`.
+  Ceiling division avoids silent rounding (e.g. `51% of 3` requires 2
+  successes, not 1). `percent: 0` is the explicit "never fail by
+  quorum" escape hatch; vacuous fan-out (n=0) succeeds.
+- `{expression: "<expr>"}` — operator-supplied predicate evaluated
+  **post-completion** against the aggregated value (paths `$.branches[]`,
+  `$.ok_count`, `$.failed_count`, `$.cancelled_count`, `$.n`). Same
+  binary-comparison surface as `expr` guards plus bare-path
+  truthiness. **No early exit** — every branch runs before the
+  expression evaluates. This guarantees the expression cannot observe
+  a still-running branch (structural answer to the prior amendment
+  criterion concern).
 
 **Failure modes:**
 
@@ -1517,6 +1540,33 @@ every branch's start time staggers by roughly its predecessor's
 duration, transport is serialising. No new metric needed; the existing
 audit fields surface the symptom.
 
+### 24.7.1 Sub-agent stdout interleaving on `parallel` + `delegate`
+
+`parallel` branches resolving to `kind: workflow` against a workflow
+whose states declare `delegate:` will run sub-agents concurrently —
+**and their stdout streams interleave on the parent's stdout** because
+aether's `CliOutputFormat::Text` (used by `AetherSubAgentSpawner`)
+writes directly to the parent process's stdout with no line-prefixing.
+
+Operators wanting deterministic per-branch attribution should:
+
+- **Use the audit log, not stdout, for branch identification.** Every
+  branch event carries `branch_index` + parent `correlation_id` +
+  per-branch `correlation_id`; the audit log is the canonical source.
+- **For human-readable per-branch transcripts**, configure the audit
+  sink to file-rotate per-correlation-id (see §20.6), then read the
+  branch's file post-walk.
+- **Or run delegate sub-agents sequentially** — keep `delegate:` out
+  of `parallel` branches; use `parallel` only with `kind: script` /
+  `kind: cli` / `kind: mcp` branches that don't stream LLM tokens to
+  stdout.
+
+Per-branch stdout multiplexing in the TUI itself is deferred — it
+would require either a stdout multiplexer wrapping aether's output
+sink (significant aether internals work) or capturing each sub-agent's
+output into a buffer per branch (significant memory cost for long
+runs). Audit-log-based attribution is the v1 answer.
+
 ### 24.8 Recursion-depth cap + amendment criterion
 
 `max_recursion_depth` (default 3) caps parallel-of-parallels nesting.
@@ -1526,13 +1576,27 @@ should need; operators with deeper-nesting use cases override
 explicitly. The cap exists to catch authoring bugs that produce
 exponential fan-out by accident.
 
-**Amendment criterion** (mirrors §23.7) for future v0.4+ additions:
-- `percent: X` join — concrete use case + ratio-vs-count rationale
-- Expression-based join (`join_when: <guard expr>`) — edge case
-  analysis for "guard reads still-running branch's output"
+**Shipped since this section was drafted** (v0.4 cycle):
+- `{percent: P}` join — quorum expressed as percentage. Threshold
+  uses ceiling division (`ceil(P * n / 100)`) so `51% of 3` rounds to
+  `2 required`, not `1`. `percent: 0` is the explicit "never fail by
+  quorum" escape hatch. Vacuous fan-out (n=0) succeeds.
+- `{expression: "<expr>"}` join — operator-supplied predicate
+  evaluated **post-completion** against `{branches[], ok_count,
+  failed_count, cancelled_count, n}`. Same binary-comparison surface
+  as `expr` guards (`==`, `!=`, `<`, `<=`, `>`, `>=`, `starts_with`,
+  `contains`) plus bare-path truthiness check. **NO early exit** —
+  expression cannot observe a still-running branch by construction.
+  This is the structural answer to the "guard reads still-running
+  branch's output" concern that previously deferred this feature.
+
+**Amendment criterion** (mirrors §23.7) for future v0.5+ additions:
 - Compensating transactions — distributed-saga shape proposal
 - Multi-active-state workflow execution — strong justification
   required; preserves the §24.5 invariant or explicitly amends it.
+- Streaming / mid-flight join expressions — would require branch
+  cancellation semantics for partially-evaluated predicates;
+  deliberately not done in v0.4 (see §24.2 expression timing note).
 
 ### 24.9 Error codes added by §24
 
@@ -1547,3 +1611,735 @@ exponential fan-out by accident.
 `[*]` array-projection mapping errors fall under the existing mapping
 contract (`None` for unresolvable paths); no new error code needed in
 v1.
+
+## 25. Pipeline executor (sequential composition)
+
+### 25.1 Why pipeline
+
+Workflows already express sequential steps via N states with
+auto-advance. That's correct but expensive: N transitions, N version
+bumps, N transition records, N storage round-trips. When the steps
+are tightly coupled ("compile, then test, then publish — atomic
+unit"), authors want one transition that runs the whole chain.
+
+`kind: pipeline` is the FP-compose primitive: N executors run in
+order, each step's `output` threads as the next step's `$.input`.
+Inside one transition. One version bump. One transition record.
+
+Mirrors `kind: parallel` (§24): both encapsulate sub-execution
+inside a single outer transition; both preserve all workflow
+invariants; both reuse the executor registry via back-reference.
+
+### 25.2 Config
+
+```yaml
+executor:
+  kind: pipeline
+  steps:                                # array of executor configs
+    - { kind: script, subject: build.cargo.release }
+    - { kind: cli,    connection: shell, command: "verify" }
+    - { kind: mcp,    connection: notifier, tool: report }
+  on_step_failure: bail                 # bail (default) | continue
+  total_timeout_ms: 60000               # optional
+```
+
+Each `steps[]` entry is any valid executor config — including nested
+`pipeline` or `parallel`. The schema is recursive.
+
+### 25.3 Output shape
+
+```json
+{
+  "steps": [
+    { "ok": true,  "index": 0, "output": { ... } },
+    { "ok": true,  "index": 1, "output": { ... } },
+    { "ok": false, "index": 2, "error": { "code": "...", "message": "..." } }
+  ],
+  "final_output": { ... last successful step's output ... },
+  "summary": {
+    "n":                   3,
+    "ok_count":            2,
+    "failed_count":        1,
+    "durationMs":          420,
+    "first_failure_index": 2,
+    "verdict":             "succeeded" | "failed"
+  }
+}
+```
+
+`final_output` is the last successful step's `output`, OR `null` if
+the first step failed. Workflows that want only the terminal value
+can `output: $.output.final_output` without walking `steps[]`.
+
+### 25.4 Audit events
+
+- `pipeline.step.started`  — `{step_index, step_kind}`
+- `pipeline.step.completed` — `{step_index}`
+- `pipeline.step.failed`   — `{step_index, error_code}`
+- `pipeline.completed`     — `{summary}` (final rollup)
+
+All events share the parent transition's `correlation_id`. Steps run
+sequentially so the audit ordering is naturally `(seq, step_index)` —
+no per-event sub-counter needed (contrast with §24.4 parallel events
+where concurrency requires a three-tuple).
+
+### 25.5 Failure modes
+
+- `on_step_failure: bail` (default) — first failure stops the
+  pipeline; verdict is failed; subsequent steps are not started.
+- `on_step_failure: continue` — every step runs regardless of
+  upstream failures. Failed steps' `output` is **not** threaded
+  forward; the next step gets the most-recent SUCCESSFUL output as
+  its `$.input` (failures don't erase context built so far).
+
+### 25.6 Error codes
+
+| Code | When |
+|---|---|
+| `INVALID_PIPELINE_CONFIG` | Malformed config (missing `steps`, empty `steps`, bad `on_step_failure`) |
+| `PIPELINE_EXECUTOR_NOT_WIRED` | Registry wasn't set on `PipelineExecutor` post-construction |
+
+Sub-step failures surface their own executor error codes within
+`steps[].error.code` — pipeline does not remap them.
+
+## 26. State-level `while:` loop
+
+### 26.1 Why a while loop on a state
+
+Polling, retry-until-success, and "wait for converge" patterns
+currently require an N-state ping-pong or critic cycle. A direct
+loop primitive — "stay in this state until the guard goes false" —
+collapses that pattern to one state with a guard.
+
+### 26.2 Config
+
+```yaml
+states:
+  polling:
+    while: { kind: expr, expr: "$.context.poll_result == 'in_progress'" }
+    max_iterations: 30        # REQUIRED with while: — no default
+    transitions:
+      check:
+        target: done           # declared target IS USED when while goes false
+        executor:
+          kind: rest
+          # ... polls upstream, writes result to context.poll_result
+```
+
+### 26.3 Semantics
+
+After ANY transition fires from a state declaring `while:`:
+
+1. The runtime merges the executor's output into context (as today).
+2. The runtime resolves the transition's `target` (as today, including
+   `branches: [{when, target}]` resolution).
+3. **NEW:** the runtime evaluates the FROM-state's `while:` guard
+   against the post-output context.
+4. If `while:` is **truthy**, the runtime overrides the target to the
+   FROM state — workflow re-enters the same state. Iteration counter
+   in synthetic context slot `_while_iter.<state>` increments.
+5. If `while:` is **falsy**, the workflow proceeds to the resolved
+   target. Iteration counter is cleared.
+6. If iteration count > `max_iterations`,
+   `WHILE_ITERATION_CAP_EXCEEDED` fails the transition.
+
+### 26.4 `max_iterations` is REQUIRED
+
+There is no default. Operators MUST commit to a ceiling because:
+- An unbounded loop is the classic poka-yoke failure (a guard
+  condition that's wrong silently loops forever instead of failing).
+- The audit log fills with iteration events; budget pressure surfaces.
+- A wrong cap is recoverable (raise it after operator review); no cap
+  is unrecoverable (it eats all available resources).
+
+Configs that declare `while:` without `max_iterations:` fail at load
+with `INVALID_STATE_CONFIG`.
+
+### 26.5 Audit events
+
+- `workflow.state.iteration` — fired each time the runtime re-enters
+  the state due to a truthy while-guard. Payload:
+  `{state, iteration, max_iterations}`. Each iteration is a distinct
+  audited transition (separate `workflow.transition` record), so
+  per-iteration observability is automatic.
+
+### 26.6 Error codes
+
+| Code | When |
+|---|---|
+| `INVALID_STATE_CONFIG` | State declares `while:` without `max_iterations:` |
+| `WHILE_ITERATION_CAP_EXCEEDED` | While-guard remained truthy after `max_iterations` iterations |
+
+### 26.7 Composition
+
+`while:` composes with everything else:
+- **`while:` + `parallel:`** — parallel fans out branches inside a
+  state; while-guard re-enters that state after the parallel
+  completes, so the parallel re-runs each iteration.
+- **`while:` + `pipeline:`** — same; pipeline runs once per iteration.
+- **`while:` + `branches:`** — branch-based target picking is
+  evaluated first; while-guard overrides the picked target.
+- **`while:` + `delegate:`** — sub-agent re-spawns each iteration
+  (mind your budget — N sub-agent runs, N times the tool-call cost).
+
+## 27. State-local blackboard slots (closes §15 open question)
+
+### 27.1 Status
+
+SPEC §15 had "State-local blackboard slots — deferred (lifecycle
+complexity)" as an open question. The lifecycle was the blocker, not
+the slot declaration itself. §27 closes the question with an explicit
+lifecycle:
+
+- **Declaration**: a state may declare `slots:` with `scope: state`
+  entries (default scope is `workflow`, the current behaviour).
+- **Visibility**: a state-local slot is visible to guards, executors,
+  and templates ONLY while the workflow is in (or descended-from)
+  that state.
+- **Initialization**: cleared on state ENTER; values persist across
+  iterations of `while:` re-entry on the same state.
+- **Cleanup**: cleared on state EXIT — including chain-hop exits and
+  `while:` falsy-guard exits.
+- **Audit**: a `workflow.slot.cleared` event fires on exit, naming
+  each slot that was cleared.
+
+### 27.2 Declaration
+
+```yaml
+states:
+  retrieving:
+    slots:
+      retrieval_attempts:
+        type: integer
+        default: 0
+        scope: state              # NEW — defaults to workflow if absent
+      partial_results:
+        type: object
+        scope: state
+    transitions:
+      retry:
+        # writes to context.retrieval_attempts increment per try
+        executor: ...
+```
+
+### 27.3 Lifecycle semantics
+
+| Event | Action |
+|---|---|
+| `workflow.start` lands in state S with `slots: { scope: state }` declarations | Each declared slot is initialized to its `default:` value (or omitted if no default). |
+| Transition fires from state S to state T (T ≠ S) | Every state-local slot declared on S is cleared from context. `workflow.slot.cleared` audit event fired with `{state: S, slots: [<names>]}`. |
+| Transition fires from S back to S (via `while:` re-entry or explicit self-loop) | State-local slots PERSIST. Iteration n+1 sees iteration n's values. |
+| Chain hop S → T → U (S has state-local slots; T does too) | S's slots cleared on S→T; T's slots cleared on T→U. Standard transition cleanup. |
+
+### 27.4 Namespace
+
+State-local slot names share the context namespace with workflow-scope
+slots — the runtime tracks scope via the snapshot's slot declarations,
+not via a name prefix. **Name collision** between a state-local slot and
+a workflow-scope slot (or another state's local slot with the same
+name) is rejected at config-load with `INVALID_SLOT_REDECLARATION`.
+
+This means operators see clean `$.context.retrieval_attempts` paths in
+guards and templates, with the runtime ensuring the slot is bound to
+the right scope.
+
+### 27.5 Migration
+
+Existing configs with no `scope:` field on slot declarations continue
+to behave as before (workflow-scoped). The feature is fully additive;
+operators opt in by adding `scope: state`.
+
+### 27.6 Why this matters
+
+- **Polling state counters** — `retrieval_attempts` is meaningful in
+  the `retrieving` state, noise everywhere else. Without scoping, it
+  leaks into downstream state context.
+- **Sub-task intermediate results** — `partial_results` exists while a
+  state is converging; cleared once the state hands off a finalized
+  output. Prevents stale-intermediate-state contamination.
+- **`while:` loop accumulators** — counter slots like `consecutive_failures`
+  belong to the looping state's lifetime; clearing them on exit is
+  the correct semantic.
+
+### 27.7 Implementation status
+
+- **Declaration parsing**: shipped (this section).
+- **Runtime ENTER initialization + EXIT cleanup**: phase 1 implementation
+  in `runtime_submit.rs` (cleared on transition to different state).
+- **Audit event emission**: shipped (`workflow.slot.cleared`).
+- **`INVALID_SLOT_REDECLARATION` validator**: pending — runtime allows
+  redeclarations today; validator catches them as a follow-up tranche.
+
+## 28. Declarative slot constraints
+
+### 28.1 Why
+
+Without slot-level constraints, "this slot may only ever hold X" turns
+into an external verifier script per slot. Procedural. Invisible at
+authoring time. Reports failure via script exit code rather than a
+structured event.
+
+Slot constraints make the predicate declarative, evaluated at the
+moment of harm (write time), and surface failure via a typed
+`SLOT_CONSTRAINT_VIOLATED` event naming the slot, kind, and value.
+
+### 28.2 What this is NOT
+
+JSON Schema overlap — `pattern`, `minimum`, `maximum`, `minLength`,
+`maxLength`, `enum` — is handled by the slot's existing `type:` field
+(see SPEC §6.2 / `validate_blackboard_writes`). Constraint kinds in
+§28 are scoped to things JSON Schema CANNOT express:
+
+- File-path allowlist with glob patterns (`path_allowlist`)
+- Subset-of dynamic-path reference (`subset_of`)
+
+Power-user constraint expressions (full guard syntax over slot
+values) are deferred until a real operator demand surfaces.
+
+### 28.3 Declaration
+
+```yaml
+blackboard:
+  changed_files:
+    type: array
+    items: { type: string }
+    constraint:
+      path_allowlist:
+        allow:                              # required, non-empty
+          - "auth/**"
+          - "tests/auth/**"
+        deny:                               # optional, applied within allow
+          - "auth/legacy/**"
+
+  active_features:
+    type: array
+    constraint:
+      subset_of: "$.context.declared_features"
+
+  # State-local slots (SPEC §27) carry constraints with the same shape.
+states:
+  editing:
+    slots:
+      edited_files:
+        type: array
+        scope: state
+        constraint:
+          path_allowlist:
+            allow: ["src/auth/**"]
+```
+
+### 28.4 Constraint kinds
+
+#### `path_allowlist: { allow: [<glob>...], deny?: [<glob>...] }`
+
+- Slot value MUST be a JSON array of strings.
+- Every element MUST match at least one `allow:` glob.
+- If `deny:` is present, no element may match a `deny:` glob.
+- Glob syntax: gitignore-compatible (via the `globset` crate that
+  ripgrep / cargo use). `*` matches anything within a path segment;
+  `**` recurses; `?` matches one character; `[...]` matches a class.
+- `allow:` may NOT be empty — an allow-everything constraint is
+  misconfiguration, not a feature. Empty `allow:` rejects at load.
+
+#### `subset_of: "<path>"`
+
+- Value MUST be a JSON array.
+- Referenced path resolves against the post-write context.
+- Every element of the constrained slot's value MUST appear in the
+  referenced array.
+- An unresolvable reference (path is `null` / unset) is **fail-fast**,
+  not silent-pass — `SLOT_CONSTRAINT_VIOLATED` names the unset path so
+  the operator can fix ordering.
+- Supported reference prefixes: `$.context.*`. Other prefixes resolve
+  to null (silent — fail-fast then catches).
+
+### 28.5 Composition
+
+Multiple constraint kinds on one slot compose **conjunctively** — every
+declared kind must pass. The first failing kind short-circuits and
+surfaces. (No need to enumerate all failures; the operator sees one
+clear violation, fixes it, retries; subsequent failures surface on
+later iterations.)
+
+### 28.6 Evaluation timing
+
+Constraints are evaluated at the SAME hook as typed-slot schema
+validation (`validate_blackboard_writes`, SPEC §6.2): AFTER the
+executor's output is merged into context, BEFORE the transition
+commits. A violation aborts the transition exactly like
+`BLACKBOARD_TYPE_ERROR` — the version stays at pre-transition.
+
+### 28.7 Load-time validation
+
+Constraints are also validated at config load. Catches:
+
+- Empty `allow:` (misconfiguration)
+- Malformed glob patterns
+- Unknown constraint kinds
+- `subset_of` value that isn't a string path
+
+→ `INVALID_CONSTRAINT_DECLARATION` at load, never at runtime.
+
+### 28.8 Error code
+
+| Code | When |
+|---|---|
+| `INVALID_CONSTRAINT_DECLARATION` | Load-time: shape, kind, or pattern is malformed |
+| `SLOT_CONSTRAINT_VIOLATED` | Runtime: the slot's post-write value violates a declared constraint |
+
+### 28.9 Audit
+
+Violations emit the existing `transition.rejected` event with code
+`SLOT_CONSTRAINT_VIOLATED`. Per-slot violation rates can be
+aggregated by audit-log consumers to spot over-tight constraints
+(e.g. "slot X rejects 30% of agent outputs — pattern may need
+widening").
+
+## 29. Human-in-the-loop interaction
+
+### 29.1 Two HITL surfaces, two purposes
+
+| Surface | When | Mechanism |
+|---|---|---|
+| **State-change HITL** — `actor: human` transition that advances state | Approvals, gates, merges (architectural decisions) | Existing — SPEC §6.x |
+| **Interaction HITL** — `actor: human` self-loop transition that returns to the same state | Mid-reasoning clarifications, judgment calls | NEW — this section |
+
+§29 closes the gap of "agent encounters ambiguity mid-reasoning; today
+must guess silently or escalate to a heavy state-change gate."
+
+### 29.2 Why this isn't a new MCP tool
+
+A self-loop `actor: human` transition gives the same effect as a
+"human.ask" tool would, AND:
+
+- reuses existing transition machinery (validation, audit, reliability)
+- reuses existing seven-tool MCP surface (no STABILITY commitment to an 8th tool)
+- inherits existing `actor: human` gating (only humans can submit)
+- inherits existing `inputSchema`/`outputSchema` (questions arrive typed)
+- inherits existing timeout machinery (`definition.timeoutMs` + `onTimeout`)
+
+The cost: per-state declaration burden. §29.3 solves that.
+
+### 29.3 `enable_human_ask: true` workflow flag
+
+When a workflow declares `enable_human_ask: true` at root level, the
+runtime auto-injects a self-loop `ask_human` transition into every
+non-terminal state at config-resolve time:
+
+```yaml
+workflows:
+  agentic_change:
+    enable_human_ask: true        # ← all non-terminal states gain ask_human
+    human_ask_cap: 5              # ← optional; default 5, used as max_fires_per_visit
+    initialState: planning
+    states:
+      planning: { ... }           # auto-gains ask_human
+      editing:  { ... }           # auto-gains ask_human
+      done:     { terminal: true } # excluded — no questions on terminal states
+```
+
+The injected transition:
+
+```yaml
+ask_human:
+  target:              <same state>      # self-loop
+  actor:               human
+  purpose:             ask               # for TUI/dashboard filtering (§29.5)
+  lightweight:         true              # emits workflow.interaction (§29.4)
+  max_fires_per_visit: <human_ask_cap>   # per §29.6
+  inputSchema:                           # forces context with every question
+    type: object
+    required: [question, context_summary, attempted_alternatives]
+    properties:
+      question:               { type: string, maxLength: 2000 }
+      context_summary:        { type: string, maxLength: 1000 }
+      attempted_alternatives: { type: string, maxLength: 1000 }
+  outputSchema:
+    type: object
+    required: [answer]
+    properties:
+      answer:                 { type: string }
+```
+
+**Operator override**: if a state already declares an `ask_human`
+transition, the injection skips it. Workflow author can supply a
+tighter schema or a different cap per state.
+
+### 29.4 Lightweight transition records
+
+Self-loop interaction transitions pollute the state-change audit
+signal if recorded as `workflow.transition` events. The `lightweight:
+true` field on a transition declaration changes its audit event type
+to `workflow.interaction` while keeping the same record payload.
+
+Audit-log consumers can:
+- Filter by event type for the clean state-change story
+- Filter by `purpose:` for specific interaction kinds (`purpose: ask`)
+- See both via `correlationId` join for full history
+
+**No behavior change to non-lightweight transitions.** Existing
+workflows continue emitting `workflow.transition` unchanged.
+
+### 29.5 `purpose:` tag
+
+Optional string on any transition. When present, propagates into the
+audit record's `purpose` field. The convention is short identifiers
+operators can filter on:
+
+- `purpose: ask` — agent → human clarification
+- `purpose: approve` — human approval gate
+- `purpose: escalate` — bail-out path
+
+Not a closed enum — operators add purposes as their workflows evolve.
+
+### 29.6 Per-state fire cap (`max_fires_per_visit`)
+
+**Generic field** on any transition (not HITL-specific). When declared,
+the runtime tracks per-state-entry fire counts in synthetic context
+slot `_fire_count.<state>.<transition>`. Counter resets when the
+workflow leaves the state. Exceeding the cap rejects with
+`TRANSITION_FIRE_CAP_EXCEEDED`.
+
+**Why generic, not HITL-specific:** any transition that can re-fire
+on a self-loop or via `while:` could benefit from a cap. The generic
+mechanism applies to `ask_human` (default cap 5 via `human_ask_cap`)
+but also to operator-defined self-loops like `retry_extraction`.
+
+**`attempted_alternatives` field** (in the injected `inputSchema`) is
+the TRIZ #25 (Self-Service) poka-yoke for HITL specifically: agents
+must DEMONSTRATE effort before interrupting humans. Audit captures
+the field so post-hoc review can spot agents that over-ask without
+trying alternatives.
+
+### 29.7 When to promote to a first-class MCP tool
+
+If documented evidence from ≥3 operator workflows shows the
+self-loop-transition pattern is too verbose for the ad-hoc
+clarification use case, promote to a first-class MCP tool
+`human.ask`. The criterion is concrete; not speculative.
+
+Until then, §29 is the canonical interaction-HITL pattern.
+
+### 29.8 Error codes
+
+| Code | When |
+|---|---|
+| `TRANSITION_FIRE_CAP_EXCEEDED` | Transition fired ≥ `max_fires_per_visit` times in current state-entry |
+
+(`ACTOR_MISMATCH` already applies — only humans can submit
+`actor: human` transitions including `ask_human`.)
+
+## 30. Lexicon / Ubiquitous Language
+
+### 30.1 Why a runtime primitive
+
+A skill can extract terms via Socratic questioning. To be reusable
+across runs, the result needs a STORE that:
+
+1. **Snapshot-stamps** onto in-flight workflows so a run started
+   before a redefine keeps the old understanding (same invariant as
+   `_skillsLibrary` per §8.2, `_scriptsLibrary` per §22.5).
+2. **Is searchable** from any workflow via `gateway.lexicon.search`.
+3. **Is human-governed by default** so vocabulary doesn't drift
+   silently as agents propose definitions.
+4. **Is version-controllable** (Tier 1: lives in `flowgate.yaml`,
+   operators commit + review via PR).
+
+That's a runtime primitive — declarative storage + governance + MCP
+tools — not a prompt template.
+
+### 30.2 Tier 1 — Per-config (shipped in v0.4.x)
+
+The top-level `lexicon:` block in `flowgate.yaml`:
+
+```yaml
+lexicon:
+  connector:
+    bounded_context: gateway          # DDD bounded context (optional)
+    definition: |
+      A unit of integration between the gateway and an external system.
+    examples:                          # optional
+      - { kind: mcp, name: scip-server }
+    refs:                              # optional cross-links to other terms
+      - capability
+      - executor
+    governance: human-only             # default: human-only; alternative: agent-may-propose
+```
+
+Tier 2 (per-operator file store) and Tier 3 (multi-tenant DB) follow
+the same shape; the in-config form is the canonical v0.4.x.
+
+### 30.3 Validation
+
+At config load, `lexicon.<term>` entries are validated:
+
+- `definition` is REQUIRED and must be non-empty
+- `governance`, when set, must be `human-only` or `agent-may-propose`
+- `refs`, when set, must be an array of strings (term names)
+
+Violation → `INVALID_LEXICON_ENTRY` naming the offending term and
+field.
+
+### 30.4 Snapshot stamping
+
+At config-load, every workflow gets a `_lexiconLibrary` snapshot on
+its definition. In-flight workflows are immune to edits of the
+top-level `lexicon:` block — they see the lexicon that existed at
+`workflow.start` time. Same invariant as `_skillsLibrary` /
+`_scriptsLibrary`.
+
+### 30.5 MCP tools
+
+Three new tools on the `gateway.lexicon.*` namespace (additions to the
+seven core tools, becoming 10 total in the always-advertised set):
+
+| Tool | Purpose | Args | Returns |
+|---|---|---|---|
+| `gateway.lexicon.search` | Substring match across term names + definitions | `{query, bounded_context?, limit?}` | `{hits: [{term, definition, ...}]}` |
+| `gateway.lexicon.lookup` | Exact-term lookup | `{term, bounded_context?}` | `{term, entry}` (entry may be null) |
+| `gateway.lexicon.define` | Propose / set a term — governance-gated | `{term, definition, bounded_context?, refs?, governance?}` | `{term, entry, persisted_to: "overlay"}` |
+
+Search and lookup read the union of the config-loaded base + a
+runtime overlay (overlay wins on collision). Define writes to the
+overlay only; operators persist by editing `flowgate.yaml` and
+reloading. Overlay survives only for the runtime's lifetime.
+
+### 30.6 Governance gate
+
+The `governance:` field on each lexicon entry is either:
+
+- `human-only` (default) — agent callers writing via
+  `gateway.lexicon.define` get `LEXICON_DEFINE_REQUIRES_HUMAN`. The
+  workflow must route through an `actor: human` transition (or a
+  human-principal call surface) to commit the change.
+- `agent-may-propose` — agents can define directly. Suitable for
+  scratch / sandbox contexts.
+
+`human-only` is the load-bearing default because vocabulary is a
+human contract. Operators opting into `agent-may-propose` are making
+an explicit choice to accept faster iteration over discipline.
+
+### 30.7 Audit
+
+Every successful `gateway.lexicon.define` emits a `lexicon.defined`
+event with payload `{term, bounded_context, by_human}`. Combined with
+the existing `workflow.transition` audit per route-to-human, this
+gives operators full replay of vocabulary changes.
+
+### 30.8 Error codes
+
+| Code | When |
+|---|---|
+| `INVALID_LEXICON_ENTRY` | Load-time: missing definition / unknown governance / bad refs |
+| `LEXICON_DEFINE_REQUIRES_HUMAN` | Runtime: agent attempted to define a `human-only` term |
+
+### 30.9 Future tiers (out of scope for v0.4.x)
+
+- **Tier 2 — Per-operator file store**: `~/.flowgate/lexicon/<context>.yaml`
+  files merged at config-resolve time; accumulates across configs
+- **Tier 3 — Multi-tenant DB**: `LexiconStore` trait + SQLite/Postgres
+  backends; queryable, multi-operator, audit-integrated
+
+Tier shape will be additive. Tier-1 configs remain valid against
+Tier-2/3 deployments.
+
+## 31. Pattern fragments + `extends:` (DRAFT — queued for v0.5)
+
+**Status:** Design draft. The cognitive-architectures pattern-library
+work (R2 / R4 / R7-CA of the 2026-05-25 plan) surfaced this as the
+one real composition gap: pattern YAMLs must be `include:`d in full,
+which means operators copy-edit when they want a tweaked variant.
+
+### Why a flowgate primitive
+
+Today's composition story (via `include:`) loads a pattern's WHOLE
+workflow definition into the host. Operators wanting to combine
+multiple patterns or instantiate the same pattern twice with
+different parameters end up copy-pasting YAML and editing slot
+names / state names / glob patterns to avoid collisions.
+
+A first-class `patterns:` + `extends:` mechanism eliminates the
+copy-paste:
+
+```yaml
+patterns:
+  scope_bounded_edit:                    # named pattern, parameterizable
+    parameters:
+      allow:                             # required
+        type: array
+        items: { type: string }
+      deny:
+        type: array
+        items: { type: string }
+        default: []
+    workflow:                            # the template, references parameters
+      initialState: editing
+      blackboard:
+        changed_files:
+          type: array
+          constraint:
+            path_allowlist:
+              allow: { $pattern_param: allow }
+              deny:  { $pattern_param: deny }
+      states:
+        # ... pattern body ...
+
+workflows:
+  my_auth_change:
+    extends: scope_bounded_edit          # instantiate with overrides
+    parameters:
+      allow: ["src/auth/**", "tests/auth/**"]
+      deny:  ["src/auth/legacy/**"]
+    # ...host workflow may add additional states / overrides...
+```
+
+### Proposed semantics
+
+| Concept | Mechanism |
+|---|---|
+| Pattern definition | New top-level `patterns:` block. Each entry: `{parameters: <jsonschema>, workflow: <workflow-template>}` |
+| Pattern reference | `extends: <pattern-name>` on a workflow declaration |
+| Parameter substitution | `{$pattern_param: <name>}` placeholders in the pattern body, replaced at config-resolve time |
+| Override | The extending workflow can ADD states / transitions; CAN'T contradict the pattern (override = error) |
+| Instantiation | Each `extends:` materializes a full workflow definition; the resolved snapshot is what runs (operator-level patterns become snapshot-time substitutions, not runtime indirection) |
+| Multi-instance | Same pattern extended by N workflows → N independent materializations; no slot-name collision |
+
+### Gaps closed
+
+- **G1 (no reusable fragments)** — solved by `patterns:` block
+- **G3 (`extends:` for parameterization)** — solved by `extends:` field
+
+### Errors
+
+| Code | When |
+|---|---|
+| `UNKNOWN_PATTERN` | `extends: X` references a pattern not declared in `patterns:` |
+| `MISSING_PATTERN_PARAMETER` | Required parameter not provided |
+| `PATTERN_PARAMETER_TYPE_MISMATCH` | Provided value doesn't match parameter schema |
+| `PATTERN_OVERRIDE_CONFLICT` | Extending workflow tries to redefine a pattern-declared state |
+
+### FMECA notes
+
+| Risk | Mitigation |
+|---|---|
+| Parameter substitution explodes (template inside template) | Single-pass substitution; nested patterns require explicit `extends:` chain |
+| Pattern + workflow scope collision (slot names) | Pattern declares its slots; host's slots merge or error on collision |
+| Runtime drift between pattern source + extending workflows | Pattern body is resolved into each extending workflow at config-load; snapshot-stamped per SPEC §8.2; pattern-source edits only affect new starts |
+
+### Implementation plan (v0.5)
+
+1. New module `crates/mcp-flowgate-core/src/patterns.rs` — parse, validate, resolve `patterns:` block
+2. Config-resolve step: for each workflow with `extends:`, materialize the pattern with parameter substitutions, then merge any host-added states / transitions
+3. Schema: `$defs/patternDefinition`, `$defs/patternReference`
+4. Drift test extension: pattern names + parameter shapes
+5. CA library refactor: convert R2/R4 patterns to use the `patterns:` block instead of full workflow YAMLs
+
+### Out of scope for this draft
+
+- Cross-config pattern import (Tier 2 / Tier 3 lexicon-style)
+- Parameter constraints beyond JSON Schema
+- Pattern composition (patterns extending patterns)
+
+Tracked: this section will be promoted to a full SPEC chapter when v0.5
+implementation begins. Until then, the `include:` + copy-edit workflow
+is canonical.

@@ -505,4 +505,156 @@ impl FlowgateServer {
             .ok_or_else(|| anyhow::anyhow!("transition is required"))?;
         self.runtime.explain(&workflow_id, &transition).await
     }
+
+    // ── SPEC §30 — Lexicon tools ──────────────────────────────────────────
+
+    /// SPEC §30.5 — keyword search across the merged lexicon
+    /// (base ∪ overlay). Substring match on term + definition.
+    pub(crate) async fn handle_lexicon_search(&self, args: Value) -> anyhow::Result<Value> {
+        let query = args
+            .get("query")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let bounded_context = args
+            .get("bounded_context")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let limit = args
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize);
+        let merged = self.lexicon_merged_definition();
+        let hits = mcp_flowgate_core::lexicon::search_terms(
+            &merged,
+            &query,
+            bounded_context.as_deref(),
+            limit,
+        );
+        Ok(json!({ "hits": hits }))
+    }
+
+    /// SPEC §30.5 — exact term lookup. Returns the entry or null.
+    pub(crate) async fn handle_lexicon_lookup(&self, args: Value) -> anyhow::Result<Value> {
+        let term = args
+            .get("term")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("lexicon.lookup requires `term`"))?
+            .to_string();
+        let bounded_context = args
+            .get("bounded_context")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let merged = self.lexicon_merged_definition();
+        let entry = mcp_flowgate_core::lexicon::lookup_term(
+            &merged,
+            &term,
+            bounded_context.as_deref(),
+        )
+        .cloned()
+        .unwrap_or(Value::Null);
+        Ok(json!({ "term": term, "entry": entry }))
+    }
+
+    /// SPEC §30.6 — propose / set a term. Governance-gated: agent
+    /// callers writing against `human-only` terms are rejected with
+    /// `LEXICON_DEFINE_REQUIRES_HUMAN`. Successful writes land in the
+    /// in-memory overlay (operators persist by editing flowgate.yaml).
+    pub(crate) async fn handle_lexicon_define(
+        &self,
+        args: Value,
+        principal: Principal,
+    ) -> anyhow::Result<Value> {
+        let term = args
+            .get("term")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("lexicon.define requires `term`"))?
+            .to_string();
+        let definition = args
+            .get("definition")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("lexicon.define requires `definition`"))?;
+        let bounded_context = args
+            .get("bounded_context")
+            .and_then(Value::as_str)
+            .map(String::from);
+        let refs: Option<Vec<String>> = args
+            .get("refs")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            });
+        let governance = args
+            .get("governance")
+            .and_then(Value::as_str)
+            .map(String::from);
+
+        // Governance gate. If the term EXISTS in base/overlay with a
+        // governance: human-only marker, agents (non-human principals)
+        // must be rejected. New terms inherit the DEFAULT_GOVERNANCE
+        // (human-only); agent must go through a human transition.
+        let merged = self.lexicon_merged_definition();
+        if let Err(msg) = mcp_flowgate_core::lexicon::define_allowed(
+            &merged,
+            &term,
+            principal.is_human(),
+        ) {
+            return Err(anyhow::anyhow!("{msg}"));
+        }
+
+        let entry = mcp_flowgate_core::lexicon::build_entry(
+            definition,
+            bounded_context.as_deref(),
+            refs.as_ref(),
+            governance.as_deref(),
+        )?;
+        {
+            let mut overlay = self
+                .lexicon_overlay
+                .write()
+                .expect("lexicon overlay lock poisoned");
+            overlay.insert(term.clone(), entry.clone());
+        }
+        // Audit the define so operators can replay vocabulary changes.
+        let _ = self
+            .runtime
+            .audit()
+            .record(
+                AuditEvent::new("lexicon.defined")
+                    .with_actor(&principal.subject)
+                    .with_payload(json!({
+                        "term":            term,
+                        "bounded_context": bounded_context,
+                        "by_human":        principal.is_human(),
+                    })),
+            )
+            .await;
+        Ok(json!({ "term": term, "entry": entry, "persisted_to": "overlay" }))
+    }
+
+    /// Build a synthetic "workflow definition" carrying the merged
+    /// `_lexiconLibrary` so the core `lookup_term` / `search_terms`
+    /// helpers (which expect a workflow-definition shape) can be
+    /// reused without duplication.
+    fn lexicon_merged_definition(&self) -> Value {
+        let base = self
+            .lexicon_base
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let overlay_clone = {
+            let overlay = self
+                .lexicon_overlay
+                .read()
+                .expect("lexicon overlay lock poisoned");
+            overlay.clone()
+        };
+        let mut merged = base;
+        for (k, v) in overlay_clone {
+            merged.insert(k, v);
+        }
+        json!({ "_lexiconLibrary": merged })
+    }
 }

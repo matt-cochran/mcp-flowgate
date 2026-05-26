@@ -445,3 +445,461 @@ async fn on_branch_failure_continue_drains_all_branches() {
         started.len()
     );
 }
+
+// ── join: percent — percentage quorum ───────────────────────────────────
+
+#[tokio::test]
+async fn join_percent_threshold_met_by_majority_succeeds() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "noop" },
+                { "kind": "noop" },
+                { "kind": "nonexistent_kind" },
+            ],
+            "join": { "percent": 51 },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await
+    .expect("3 of 4 = 75% >= 51% threshold; expression succeeds");
+    assert_eq!(result.output["summary"]["ok_count"], 3);
+    assert_eq!(result.output["summary"]["verdict"], "succeeded");
+    assert_eq!(result.output["summary"]["join"], "percent");
+}
+
+#[tokio::test]
+async fn join_percent_threshold_not_met_returns_threshold_failure() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "nonexistent_kind" },
+                { "kind": "nonexistent_kind" },
+                { "kind": "nonexistent_kind" },
+            ],
+            "join": { "percent": 75 },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("1 of 4 = 25% < 75% threshold must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("threshold_not_met") || s.contains("ThresholdNotMet")
+            || s.contains("failed"),
+        "expected threshold failure indication, got: {s}"
+    );
+}
+
+#[tokio::test]
+async fn join_percent_zero_succeeds_with_no_branches_passing() {
+    // 0% threshold means "always succeed regardless of branches" — the
+    // explicit operator choice to disable the quorum check.
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "nonexistent_kind" },
+                { "kind": "nonexistent_kind" },
+            ],
+            "join": { "percent": 0 },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await
+    .expect("percent=0 is the never-fail-by-quorum escape hatch");
+    assert_eq!(result.output["summary"]["ok_count"], 0);
+    assert_eq!(result.output["summary"]["verdict"], "succeeded");
+}
+
+#[tokio::test]
+async fn join_percent_uses_ceiling_division_for_threshold() {
+    // 51% of 3 branches = 1.53, ceil = 2 required successes. 2/3 succeed → ok.
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "noop" },
+                { "kind": "nonexistent_kind" },
+            ],
+            "join": { "percent": 51 },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await
+    .expect("ceiling: 2/3 ok meets ceil(51% of 3) = 2 threshold");
+    assert_eq!(result.output["summary"]["ok_count"], 2);
+    assert_eq!(result.output["summary"]["verdict"], "succeeded");
+}
+
+#[tokio::test]
+async fn join_percent_rejects_value_above_100() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [ { "kind": "noop" } ],
+            "join": { "percent": 150 },
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("percent > 100 must reject at config-parse");
+    let s = format!("{err:?}");
+    assert!(s.contains("INVALID_PARALLEL_CONFIG"), "got: {s}");
+}
+
+// ── join: expression — operator-supplied post-completion predicate ──────
+
+#[tokio::test]
+async fn join_expression_truthy_path_succeeds() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "noop" },
+            ],
+            "join": { "expression": "$.ok_count" },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await
+    .expect("ok_count=2 is truthy");
+    assert_eq!(result.output["summary"]["ok_count"], 2);
+    assert_eq!(result.output["summary"]["verdict"], "succeeded");
+    assert_eq!(result.output["summary"]["join"], "expression");
+}
+
+#[tokio::test]
+async fn join_expression_binary_comparison_satisfied_succeeds() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "noop" },
+                { "kind": "noop" },
+            ],
+            "join": { "expression": "$.ok_count >= 3" },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await
+    .expect("3 >= 3 is true");
+    assert_eq!(result.output["summary"]["verdict"], "succeeded");
+}
+
+#[tokio::test]
+async fn join_expression_binary_comparison_unsatisfied_fails() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "noop" },
+            ],
+            "join": { "expression": "$.ok_count >= 3" },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("2 >= 3 is false; verdict must be failed");
+    let s = format!("{err:?}");
+    assert!(s.contains("failed") || s.contains("Failed"), "got: {s}");
+}
+
+#[tokio::test]
+async fn join_expression_no_early_exit_runs_all_branches() {
+    // Expression joins MUST NOT early-exit; they need all branches'
+    // results to evaluate. Even when expression is "$.ok_count >= 1"
+    // (which would let `any` early-exit), `expression` runs everything.
+    let audit = Arc::new(MemoryAuditSink::new());
+    let _ = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "noop" },
+                { "kind": "noop" },
+            ],
+            "join": { "expression": "$.ok_count >= 1" },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await
+    .expect("expression satisfied");
+    let started: Vec<_> = audit
+        .snapshot()
+        .into_iter()
+        .filter(|e| e.event_type == "parallel.branch.started")
+        .collect();
+    assert_eq!(
+        started.len(),
+        3,
+        "expression-join must not early-exit; all 3 branches must start"
+    );
+}
+
+#[tokio::test]
+async fn join_expression_rejects_empty_string() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [ { "kind": "noop" } ],
+            "join": { "expression": "" },
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("empty expression must reject");
+    let s = format!("{err:?}");
+    assert!(s.contains("INVALID_PARALLEL_CONFIG"), "got: {s}");
+}
+
+// ── join: { aggregator: ... } — general aggregator pattern ──────────────
+
+#[tokio::test]
+async fn aggregator_kind_expression_works_via_canonical_form() {
+    // Sugar form (`expression: "..."`) and canonical form
+    // (`aggregator: { kind: expression, expr: "..." }`) must be
+    // semantically equivalent.
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [
+                { "kind": "noop" },
+                { "kind": "noop" },
+            ],
+            "join": {
+                "aggregator": {
+                    "kind": "expression",
+                    "expr": "$.ok_count == 2"
+                }
+            },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await
+    .expect("aggregator kind=expression resolves");
+    assert_eq!(result.output["summary"]["verdict"], "succeeded");
+    // Token reflects the aggregator kind specifically.
+    assert_eq!(result.output["summary"]["join"], "expression");
+}
+
+#[tokio::test]
+async fn aggregator_missing_kind_rejects_at_parse() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [ { "kind": "noop" } ],
+            "join": { "aggregator": { } },
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("aggregator with no kind must reject");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("INVALID_PARALLEL_CONFIG") && s.contains("kind"),
+        "got: {s}"
+    );
+}
+
+#[tokio::test]
+async fn aggregator_kind_expression_missing_expr_rejects_at_parse() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [ { "kind": "noop" } ],
+            "join": { "aggregator": { "kind": "expression" } },
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("kind=expression without expr must reject");
+    let s = format!("{err:?}");
+    assert!(s.contains("INVALID_PARALLEL_CONFIG"), "got: {s}");
+}
+
+#[tokio::test]
+async fn aggregator_unknown_kind_treats_verdict_as_failed() {
+    // Unknown aggregator kind doesn't reject at parse (open kind space —
+    // any registered executor can be an aggregator). Runtime treats it
+    // as failed verdict because the dispatcher can't find the executor.
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": [ { "kind": "noop" } ],
+            "join": { "aggregator": { "kind": "nonexistent_aggregator_kind" } },
+            "on_branch_failure": "continue",
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("unknown aggregator kind → failed verdict");
+    let s = format!("{err:?}");
+    assert!(s.contains("failed") || s.contains("Failed"), "got: {s}");
+}
+
+// ── for_each.where pre-fan-out filter (SPEC §24.2) ──────────────────────
+
+#[tokio::test]
+async fn for_each_where_filters_out_falsy_elements_before_fan_out() {
+    let mut inst = instance_stub();
+    inst.context = json!({ "items": [1, 2, 3, 4, 5] });
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": {
+                "for_each": "$.context.items",
+                "where":    "$.value >= 3",
+                "do": { "kind": "noop" }
+            },
+            "join": "all",
+        }),
+        inst,
+        audit.clone(),
+    )
+    .await
+    .expect("filter then fan out");
+    // 3 of 5 elements pass the filter; only 3 branches should run.
+    assert_eq!(result.output["summary"]["n"], 3);
+    assert_eq!(result.output["summary"]["ok_count"], 3);
+    let started: Vec<_> = audit
+        .snapshot()
+        .into_iter()
+        .filter(|e| e.event_type == "parallel.branch.started")
+        .collect();
+    assert_eq!(
+        started.len(),
+        3,
+        "filter must drop elements BEFORE fan-out (saw {} branch.started events)",
+        started.len()
+    );
+}
+
+#[tokio::test]
+async fn for_each_where_fan_out_index_is_post_filter_position() {
+    // After a filter, two views of "index" coexist:
+    //   - `$.branch.index` inside the `do:` template substitutes the
+    //     ORIGINAL source-array index, so templates can reference
+    //     `$.context.items[N]` for per-element metadata lookup.
+    //   - `branches[].index` in the aggregated output is the FAN-OUT
+    //     position (contiguous 0..n_filtered) so summary counts and
+    //     per-branch event ordering stay dense.
+    let mut inst = instance_stub();
+    inst.context = json!({ "items": [10, 20, 30, 40] });
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": {
+                "for_each": "$.context.items",
+                "where":    "$.value > 25",
+                "do": { "kind": "noop" }
+            },
+            "join": "all",
+        }),
+        inst,
+        audit.clone(),
+    )
+    .await
+    .expect("filter passes");
+    let branches = result.output["branches"].as_array().unwrap();
+    let fan_out: Vec<u64> =
+        branches.iter().map(|b| b["index"].as_u64().unwrap()).collect();
+    assert_eq!(
+        fan_out,
+        vec![0, 1],
+        "branches[].index is the dense fan-out position; original-index view \
+         is reserved for `$.branch.index` template substitution"
+    );
+    assert_eq!(result.output["summary"]["n"], 2);
+}
+
+#[tokio::test]
+async fn for_each_where_empty_after_filter_is_vacuous_success() {
+    let mut inst = instance_stub();
+    inst.context = json!({ "items": [1, 2, 3] });
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": {
+                "for_each": "$.context.items",
+                "where":    "$.value > 100",  // nothing matches
+                "do": { "kind": "noop" }
+            },
+            "join": "all",
+        }),
+        inst,
+        audit.clone(),
+    )
+    .await
+    .expect("empty-after-filter is vacuous success per SPEC §24 F9");
+    assert_eq!(result.output["summary"]["n"], 0);
+    assert_eq!(result.output["summary"]["verdict"], "succeeded");
+}
+
+#[tokio::test]
+async fn for_each_where_rejects_empty_predicate() {
+    let audit = Arc::new(MemoryAuditSink::new());
+    let result = run_parallel(
+        json!({
+            "kind": "parallel",
+            "branches": {
+                "for_each": "$.context.items",
+                "where":    "",
+                "do": { "kind": "noop" }
+            },
+        }),
+        instance_stub(),
+        audit.clone(),
+    )
+    .await;
+    let err = result.expect_err("empty where: must reject at parse");
+    let s = format!("{err:?}");
+    assert!(s.contains("INVALID_PARALLEL_CONFIG"), "got: {s}");
+}
