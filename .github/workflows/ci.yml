@@ -32,6 +32,13 @@ jobs:
             - name: cargo clippy
               run: cargo clippy --workspace --all-targets -- -D warnings
 
+            - name: validation-rule parity scan
+              # SPEC §11 + PR3 — every rule V1..V23 must have at least
+              # one accepts test AND one rejects test (named per the
+              # `fn v<N>_(accepts|rejects)_*` convention). Failing here
+              # surfaces missing coverage before CI runs the suite.
+              run: bash scripts/check-validation-parity.sh
+
             - name: cargo test
               run: cargo test --workspace
 

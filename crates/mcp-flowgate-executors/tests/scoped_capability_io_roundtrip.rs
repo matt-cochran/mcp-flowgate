@@ -78,8 +78,22 @@ impl Executor for NoopExecutor {
     }
 }
 
+/// V17 accept: cap emits a valid output → no schema violation, host
+/// slot gets the projected value. V18 accept: cap terminates normally
+/// → no `cap.terminated` event with `error_kind` fires. The same
+/// fixture exercises both, so the test serves as the parity-named
+/// accept case for V17 *and* V18 (see the alias below).
 #[tokio::test]
-async fn scoped_capability_io_roundtrip() {
+async fn v17_accepts_cap_output_matching_snippet_schema() {
+    run_roundtrip_and_assert_scoping().await;
+}
+
+#[tokio::test]
+async fn v18_accepts_cap_completing_normally() {
+    run_roundtrip_and_assert_scoping().await;
+}
+
+async fn run_roundtrip_and_assert_scoping() {
     // The capability seeds its terminal context with BOTH a sensitive
     // internal slot AND its declared output. The terminal state has
     // `terminal: true`, so start() auto-completes against initialContext

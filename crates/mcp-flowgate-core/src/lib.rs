@@ -5,7 +5,9 @@
 //! model — see `proxy_workflow::compile_proxy_workflow` for the bridge.
 
 pub mod audit;
+pub mod cap_verb;
 pub mod capability;
+pub mod contract_hash;
 pub mod config;
 pub mod discovery;
 pub mod discovery_indexer;
@@ -22,12 +24,14 @@ pub mod reliability;
 pub mod repo;
 pub mod runtime;
 pub mod slot_constraint;
+pub mod slot_table;
 pub mod store;
 pub mod store_file;
 pub mod store_postgres;
 pub mod store_sqlite;
 pub mod validate;
 pub mod templating;
+pub mod tier;
 pub mod use_binding;
 pub mod runtime_chain;
 pub mod runtime_links;

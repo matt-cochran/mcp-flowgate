@@ -186,6 +186,43 @@ impl Executor for WorkflowExecutor {
             })?
             .to_string();
 
+        // SPEC §5.5 — start() may have auto-chained through a deterministic
+        // transition that failed mid-stream (CHAIN_FAILED). The cap is in
+        // its `failed` terminal state, but subsequent runtime.get() returns
+        // status="waiting_for_action" — there's no per-state status the
+        // poll loop can distinguish. Detecting this on start() avoids an
+        // infinite poll: short-circuit straight to cap.terminated.
+        let start_status = start_resp
+            .pointer("/result/status")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if matches!(start_status, "failed" | "timed_out") {
+            if use_block.is_some() {
+                let error_msg = start_resp
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("sub-workflow failed at start")
+                    .to_string();
+                emit_cap_terminated(
+                    &self.audit,
+                    &request,
+                    &definition_id,
+                    &parent_corr,
+                    if start_status == "timed_out" {
+                        "cap_timeout"
+                    } else {
+                        "cap_failed"
+                    },
+                    Some(json!({ "terminal_status": start_status, "error": error_msg })),
+                )
+                .await;
+            }
+            return Err(ExecutorError::Permanent(format!(
+                "sub-workflow '{definition_id}' reached terminal state '{start_status}' \
+                 during start"
+            )));
+        }
+
         // Legacy audit event (kept for back-compat with existing consumers).
         self.audit
             .record(

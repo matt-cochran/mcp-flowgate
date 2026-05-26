@@ -2,6 +2,10 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use serde_json::Value;
 
+use crate::cap_verb::{CapVerb, CapVerbCategory, BLESSED_CAP_VERBS};
+use crate::contract_hash::compute_contract_hash;
+use crate::tier::Tier;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Diagnostic {
     Error(String),
@@ -42,17 +46,68 @@ pub fn validate_workflows(config: &Value) -> Vec<Diagnostic> {
         return diagnostics;
     };
 
+    // SPEC §6.2 — build the cross-workflow context once. The contract-hash
+    // index lets V15/V16 compare an `expects_contract_hash:` value against
+    // the loaded target capability without recomputing per call site.
+    let cap_contract_hashes: HashMap<String, String> = workflows
+        .iter()
+        .filter(|(id, _)| matches!(Tier::from_id(id), Tier::Cap))
+        .filter_map(|(id, def)| {
+            def.get("snippet")
+                .map(|s| (id.clone(), compute_contract_hash(s)))
+        })
+        .collect();
+    let cap_lifecycles: HashMap<String, String> = workflows
+        .iter()
+        .filter(|(id, _)| matches!(Tier::from_id(id), Tier::Cap))
+        .map(|(id, def)| {
+            (
+                id.clone(),
+                def.get("lifecycle")
+                    .and_then(Value::as_str)
+                    .unwrap_or("experimental")
+                    .to_string(),
+            )
+        })
+        .collect();
+    // Snippet outputs by cap id — drives slot-table type harvesting for
+    // V13/V14.
+    let cap_snippet_outputs: HashMap<String, Value> = workflows
+        .iter()
+        .filter(|(id, _)| matches!(Tier::from_id(id), Tier::Cap))
+        .filter_map(|(id, def)| {
+            def.pointer("/snippet/outputs")
+                .cloned()
+                .map(|outputs| (id.clone(), outputs))
+        })
+        .collect();
+    let ctx = ValidationCtx {
+        cap_contract_hashes: &cap_contract_hashes,
+        cap_lifecycles: &cap_lifecycles,
+        cap_snippet_outputs: &cap_snippet_outputs,
+    };
+
     for (id, def) in workflows {
-        validate_one_workflow(id, def, &skill_subjects, &mut diagnostics);
+        validate_one_workflow(id, def, &skill_subjects, &ctx, &mut diagnostics);
     }
 
     diagnostics
+}
+
+/// Cross-workflow validation context. Lets per-rule helpers reach into
+/// other workflows' contract hashes + lifecycle declarations without
+/// re-walking the registry per call site.
+struct ValidationCtx<'a> {
+    cap_contract_hashes: &'a HashMap<String, String>,
+    cap_lifecycles: &'a HashMap<String, String>,
+    cap_snippet_outputs: &'a HashMap<String, Value>,
 }
 
 fn validate_one_workflow(
     id: &str,
     def: &Value,
     skill_subjects: &HashSet<&str>,
+    ctx: &ValidationCtx<'_>,
     out: &mut Vec<Diagnostic>,
 ) {
     // SPEC §28 — slot constraint shape validation. Catches typos like
@@ -64,15 +119,35 @@ fn validate_one_workflow(
     }
 
     // SPEC §5.1, V3/V4/V5 — capability workflows MUST declare a typed
-    // `snippet:` contract; orchestrators MUST NOT (V8 is PR3 territory).
+    // `snippet:` contract; orchestrators MUST NOT (V8).
     // The tier is determined by the unprefixed id stem (`cap.` vs `flow.`).
-    let tier = tier_of(id);
-    if matches!(tier, Tier::Cap) {
-        validate_snippet(id, def, out);
+    let tier = Tier::from_id(id);
+    match tier {
+        Tier::Cap => {
+            v1_verb_in_cloud(id, def, out);
+            v2_id_matches_verb_name(id, def, out);
+            validate_snippet(id, def, out); // V3/V4/V5
+            v6_primary_executor_verb_shape(id, def, out);
+            v10_capability_does_not_invoke_workflow(id, def, out);
+        }
+        Tier::Flow => {
+            v7_id_matches_flow_pattern(id, def, out);
+            v8_orchestrator_has_no_snippet(id, def, out);
+            v9_orchestrator_has_no_verb(id, def, out);
+            v11_orchestrator_does_not_invoke_orchestrator(id, def, out);
+            // V13 reachability + V14 type consistency run against the
+            // per-orchestrator slot table built in slot_table.rs.
+            v13_v14_slot_table(id, def, ctx, out);
+        }
+        Tier::Other => {}
     }
     // SPEC §6.1, V12 — every `kind: workflow` executor inside this
     // workflow's transitions must conform to the use-binding contract.
     validate_use_bindings(id, def, out);
+    // SPEC §6.2, V15/V16 — contract-hash pinning checks against the
+    // pre-built `cap_contract_hashes` index (so we don't recompute per
+    // call site).
+    validate_contract_hash_pins(id, def, ctx, out);
 
     let Some(initial_state) = def.get("initialState").and_then(Value::as_str) else {
         out.push(Diagnostic::Error(format!(
@@ -606,27 +681,6 @@ fn check_skills_refs(
     }
 }
 
-/// SPEC §3.2 — workflow tier inferred from the unprefixed id stem.
-/// `swe/cap.plan.vet` → `Cap`; `swe/flow.add-feature` → `Flow`; any other
-/// shape (legacy pre-v0.6 workflows like `with_artifact_lock`) → `Other`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tier {
-    Cap,
-    Flow,
-    Other,
-}
-
-fn tier_of(id: &str) -> Tier {
-    let stem = id.rsplit('/').next().unwrap_or(id);
-    if stem.starts_with("cap.") {
-        Tier::Cap
-    } else if stem.starts_with("flow.") {
-        Tier::Flow
-    } else {
-        Tier::Other
-    }
-}
-
 /// SPEC §5.1, V3/V4/V5 — capability workflows MUST declare a `snippet:`
 /// block with `inputs:` AND `outputs:` keys. Each schema entry must be a
 /// JSON object (the runtime later validates against the embedded schema
@@ -696,7 +750,7 @@ fn validate_use_bindings(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
             }
             let target_def_id = exec.get("definitionId").and_then(Value::as_str);
             let targets_capability = target_def_id
-                .map(|d| matches!(tier_of(d), Tier::Cap))
+                .map(|d| matches!(Tier::from_id(d), Tier::Cap))
                 .unwrap_or(false);
             let has_use = exec.contains_key("use");
             if targets_capability && !has_use {
@@ -785,6 +839,376 @@ fn host_path_tail_ok(host_path: &str) -> bool {
         return false;
     }
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
+
+// ============================================================================
+// Capability tier rules (Tier::Cap)
+// ============================================================================
+
+/// V1 — `verb:` on a capability MUST be one of the 24 closed-cloud tokens.
+fn v1_verb_in_cloud(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(verb_str) = def.get("verb").and_then(Value::as_str) else {
+        out.push(Diagnostic::Error(format!(
+            "MISSING_VERB: capability '{id}' is missing required `verb:` field; \
+             allowed verbs are {BLESSED_CAP_VERBS:?} (SPEC §4, V1)"
+        )));
+        return;
+    };
+    if CapVerb::from_token(verb_str).is_none() {
+        out.push(Diagnostic::Error(format!(
+            "INVALID_VERB: capability '{id}' has verb '{verb_str}'; allowed verbs are \
+             {BLESSED_CAP_VERBS:?} (SPEC §4, V1)"
+        )));
+    }
+}
+
+/// V2 — capability id stem must be `cap.<verb>.<name>`. Namespace prefix
+/// (`swe/`) is stripped before the check.
+fn v2_id_matches_verb_name(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    let stem = id.rsplit('/').next().unwrap_or(id);
+    let parts: Vec<&str> = stem.split('.').collect();
+    // `cap.<verb>.<name...>` → at least 3 segments. Allow longer names
+    // (`cap.plan.specify.change-request`) by treating everything from
+    // index 2 onward as the name body.
+    if parts.len() < 3 || parts[0] != "cap" {
+        out.push(Diagnostic::Error(format!(
+            "INVALID_ID_SHAPE: capability '{id}' must match `cap.<verb>.<name>` \
+             (SPEC §4, V2)"
+        )));
+        return;
+    }
+    let id_verb = parts[1];
+    // The verb-in-cloud check is V1; here we only assert that the id's
+    // verb segment matches the declared `verb:` field. If `verb:` is
+    // absent or unrecognized, V1 already fired — silently skip to avoid
+    // double-reporting.
+    if let Some(declared_verb) = def.get("verb").and_then(Value::as_str) {
+        if declared_verb != id_verb {
+            out.push(Diagnostic::Error(format!(
+                "ID_VERB_MISMATCH: capability '{id}' declares verb '{declared_verb}' but \
+                 its id stem uses verb segment '{id_verb}' — must agree (SPEC §4, V2)"
+            )));
+        }
+    }
+}
+
+/// V6 — primary-executor verb-shape check. Inspects the executor on the
+/// transition leaving the capability's initial state (TRIZ Local Quality:
+/// narrow check that catches gross misuse without walking every transition).
+fn v6_primary_executor_verb_shape(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(verb_str) = def.get("verb").and_then(Value::as_str) else {
+        return; // V1 already flagged
+    };
+    let Some(verb) = CapVerb::from_token(verb_str) else {
+        return; // V1 already flagged
+    };
+    let Some(initial_state) = def.get("initialState").and_then(Value::as_str) else {
+        return; // generic missing-initialState error fired elsewhere
+    };
+    let Some(transitions) = def
+        .pointer(&format!("/states/{}/transitions", pointer_escape(initial_state)))
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    if transitions.is_empty() {
+        // A capability with no outgoing transitions is a different issue;
+        // V6 has nothing to constrain.
+        return;
+    }
+
+    // Find at least one primary transition whose executor kind matches.
+    let mut primary_kinds: Vec<&str> = Vec::new();
+    let mut has_human_actor = false;
+    for (_t_name, t_def) in transitions {
+        if let Some(kind) = t_def
+            .pointer("/executor/kind")
+            .and_then(Value::as_str)
+        {
+            primary_kinds.push(kind);
+        }
+        if t_def.get("actor").and_then(Value::as_str) == Some("human")
+            || t_def.get("purpose").and_then(Value::as_str) == Some("ask")
+        {
+            has_human_actor = true;
+        }
+    }
+
+    let category = verb.category();
+    let ok = match category {
+        CapVerbCategory::Cognitive => primary_kinds
+            .iter()
+            .any(|k| matches!(*k, "mcp" | "noop")),
+        CapVerbCategory::Deterministic => primary_kinds
+            .iter()
+            .any(|k| matches!(*k, "script" | "mcp")),
+        CapVerbCategory::Coordination => match verb {
+            CapVerb::Gate => has_human_actor,
+            // Spec §4.1 ideal for `coordinate` is `kind: mcp` AND
+            // connection `external: true`. PR3 enforces only the
+            // `kind: mcp` half (no `external:` field exists yet);
+            // documented gap, CHANGELOG entry for v0.7 follow-up.
+            CapVerb::Coordinate => primary_kinds.contains(&"mcp"),
+            _ => true,
+        },
+    };
+    if !ok {
+        let allowed = match category {
+            CapVerbCategory::Cognitive => "kind: mcp OR kind: noop (skill-surfacing)",
+            CapVerbCategory::Deterministic => "kind: script OR kind: mcp",
+            CapVerbCategory::Coordination => match verb {
+                CapVerb::Gate => "at least one initial-state transition with actor: human OR purpose: ask",
+                CapVerb::Coordinate => "kind: mcp",
+                _ => "?",
+            },
+        };
+        out.push(Diagnostic::Error(format!(
+            "INVALID_PRIMARY_EXECUTOR: capability '{id}' (verb '{verb_str}', category \
+             {category:?}) has initial-state transitions whose primary executor kinds \
+             are {primary_kinds:?}; expected {allowed} (SPEC §4.1, V6)"
+        )));
+    }
+}
+
+/// V10 — capabilities MUST NOT invoke other workflows via `kind: workflow`
+/// (the no-nesting rule). Capabilities are leaves of the composition tree.
+fn v10_capability_does_not_invoke_workflow(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    if let Some(target) = find_first_workflow_invocation(def) {
+        out.push(Diagnostic::Error(format!(
+            "CAPABILITY_NESTING: capability '{id}' invokes workflow '{target}' via \
+             `kind: workflow`. Capabilities are composition leaves; only orchestrators \
+             may invoke other workflows (SPEC §3, V10)"
+        )));
+    }
+}
+
+// ============================================================================
+// Orchestrator tier rules (Tier::Flow)
+// ============================================================================
+
+/// V7 — orchestrator id stem must match `flow.<name>`.
+fn v7_id_matches_flow_pattern(id: &str, _def: &Value, out: &mut Vec<Diagnostic>) {
+    let stem = id.rsplit('/').next().unwrap_or(id);
+    let parts: Vec<&str> = stem.split('.').collect();
+    if parts.len() < 2 || parts[0] != "flow" || parts[1].is_empty() {
+        out.push(Diagnostic::Error(format!(
+            "INVALID_ID_SHAPE: orchestrator '{id}' must match `flow.<name>` (SPEC §3, V7)"
+        )));
+    }
+}
+
+/// V8 — orchestrators MUST NOT declare a `snippet:` block.
+fn v8_orchestrator_has_no_snippet(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    if def.get("snippet").is_some() {
+        out.push(Diagnostic::Error(format!(
+            "ORCHESTRATOR_HAS_SNIPPET: orchestrator '{id}' declares a `snippet:` block; \
+             snippets are capability-only — orchestrators are not externally invokable \
+             as snippets (SPEC §5.1, V8)"
+        )));
+    }
+}
+
+/// V9 — orchestrators MUST NOT declare a `verb:` field.
+fn v9_orchestrator_has_no_verb(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    if def.get("verb").is_some() {
+        out.push(Diagnostic::Error(format!(
+            "ORCHESTRATOR_HAS_VERB: orchestrator '{id}' declares `verb:`; verbs are \
+             capability-only (SPEC §4, V9)"
+        )));
+    }
+}
+
+/// V11 — orchestrators MUST NOT invoke other orchestrators (the
+/// no-nesting rule, sibling of V10).
+fn v11_orchestrator_does_not_invoke_orchestrator(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
+    let Some(states) = def.pointer("/states").and_then(Value::as_object) else {
+        return;
+    };
+    for (_state_name, state_def) in states {
+        let Some(transitions) = state_def
+            .pointer("/transitions")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for (_t_name, t_def) in transitions {
+            let Some(target) = t_def
+                .pointer("/executor/definitionId")
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if matches!(Tier::from_id(target), Tier::Flow) {
+                out.push(Diagnostic::Error(format!(
+                    "ORCHESTRATOR_NESTING: orchestrator '{id}' invokes orchestrator \
+                     '{target}' via `kind: workflow`. Orchestrators may only invoke \
+                     capabilities (SPEC §3, V11)"
+                )));
+                return; // one violation per workflow keeps error noise low
+            }
+        }
+    }
+}
+
+/// Walk every transition's executor and return the first `kind: workflow`
+/// `definitionId:` found. Helper for V10's no-nesting check.
+fn find_first_workflow_invocation(def: &Value) -> Option<String> {
+    let states = def.pointer("/states").and_then(Value::as_object)?;
+    for state_def in states.values() {
+        if let Some(transitions) = state_def
+            .pointer("/transitions")
+            .and_then(Value::as_object)
+        {
+            for t_def in transitions.values() {
+                if t_def.pointer("/executor/kind").and_then(Value::as_str) == Some("workflow") {
+                    if let Some(target) = t_def
+                        .pointer("/executor/definitionId")
+                        .and_then(Value::as_str)
+                    {
+                        return Some(target.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+// ============================================================================
+// Cross-tier contract-hash rules
+// ============================================================================
+
+/// V15 / V16 — `expects_contract_hash:` validation, walked across every
+/// `kind: workflow` invocation. V15 fires when an explicit pin doesn't
+/// match the target capability's computed contract hash; V16 fires when
+/// a stable-lifecycle target is invoked without any pin.
+fn validate_contract_hash_pins(
+    id: &str,
+    def: &Value,
+    ctx: &ValidationCtx<'_>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let Some(states) = def.pointer("/states").and_then(Value::as_object) else {
+        return;
+    };
+    for (state_name, state_def) in states {
+        let Some(transitions) = state_def
+            .pointer("/transitions")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for (t_name, t_def) in transitions {
+            let Some(exec) = t_def.pointer("/executor").and_then(Value::as_object) else {
+                continue;
+            };
+            if exec.get("kind").and_then(Value::as_str) != Some("workflow") {
+                continue;
+            }
+            let Some(target_id) = exec.get("definitionId").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(actual_hash) = ctx.cap_contract_hashes.get(target_id) else {
+                continue; // target isn't a snippet-bearing cap; nothing to pin
+            };
+            let declared_pin = exec
+                .get("expects_contract_hash")
+                .and_then(Value::as_str);
+            let lifecycle = ctx
+                .cap_lifecycles
+                .get(target_id)
+                .map(String::as_str)
+                .unwrap_or("experimental");
+            match (declared_pin, lifecycle) {
+                (Some(pin), _) if pin != actual_hash => {
+                    out.push(Diagnostic::Error(format!(
+                        "CONTRACT_HASH_MISMATCH: workflow '{id}' state '{state_name}' \
+                         transition '{t_name}' pins capability '{target_id}' to \
+                         `{pin}` but the loaded contract hash is `{actual_hash}` \
+                         (SPEC §6.2, V15)"
+                    )));
+                }
+                (None, "stable") => {
+                    out.push(Diagnostic::Error(format!(
+                        "MISSING_CONTRACT_HASH: workflow '{id}' state '{state_name}' \
+                         transition '{t_name}' invokes stable-lifecycle capability \
+                         '{target_id}' without `expects_contract_hash:`. Add: \
+                         expects_contract_hash: \"{actual_hash}\" (SPEC §6.2, V16)"
+                    )));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Slot-table rules (V13, V14) — orchestrator-only
+// ============================================================================
+
+/// V13/V14 — build the orchestrator's slot table, then check every
+/// `use:.inputs` reference for reachability against it. V14 (type
+/// consistency between two states writing the same path) is enforced
+/// inside [`crate::slot_table::build_slot_table`] and surfaces here as
+/// part of the returned diagnostic list.
+fn v13_v14_slot_table(
+    id: &str,
+    def: &Value,
+    ctx: &ValidationCtx<'_>,
+    out: &mut Vec<Diagnostic>,
+) {
+    let table = match crate::slot_table::build_slot_table(def, ctx.cap_snippet_outputs) {
+        Ok(t) => t,
+        Err(diagnostics) => {
+            out.extend(diagnostics);
+            return;
+        }
+    };
+
+    let Some(states) = def.pointer("/states").and_then(Value::as_object) else {
+        return;
+    };
+    for (state_name, state_def) in states {
+        let Some(transitions) = state_def
+            .pointer("/transitions")
+            .and_then(Value::as_object)
+        else {
+            continue;
+        };
+        for (t_name, t_def) in transitions {
+            let Some(use_inputs) = t_def
+                .pointer("/executor/use/inputs")
+                .and_then(Value::as_object)
+            else {
+                continue;
+            };
+            for (_input_name, expr_value) in use_inputs {
+                let Some(expr) = expr_value.as_str() else { continue };
+                if !expr.starts_with("$.context.") {
+                    // Non-context references (literals, $.workflow.input.*,
+                    // $.arguments.*) bypass the slot table — they don't
+                    // need to resolve through state writes.
+                    continue;
+                }
+                if let Some(d) =
+                    crate::slot_table::assert_reachable(&table, expr, id, state_name, t_name)
+                {
+                    out.push(d);
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Escape a JSON-Pointer path segment per RFC 6901: `~` → `~0`, `/` → `~1`.
+/// Lets us index state names that contain `/` (rare but legal — namespace
+/// fixtures sometimes have them).
+fn pointer_escape(s: &str) -> String {
+    s.replace('~', "~0").replace('/', "~1")
 }
 
 #[cfg(test)]
