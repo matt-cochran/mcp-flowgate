@@ -10,6 +10,10 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+(none currently — see 0.3.0 below)
+
+## [0.3.0] — 2026-05-27
+
 Adds the FMECA-vetted agent-resolver design: `agents.yaml` with closed-enum affinities/tiers, sparse overrides keyed by `<affinity>-<tier>`, eager auth preflight, and a guided-setup orchestrator (`meta/flow.configure-models`) in the sibling [flowgate-meta](https://github.com/matt-cochran/flowgate-meta) repo. Replaces the v0.2 pattern of repeating `--agent name=provider/model` CLI flags per workflow invocation.
 
 ### Added — Agent resolver (`agents.yaml`)

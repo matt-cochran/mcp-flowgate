@@ -160,11 +160,10 @@ Two sibling libraries demonstrate the shape:
   `flow.bugfix-from-error-log`, `flow.safe-refactor`,
   `flow.triage-issue`) composing 22 reusable capabilities.
 - [**flowgate-meta**](https://github.com/matt-cochran/flowgate-meta) —
-  4 meta-authoring orchestrators (`flow.author-capability`,
+  5 orchestrators: 4 meta-authoring (`flow.author-capability`,
   `flow.author-flow`, `flow.optimize-capability`,
-  `flow.optimize-flow`) that survey the operator's reachable
-  tooling before proposing a shape. Self-bootstrapping authoring
-  loop.
+  `flow.optimize-flow`) plus `flow.configure-models` — the v0.3
+  guided agents.yaml setup flow. Self-bootstrapping authoring loop.
 
 Operators load both with a single top-level block:
 
@@ -458,7 +457,7 @@ workflow (Flowgate YAML)". Copy-paste runnable.
    blobs with `verb` and `lifecycle` per [SPEC §5](SPEC.md).
 5. **Wire the LLM client** to call `workflow.start` on `swe_agent`
    with the incoming ticket, then drive the returned HATEOAS links
-   until completion. The LLM sees only the seven Flowgate tools at any
+   until completion. The LLM sees only the ten Flowgate tools at any
    time; the workflow's state surfaces the next legal moves.
 
 ### What you get
@@ -582,7 +581,7 @@ sub-agent lifecycle, and the cognitive-architecture thesis.
 
 **Use it when** you have multiple tools and any of these matter:
 fewer tokens in the model's context, audit, retries, approval gates,
-schema validation, or multi-step workflows. The seven-tool surface
+schema validation, or multi-step workflows. The ten-tool surface
 scales to hundreds of capabilities. `proxy.import` means you don't
 rewrite tool definitions you already have.
 

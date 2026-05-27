@@ -83,8 +83,7 @@ jobs:
               if: "!contains(matrix.target, 'windows')"
               shell: bash
               run: |
-                  tag="${GITHUB_REF#refs/tags/}"
-                  name="mcp-flowgate-${tag}-${{ matrix.target }}.tar.gz"
+                  name="mcp-flowgate-${{ matrix.target }}.tar.gz"
                   tar czf "$name" -C "$(dirname ${{ steps.bin.outputs.path }})" "mcp-flowgate${{ steps.bin.outputs.ext }}"
                   echo "ASSET=$name" >> "$GITHUB_ENV"
 
@@ -92,8 +91,7 @@ jobs:
               if: contains(matrix.target, 'windows')
               shell: bash
               run: |
-                  tag="${GITHUB_REF#refs/tags/}"
-                  name="mcp-flowgate-${tag}-${{ matrix.target }}.zip"
+                  name="mcp-flowgate-${{ matrix.target }}.zip"
                   7z a "$name" "${{ steps.bin.outputs.path }}"
                   echo "ASSET=$name" >> "$GITHUB_ENV"
 
