@@ -25,6 +25,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent_config::AgentConfig;
+use crate::agent_resolver::{
+    AgentResolutionExhausted, Delegate, DelegateParseError, ProviderFeatures, Resolver,
+};
 
 /// Maximum sub-agent retries on `SubAgentTimeout` before the interpreter
 /// submits the `escalate` transition (if one exists) or propagates.
@@ -44,12 +47,15 @@ pub enum InterpreterError {
     SubAgentTimeout { agent: String, state: String },
 
     /// A workflow declared `delegate: <name>` but `<name>` was not
-    /// declared in the agent registry (built from `--agent` CLI args).
-    #[error(
-        "workflow state '{state}' delegates to '{agent}' but no `--agent {agent}=…` \
-         was provided. Pass `--agent {agent}=provider/model` to wire it."
-    )]
-    UnknownAgent { state: String, agent: String },
+    /// declared in the agent registry. The error message varies by
+    /// registry kind — legacy CLI mode points at `--agent` flags;
+    /// YAML mode points at `agents.yaml` and the specificity walk.
+    #[error("workflow state '{state}': {source}")]
+    AgentResolution {
+        state: String,
+        #[source]
+        source: ResolutionError,
+    },
 
     /// Underlying `workflow.submit` was rejected by the gateway (likely
     /// `INVALID_TRANSITION` or guard failure). The interpreter surfaces
@@ -102,10 +108,121 @@ pub trait McpToolCaller: Send + Sync {
 pub trait SubAgentSpawner: Send + Sync {
     async fn spawn_and_wait(
         &self,
-        agent: &AgentConfig,
+        agent: &ResolvedAgent,
         system_prompt: &str,
         workflow_response: &Value,
     ) -> Result<(), InterpreterError>;
+}
+
+// ── agent registry (legacy + yaml) ─────────────────────────────────────────
+
+/// One resolved agent ready to be spawned: provider + model + the typed
+/// feature set for that provider. Source-agnostic; both the legacy
+/// `--agent` flag path and the new YAML resolver path produce this shape.
+#[derive(Debug, Clone)]
+pub struct ResolvedAgent {
+    /// Operator-facing label (the delegate name or the legacy `--agent`
+    /// name). Used for logging and the workflow's escalate path.
+    pub label: String,
+    /// Aether canonical provider name (e.g. `"anthropic"`).
+    pub provider: String,
+    /// Aether model identifier.
+    pub model: String,
+    /// Typed feature toggles for the binding's provider. Legacy CLI
+    /// path always produces `ProviderFeatures::None`.
+    pub features: ProviderFeatures,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ResolutionError {
+    #[error(
+        "delegate `{delegate}` is not registered. Either pass `--agent {delegate}=provider/model` \
+         (legacy CLI mode) OR add it to your agents.yaml under `overrides:`."
+    )]
+    UnknownLegacyAgent { delegate: String },
+
+    #[error("delegate `{delegate}` is not a valid <affinity> | <tier> | <affinity>-<tier>: {source}")]
+    InvalidDelegate {
+        delegate: String,
+        #[source]
+        source: DelegateParseError,
+    },
+
+    #[error("{0}")]
+    Exhausted(#[from] AgentResolutionExhausted),
+}
+
+/// Source-agnostic resolution of `delegate:` strings to a `ResolvedAgent`.
+pub trait AgentRegistry: Send + Sync {
+    fn resolve(&self, delegate: &str) -> Result<ResolvedAgent, ResolutionError>;
+}
+
+/// v0.2-compatible registry: a HashMap of `--agent` flag values keyed by
+/// delegate name. Wraps the existing `AgentConfig` shape.
+pub struct LegacyAgentRegistry {
+    pub agents: HashMap<String, AgentConfig>,
+}
+
+impl LegacyAgentRegistry {
+    pub fn new(agents: HashMap<String, AgentConfig>) -> Self {
+        Self { agents }
+    }
+}
+
+impl AgentRegistry for LegacyAgentRegistry {
+    fn resolve(&self, delegate: &str) -> Result<ResolvedAgent, ResolutionError> {
+        let c = self.agents.get(delegate).ok_or_else(|| {
+            ResolutionError::UnknownLegacyAgent {
+                delegate: delegate.to_string(),
+            }
+        })?;
+        Ok(ResolvedAgent {
+            label: c.name.clone(),
+            provider: c.provider.clone(),
+            model: c.model.clone(),
+            features: ProviderFeatures::None,
+        })
+    }
+}
+
+/// v0.3 YAML-backed registry. Parses the delegate string, walks the
+/// specificity ladder, and returns the FIRST binding from the chosen
+/// list. (Full per-list Chain-of-Responsibility at spawn time is
+/// deferred to v0.3.1 once aether's error surface exposes the failure
+/// class we need to classify per-attempt failures.)
+pub struct YamlAgentRegistry {
+    pub resolver: Resolver,
+}
+
+impl YamlAgentRegistry {
+    pub fn new(resolver: Resolver) -> Self {
+        Self { resolver }
+    }
+}
+
+impl AgentRegistry for YamlAgentRegistry {
+    fn resolve(&self, delegate: &str) -> Result<ResolvedAgent, ResolutionError> {
+        let d = Delegate::parse(delegate).map_err(|source| {
+            ResolutionError::InvalidDelegate {
+                delegate: delegate.to_string(),
+                source,
+            }
+        })?;
+        let (bindings, _level) = self.resolver.walk(&d)?;
+        let first = bindings.first().ok_or_else(|| {
+            ResolutionError::Exhausted(AgentResolutionExhausted {
+                delegate: delegate.to_string(),
+                walked_levels: vec!["(empty list at chosen level)".to_string()],
+                attempts: Vec::new(),
+            })
+        })?;
+        Ok(ResolvedAgent {
+            label: delegate.to_string(),
+            provider: first.provider.display_name().to_string(),
+            model: first.model.clone(),
+            features: first.features.clone(),
+        })
+    }
 }
 
 /// Drive a workflow to a terminal state. See module-level docs for the
@@ -118,7 +235,7 @@ pub async fn walk_workflow(
     mcp: &dyn McpToolCaller,
     spawner: &dyn SubAgentSpawner,
     workflow_id: &str,
-    agents: &HashMap<String, AgentConfig>,
+    registry: &dyn AgentRegistry,
 ) -> Result<Value, InterpreterError> {
     let mut retries: u32 = 0;
     loop {
@@ -132,10 +249,10 @@ pub async fn walk_workflow(
         let version_before = current_version(&resp);
 
         if let Some(agent_name) = resp.get("delegate").and_then(Value::as_str) {
-            let agent = agents.get(agent_name).cloned().ok_or_else(|| {
-                InterpreterError::UnknownAgent {
+            let agent = registry.resolve(agent_name).map_err(|source| {
+                InterpreterError::AgentResolution {
                     state: state_before.clone(),
-                    agent: agent_name.to_string(),
+                    source,
                 }
             })?;
             let prompt = build_sub_agent_prompt(&resp);
@@ -177,7 +294,7 @@ pub async fn walk_workflow(
                             mcp,
                             workflow_id,
                             &resp_now,
-                            agent_name,
+                            &agent.label,
                         )
                         .await?;
                         retries = 0;

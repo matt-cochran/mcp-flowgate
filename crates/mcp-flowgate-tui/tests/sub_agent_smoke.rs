@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use mcp_flowgate_tui::agent_config::AgentConfig;
-use mcp_flowgate_tui::interpreter::{InterpreterError, SubAgentSpawner};
+use mcp_flowgate_tui::agent_resolver::ProviderFeatures;
+use mcp_flowgate_tui::interpreter::{InterpreterError, ResolvedAgent, SubAgentSpawner};
 use mcp_flowgate_tui::sub_agent::AetherSubAgentSpawner;
 use mcp_flowgate_tui::tui_config::TuiConfig;
 use serde_json::json;
@@ -23,11 +23,12 @@ fn small_config() -> TuiConfig {
         .expect("required-fields poka-yoke must accept these values")
 }
 
-fn fake_agent() -> AgentConfig {
-    AgentConfig {
-        name: "test-agent".into(),
+fn fake_agent() -> ResolvedAgent {
+    ResolvedAgent {
+        label: "test-agent".into(),
         provider: "anthropic".into(),
         model: "claude-sonnet-4-5".into(),
+        features: ProviderFeatures::None,
     }
 }
 

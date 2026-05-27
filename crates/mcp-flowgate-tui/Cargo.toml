@@ -23,6 +23,7 @@ aether_core = { version = "0.6", package = "aether-agent-core" }
 clap.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

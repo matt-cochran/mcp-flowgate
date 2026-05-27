@@ -8,6 +8,7 @@
 //! `main.rs`.
 
 pub mod agent_config;
+pub mod agent_resolver;
 pub mod doctor;
 pub mod flowgate_mcp;
 pub mod interpreter;

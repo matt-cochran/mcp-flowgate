@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde_json::Value;
 
+use crate::agent_resolver::{AgentsFile, ConfigSource, Delegate, Resolver};
 use crate::flowgate_mcp::find_flowgate_binary;
 
 #[derive(Debug, Clone)]
@@ -214,6 +215,18 @@ pub async fn run_doctor(args: &DoctorArgs) -> Vec<CheckResult> {
         }
     }
 
+    // 7. agents.yaml (v0.3+) presence + parse. Both project and user
+    //    files are reported; mutual-presence is flagged as a shadow.
+    let resolver = check_agents_yaml(&mut results);
+
+    // 8. Workflow delegates ↔ resolver coverage. For each `delegate:`
+    //    string in the resolved workflow, run the resolver's walk and
+    //    report the chosen level. Names every delegate whose only
+    //    match is `default` (operator-visible "silent downgrade" list).
+    if let (Some(r), Some(cfg), Some(wf_name)) = (&resolver, &resolved_config, &args.workflow) {
+        check_workflow_delegate_coverage(&mut results, r, cfg, wf_name);
+    }
+
     // 6. Script URIs (file:// only — https / git+https are load-time fetched)
     if let Some(cfg) = &resolved_config {
         if let Some(scripts) = cfg.pointer("/scripts").and_then(Value::as_object) {
@@ -251,6 +264,163 @@ fn resolve_config(path: &Path) -> Result<Value> {
     let value: Value = serde_yaml::from_str(&raw)?;
     let resolved = mcp_flowgate_core::config::resolve(value)?;
     Ok(resolved)
+}
+
+/// Load agents.yaml (project then user) and add CheckResults describing
+/// presence, parse status, and shadowing. Returns the project resolver
+/// when one is loadable, so the caller can run the delegate-coverage
+/// check on the SAME resolver the operator's `flowgate walk` will use.
+fn check_agents_yaml(results: &mut Vec<CheckResult>) -> Option<Resolver> {
+    let project_path = std::path::Path::new(".flowgate").join("agents.yaml");
+    let user_path = dirs::config_dir().map(|d| d.join("flowgate").join("agents.yaml"));
+
+    let project_present = project_path.exists();
+    let user_present = user_path.as_ref().is_some_and(|p| p.exists());
+
+    if !project_present && !user_present {
+        results.push(CheckResult::skip(
+            "agents.yaml",
+            "no project (.flowgate/agents.yaml) or user (~/.config/flowgate/agents.yaml) file",
+        ));
+        return None;
+    }
+
+    // Load whichever takes precedence (project first, then user).
+    let (chosen_path, chosen_source, shadowed_path) = if project_present {
+        let shadow = if user_present {
+            user_path.clone()
+        } else {
+            None
+        };
+        (
+            project_path.clone(),
+            ConfigSource::Project(project_path.clone()),
+            shadow,
+        )
+    } else {
+        let p = user_path.clone().unwrap();
+        (p.clone(), ConfigSource::User(p), None)
+    };
+
+    match AgentsFile::from_path(&chosen_path) {
+        Ok(file) => {
+            results.push(CheckResult::pass(
+                "agents.yaml",
+                format!(
+                    "loaded {} ({} default binding(s), {} override(s)){}",
+                    chosen_path.display(),
+                    file.default.len(),
+                    file.overrides.len(),
+                    if file.strict_specificity {
+                        ", strict_specificity=true"
+                    } else {
+                        ""
+                    },
+                ),
+            ));
+            if let Some(s) = shadowed_path {
+                results.push(CheckResult::pass(
+                    "agents.yaml shadow",
+                    format!(
+                        "project ({}) shadows user ({}) — user's bindings are NOT in effect",
+                        chosen_path.display(),
+                        s.display()
+                    ),
+                ));
+            }
+            Some(Resolver::from_loaded(file, chosen_source))
+        }
+        Err(e) => {
+            results.push(CheckResult::fail(
+                "agents.yaml",
+                "AGENTS_YAML_PARSE_FAILED",
+                format!("{}: {e}", chosen_path.display()),
+            ));
+            None
+        }
+    }
+}
+
+/// Walk the resolved config's workflow definition for `delegate:`
+/// strings, run each through the resolver, and emit one CheckResult
+/// per delegate that names the specificity level chosen.
+fn check_workflow_delegate_coverage(
+    results: &mut Vec<CheckResult>,
+    resolver: &Resolver,
+    cfg: &Value,
+    wf_name: &str,
+) {
+    let states = cfg
+        .pointer(&format!("/workflows/{wf_name}/states"))
+        .and_then(Value::as_object);
+    let Some(states) = states else {
+        results.push(CheckResult::skip(
+            "workflow delegates",
+            format!("workflow '{wf_name}' has no `states:` map"),
+        ));
+        return;
+    };
+
+    let mut delegates: Vec<(String, String)> = Vec::new(); // (state, delegate string)
+    for (state_name, state_val) in states {
+        if let Some(d) = state_val.get("delegate").and_then(Value::as_str) {
+            delegates.push((state_name.clone(), d.to_string()));
+        }
+    }
+
+    if delegates.is_empty() {
+        results.push(CheckResult::skip(
+            "workflow delegates",
+            format!("workflow '{wf_name}' has no `delegate:` states"),
+        ));
+        return;
+    }
+
+    let mut downgrades: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+    for (state, delegate_str) in &delegates {
+        match Delegate::parse(delegate_str) {
+            Err(e) => {
+                errors.push(format!("{state}: '{delegate_str}' ({e})"));
+            }
+            Ok(d) => match resolver.walk(&d) {
+                Err(e) => {
+                    errors.push(format!("{state}: '{delegate_str}' → exhausted ({e})"));
+                }
+                Ok((_bindings, level)) => {
+                    if level == "default" {
+                        downgrades.push(format!("{state}: '{delegate_str}' → default"));
+                    }
+                }
+            },
+        }
+    }
+
+    if !errors.is_empty() {
+        results.push(CheckResult::fail(
+            "workflow delegates",
+            "WORKFLOW_DELEGATE_UNRESOLVED",
+            format!("{} unresolvable: {}", errors.len(), errors.join("; ")),
+        ));
+    } else if !downgrades.is_empty() {
+        // Soft signal: the walk succeeded but matched a less-specific
+        // level than the delegate asked for. Op may have intended this;
+        // we just surface it so they can verify (FMECA U1 detection).
+        results.push(CheckResult::pass(
+            "workflow delegates",
+            format!(
+                "{} delegate(s) resolved; {} fell through to default — verify intent: {}",
+                delegates.len(),
+                downgrades.len(),
+                downgrades.join("; ")
+            ),
+        ));
+    } else {
+        results.push(CheckResult::pass(
+            "workflow delegates",
+            format!("{} delegate(s) resolved to explicit overrides", delegates.len()),
+        ));
+    }
 }
 
 fn provider_env_var(provider: &str) -> &'static str {

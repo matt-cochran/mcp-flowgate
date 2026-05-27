@@ -12,7 +12,8 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use mcp_flowgate_tui::interpreter::{
-    walk_workflow, InterpreterError, McpToolCaller, SubAgentSpawner, SUB_AGENT_RETRY_BUDGET,
+    walk_workflow, InterpreterError, LegacyAgentRegistry, McpToolCaller, ResolutionError,
+    ResolvedAgent, SubAgentSpawner, SUB_AGENT_RETRY_BUDGET,
 };
 use serde_json::{json, Value};
 
@@ -106,7 +107,7 @@ impl ScriptedSpawner {
 impl SubAgentSpawner for ScriptedSpawner {
     async fn spawn_and_wait(
         &self,
-        agent: &mcp_flowgate_tui::agent_config::AgentConfig,
+        agent: &ResolvedAgent,
         _system_prompt: &str,
         _workflow_response: &Value,
     ) -> Result<(), InterpreterError> {
@@ -127,7 +128,7 @@ impl SubAgentSpawner for ScriptedSpawner {
 
 // ── fixtures ───────────────────────────────────────────────────────────────
 
-fn agent_registry() -> HashMap<String, mcp_flowgate_tui::agent_config::AgentConfig> {
+fn agent_registry() -> LegacyAgentRegistry {
     let mut m = HashMap::new();
     m.insert(
         "planner".to_string(),
@@ -137,7 +138,7 @@ fn agent_registry() -> HashMap<String, mcp_flowgate_tui::agent_config::AgentConf
             model: "claude-sonnet-4".into(),
         },
     );
-    m
+    LegacyAgentRegistry::new(m)
 }
 
 fn resp_completed() -> Value {
@@ -328,11 +329,14 @@ async fn unknown_delegate_agent_surfaces_actionable_error() {
         .await
         .expect_err("unknown agent must error");
     match err {
-        InterpreterError::UnknownAgent { state, agent } => {
+        InterpreterError::AgentResolution { state, source } => {
             assert_eq!(state, "planning");
-            assert_eq!(agent, "ghost-agent");
+            assert!(
+                matches!(source, ResolutionError::UnknownLegacyAgent { delegate } if delegate == "ghost-agent"),
+                "expected UnknownLegacyAgent for ghost-agent"
+            );
         }
-        other => panic!("expected UnknownAgent, got: {other:?}"),
+        other => panic!("expected AgentResolution, got: {other:?}"),
     }
 }
 

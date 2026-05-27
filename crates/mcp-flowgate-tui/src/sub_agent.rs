@@ -47,9 +47,9 @@ use aether_cli::mcp_config_args::McpConfigArgs;
 use async_trait::async_trait;
 use tokio::time::timeout;
 
-use crate::agent_config::AgentConfig;
+use crate::agent_resolver::ProviderFeatures;
 use crate::flowgate_mcp;
-use crate::interpreter::{InterpreterError, SubAgentSpawner};
+use crate::interpreter::{InterpreterError, ResolvedAgent, SubAgentSpawner};
 use crate::tui_config::TuiConfig;
 
 /// Production sub-agent spawner. Holds a reference to the TUI config so
@@ -68,7 +68,7 @@ impl AetherSubAgentSpawner {
 impl SubAgentSpawner for AetherSubAgentSpawner {
     async fn spawn_and_wait(
         &self,
-        agent: &AgentConfig,
+        agent: &ResolvedAgent,
         system_prompt: &str,
         workflow_response: &serde_json::Value,
     ) -> Result<(), InterpreterError> {
@@ -81,7 +81,7 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
             .unwrap_or(0);
         if context_size > self.config.max_blackboard_bytes {
             tracing::warn!(
-                agent = %agent.name,
+                agent = %agent.label,
                 provider = %agent.provider,
                 model = %agent.model,
                 context_size,
@@ -92,6 +92,23 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
             );
         }
 
+        // FMECA T3 + PR1 scope note: per-provider feature toggles are
+        // parsed and stored on `ResolvedAgent.features` (load-time
+        // validation via `#[serde(deny_unknown_fields)]`). Runtime
+        // translation to aether's per-provider extras is deferred —
+        // logging here is the operator-visible signal that the toggle
+        // was recognized but not applied.
+        if !matches!(agent.features, ProviderFeatures::None) {
+            tracing::warn!(
+                agent = %agent.label,
+                provider = %agent.provider,
+                model = %agent.model,
+                features = ?agent.features,
+                "agents.yaml feature toggles parsed but not yet applied at spawn time \
+                 (deferred to v0.3.1 — see /guides/agent-config.mdx#features)"
+            );
+        }
+
         let workflow_state = workflow_response
             .pointer("/workflow/state")
             .and_then(serde_json::Value::as_str)
@@ -99,7 +116,7 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
             .to_string();
 
         tracing::info!(
-            agent = %agent.name,
+            agent = %agent.label,
             provider = %agent.provider,
             model = %agent.model,
             state = %workflow_state,
@@ -146,7 +163,7 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
                 // version didn't advance, it treats the spawn as a soft
                 // timeout and retries.
                 tracing::info!(
-                    agent = %agent.name,
+                    agent = %agent.label,
                     state = %workflow_state,
                     "sub-agent completed naturally"
                 );
@@ -158,25 +175,25 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
                 // and this is operationally close — the sub-agent's
                 // tool-call surface IS MCP through to Flowgate.
                 tracing::warn!(
-                    agent = %agent.name,
+                    agent = %agent.label,
                     state = %workflow_state,
                     error = %e,
                     "sub-agent failed inside aether headless"
                 );
                 Err(InterpreterError::Mcp {
-                    tool: format!("aether/sub_agent/{}", agent.name),
+                    tool: format!("aether/sub_agent/{}", agent.label),
                     source: anyhow::anyhow!("{e}"),
                 })
             }
             Err(_elapsed) => {
                 tracing::warn!(
-                    agent = %agent.name,
+                    agent = %agent.label,
                     state = %workflow_state,
                     timeout_seconds = self.config.max_sub_agent_seconds,
                     "sub-agent exceeded timeout"
                 );
                 Err(InterpreterError::SubAgentTimeout {
-                    agent: agent.name.clone(),
+                    agent: agent.label.clone(),
                     state: workflow_state,
                 })
             }
