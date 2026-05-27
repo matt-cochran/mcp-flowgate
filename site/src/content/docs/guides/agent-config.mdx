@@ -159,6 +159,22 @@ Per-provider feature structs use `#[serde(deny_unknown_fields)]`, so typos fail 
 In v0.3, feature toggles are **parsed and validated** at load time, but runtime translation to the provider's per-call API is deferred to v0.3.1. The TUI logs a warning when a binding's features are non-default so you know which model your spawn is missing toggles on. Track the upgrade at [the v0.3.1 milestone](https://github.com/matt-cochran/mcp-flowgate/milestones).
 </Aside>
 
+## Validating an agents.yaml by hand
+
+`flowgate validate-agents-config <path>` loads the file through the SAME `AgentsFile::from_path` the resolver uses at workflow start and prints a stable JSON envelope:
+
+```bash
+$ flowgate validate-agents-config .flowgate/agents.yaml
+{"ok":true,"summary":"2 default binding(s), 3 override list(s), strict_specificity=false"}
+
+$ flowgate validate-agents-config bad.yaml
+{"ok":false,"error_kind":"UNKNOWN_OVERRIDE_KEY","detail":"... `vision-frontier` is not a valid <affinity> | <tier> | <affinity>-<tier>; ..."}
+```
+
+The CLI exit code mirrors `ok`: 0 on pass, 1 on fail. `error_kind` is the stable contract — scripts and CI can switch on it. Today's set: `MISSING_DEFAULT`, `EMPTY_DEFAULT`, `MISSING_PROVIDER_MODEL`, `UNKNOWN_OVERRIDE_KEY`, `UNKNOWN_FEATURE_KEY`, `PROVIDER_ENDPOINT_REQUIRED`, `VERSION_MISMATCH`, `YAML_SYNTAX`, `IO`.
+
+This is what `cap.implement.write-agents-config` invokes for the round-trip step — by exposing it as a CLI surface, your own pre-commit hooks and editor integrations can use it too.
+
 ## Guided setup with `flow.configure-models`
 
 Hand-authoring `agents.yaml` is fine for two-line files, but as soon as you want per-affinity overrides + CoR fallbacks across multiple providers, the [`flowgate-meta`](https://github.com/matt-cochran/flowgate-meta) repo ships an orchestrator that walks you through it:
