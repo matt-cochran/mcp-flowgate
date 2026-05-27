@@ -1,9 +1,9 @@
 ---
 title: "MCP tools"
-description: "Reference for the seven fixed MCP tools that mcp-flowgate exposes to your model."
+description: "Reference for the ten fixed MCP tools that mcp-flowgate exposes to your model."
 ---
 
-No matter how many capabilities you wire in, the model always sees exactly seven tools. Three for discovery, four for workflows.
+No matter how many capabilities you wire in, the model always sees exactly ten tools. Three for discovery, four for workflows, and three for vocabulary (the lexicon primitive — see [Lexicon](/reference/lexicon/) for the full story).
 
 ## Discovery tools
 
@@ -475,3 +475,57 @@ Inspect a workflow definition or a specific transition without starting anything
 ```
 
 This is useful for understanding what a workflow does before committing to running it. The model can inspect guards, required inputs, and executor types without side effects.
+
+---
+
+## Vocabulary tools
+
+The three lexicon tools surface a persistent project glossary (SPEC §30). See [Lexicon](/reference/lexicon/) for the model — governance modes, snapshot stamping, template substitution. The signatures:
+
+### gateway.lexicon.search
+
+Search the lexicon by keyword.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | Yes | Search terms |
+| `bounded_context` | string | No | Restrict results to one bounded context |
+
+Returns an array of matching entries (term + definition + governance).
+
+### gateway.lexicon.lookup
+
+Resolve a single term.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `term` | string | Yes | The exact term to look up |
+
+Returns the full entry (`definition`, `governance`, `bounded_context`, `examples`, `refs`) or `LEXICON_TERM_NOT_FOUND`.
+
+### gateway.lexicon.define
+
+Register or update a term. Emits a `lexicon.defined` audit event on success.
+
+**Arguments:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `term` | string | Yes | The term |
+| `definition` | string | Yes | Canonical definition |
+| `bounded_context` | string | No | Subject area scope |
+| `examples` | array | No | Usage examples |
+| `governance` | string | No | `human-only` (default) or `agent-may-propose` |
+
+**Errors:**
+
+| Code | Meaning |
+|------|---------|
+| `LEXICON_DEFINE_REQUIRES_HUMAN` | Caller is an agent; term governance is `human-only`. Route through an `actor: human` transition to commit. |
+| `INVALID_LEXICON_ENTRY` | Definition or shape is malformed. |
+
+Defines land in a gateway-lifetime in-memory overlay. Persist them by editing `flowgate.yaml` and reloading.

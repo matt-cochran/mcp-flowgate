@@ -1,0 +1,182 @@
+---
+title: "Capabilities and orchestrators"
+description: "v0.2's two-tier composition model: typed capability sub-workflows you compose into lifecycle orchestrators. Write a capability once. Use it everywhere."
+---
+
+You have a workflow that runs your bugfix loop end-to-end. Parse the error log, reproduce, localize, plan the fix, edit, verify, review, open the PR. It works.
+
+Now you start writing the feature-delivery workflow. Different first step — read the brief, draft a plan, vet it — but the back half is the same. Edit, verify, review, open the PR. Same again for safe refactor. Same again for any other lifecycle that ends in "ship a diff to a base ref."
+
+You can copy-paste the four shared states across three workflows. Then you fix a bug in one copy and forget the other two. Or you extract them into… what? Workflow YAML doesn't have a "subroutine" primitive. Until v0.2.
+
+## The two tiers
+
+v0.2 introduces two new workflow shapes on top of v0.1's primitive:
+
+- **Capability** (`cap.<verb>.<name>`) — a sub-workflow with a typed `snippet: { inputs, outputs }` contract. Composition leaf; can't invoke other workflows. The unit of reuse.
+- **Orchestrator** (`flow.<name>`) — composes capabilities via `kind: workflow` executors with `use: { inputs, outputs }` bindings. Declares its own `inputs:` entry signature. The lifecycle workflow.
+
+Capabilities are functions with strongly-typed parameters. Orchestrators are programs that call them. Same workflow runtime, two role conventions.
+
+## A capability
+
+```yaml
+# capabilities/cap.plan.vet.yaml
+workflows:
+  cap.plan.vet:
+    verb: plan
+    lifecycle: experimental
+    snippet:
+      inputs:
+        plan:           { type: object,  required: true }
+        max_iterations: { type: integer, default: 3 }
+      outputs:
+        verdict:  { type: string, enum: [pass, fail, needs-revision] }
+        findings: { type: array }
+    skills: [compose.plan.vet]
+    initialState: ready
+    states:
+      ready:
+        goal: Vet the plan adversarially; cite each finding.
+        transitions:
+          submit_vet:
+            target: done
+            actor: agent
+            inputSchema:
+              type: object
+              required: [verdict]
+              properties:
+                verdict:  { type: string, enum: [pass, fail, needs-revision] }
+                findings: { type: array, default: [] }
+            executor: { kind: noop }
+            output:
+              verdict:  "$.arguments.verdict"
+              findings: "$.arguments.findings"
+      done: { terminal: true }
+```
+
+The cap's id matches `cap.<verb>.<name>` (V1, V2 enforced at load). The `verb:` field belongs to the 24-token cap-verb cloud — distinct from the cognitive-verbs cloud that governs skills. See [Cap verbs](/reference/cap-verbs/).
+
+The `snippet:` block declares the typed contract:
+- `inputs:` — the shape of the data the cap accepts. Required fields, defaults, JSON-schema constraints.
+- `outputs:` — the shape of the data the cap produces. The runtime validates every output value against this schema at runtime (V17). Bad outputs abort with `cap.output.schema_violation`; nothing partial leaks to the caller.
+
+The body of the cap is a state machine — same primitive as any v0.1 workflow. Cognitive caps use `kind: noop + actor: agent + skills: [<subject>]`: the agent driving the gateway reads the skill guidance and submits the typed output via arguments. Deterministic caps use `kind: script` bound to your scripts library. Coordination caps (`gate`, `coordinate`) bind to `kind: human` for HITL or `kind: mcp` for external side effects.
+
+## An orchestrator invoking it
+
+```yaml
+# orchestrators/flow.add-feature.yaml
+workflows:
+  flow.add-feature:
+    inputs:
+      feature_brief: { type: string, required: true }
+      base_ref:      { type: string, default: main }
+    initialState: drafting_plan
+    states:
+      drafting_plan:
+        transitions:
+          draft:
+            target: vetting_plan
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.plan.draft
+              use:
+                inputs:
+                  brief: "$.context.feature_brief"
+                outputs:
+                  "$.context.draft_plan": plan
+
+      vetting_plan:
+        transitions:
+          vet:
+            target: vetted_plan
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.plan.vet
+              use:
+                inputs:
+                  plan:           "$.context.draft_plan"
+                  max_iterations: 3
+                outputs:
+                  "$.context.vet_verdict": verdict
+
+      vetted_plan:
+        transitions:
+          advance:
+            target: implementing
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.vet_verdict == 'pass'"
+          abort:
+            target: failed
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.context.vet_verdict == 'fail'"
+
+      # ... implementing → verifying → reviewing → opening_pr → done
+```
+
+`flow.<name>` (V7) declares no `snippet:` (V8) and no `verb:` (V9) — orchestrators are entry points, not composable snippets. The `inputs:` block declares the orchestrator's entry signature, which seeds the slot table for downstream type checks.
+
+Every cap invocation goes through a `kind: workflow` executor with a `use:` binding:
+
+- `use.inputs` — for each cap input, the host-side JSON path (or literal) that supplies the value.
+- `use.outputs` — for each declared cap output, the host-side path the projected value lands at.
+
+The cap runs in its own private blackboard. Whatever it writes internally — intermediate state, partial work, sensitive scratch — stays scoped. Only the outputs you bind in `use.outputs` propagate back. This is the slot-collision firewall: two parallel invocations of the same cap run in independent blackboards, no shared state.
+
+## The split-state branching pattern
+
+Notice the orchestrator above uses two states where you might expect one: `vetting_plan` runs the cap, then `vetted_plan` branches on its output. That's the v0.2 convention — guards evaluate before the same transition's executor fires. To branch on a cap's output, you need to land in a state AFTER the cap completed.
+
+```
+vetting_plan          ← state that fires the cap
+   ↓ (cap writes vet_verdict)
+vetted_plan           ← state whose guards read vet_verdict
+   ↓                       ↓
+advance               abort
+   ↓                       ↓
+implementing          failed
+```
+
+It's a tiny bit verbose; it works. The cognitive-architectures library ships every lifecycle orchestrator in this shape.
+
+## What the runtime enforces
+
+The runtime catches the things that would otherwise surface as hard-to-debug runtime errors:
+
+- **V3/V4/V5** — capability declares `snippet:` block, has both `inputs:` and `outputs:` keys, each entry is JSON-schema-shaped.
+- **V6** — primary executor matches the verb's category. Cognitive verbs need `kind: noop` or `kind: mcp`; deterministic verbs need `kind: script` or `kind: mcp`; `gate` needs a human actor; `coordinate` needs `kind: mcp`.
+- **V10/V11** — no-nesting. Capabilities can't invoke other workflows; orchestrators can't invoke other orchestrators. Composition leaves stay leaves.
+- **V12** — every `kind: workflow` invocation targeting a `cap.*` definitionId needs a `use:` binding. Bare invocations are rejected.
+- **V13/V14** — slot table reachability + type consistency. Every `use.inputs` path must resolve to a slot in the orchestrator's `inputs:` or a slot some earlier state writes. Two states writing the same path must declare structurally identical schemas.
+- **V15/V16** — `expects_contract_hash:` matches the loaded cap; missing pin against a `stable`-lifecycle cap fails at load.
+- **V17/V18** — at runtime, every output is schema-validated; abnormal cap termination emits `cap.terminated` with `error_kind` and no partial projection.
+
+See [Validation rules](/reference/validation-rules/) for the full V1–V23 catalog.
+
+## Why this matters
+
+The `cap.coordinate.pr-open` capability lives in one file. `flow.add-feature`, `flow.bugfix-from-error-log`, and `flow.safe-refactor` all invoke it. Improve the cap — better PR body templating, a regression-test attachment, a different label scheme — and every orchestrator that depends on it picks up the improvement.
+
+Break the cap (change a snippet output type, rename an enum value) and every dependent orchestrator surfaces a load-time error with the exact mismatch. No silent drift between caller and callee. No "discovered in staging" surprise.
+
+That's the dependency model the framework was always implying. v0.2 made it real.
+
+## Where the caps live
+
+You can ship caps + orchestrators in your own gateway config, or load them from a sibling repo via the multi-repo loader. The [cognitive-architectures](https://github.com/matt-cochran/cognitive-architectures) library ships 22 caps + 4 lifecycle orchestrators for the most common engineering surfaces (`flow.add-feature`, `flow.bugfix-from-error-log`, `flow.safe-refactor`, `flow.triage-issue`). The [flowgate-meta](https://github.com/matt-cochran/flowgate-meta) library ships meta-orchestrators that author capabilities and orchestrators themselves.
+
+See [Multi-repo loading](/guides/multi-repo-loading/) for how operators wire repos into their gateway.
+
+## What's next
+
+- [Multi-repo loading](/guides/multi-repo-loading/) — how to compose libraries into your gateway.
+- [Self-authoring with flowgate-meta](/guides/self-authoring/) — the meta-orchestrators that use the framework on itself.
+- [Cap verbs](/reference/cap-verbs/) — the 24-token cap-verb cloud.
+- [Validation rules](/reference/validation-rules/) — V1–V23 catalog.

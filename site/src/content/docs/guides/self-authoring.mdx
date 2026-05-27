@@ -1,0 +1,126 @@
+---
+title: "Self-authoring with flowgate-meta"
+description: "Four meta-orchestrators that use the framework to author content for the framework. The library inspects your reachable tooling, proposes 2–3 shapes, and emits validated YAML before the PR opens."
+---
+
+You want to author a capability. You read the spec. You pick a verb. You sketch a snippet contract. You write the YAML. You run `mcp-flowgate check`. You fix three V13 errors and a V6 violation. You repeat.
+
+That's mechanical work. The kind a workflow handles.
+
+[**flowgate-meta**](https://github.com/matt-cochran/flowgate-meta) ships four orchestrators whose job is to author or optimize other capabilities and orchestrators. Self-bootstrapping. The framework using itself.
+
+## The four meta-orchestrators
+
+| Orchestrator | What it does |
+|---|---|
+| `meta/flow.author-capability` | Draft a brand-new capability from a goal description. The smallest of the four; good entry point. |
+| `meta/flow.author-flow` | Draft a brand-new orchestrator that composes existing capabilities. |
+| `meta/flow.optimize-capability` | Refine an existing capability based on its audit history. |
+| `meta/flow.optimize-flow` | Refine an existing orchestrator's state shape, branch reduction, or verb drift. |
+
+All four share the same backbone: survey the operator's reachable tooling → propose 2–3 candidate shapes → operator picks one → emit YAML → run `mcp-flowgate check` against the result → adversarial review → open a PR.
+
+## The shared cap stack
+
+The four orchestrators reuse a small set of caps. This is the composition the two-tier model exists to enable.
+
+| Cap | Verb | Role |
+|---|---|---|
+| `cap.research.tool-inventory` | research | Introspects the live gateway: declared MCP connections + the tools each exposes, the scripts library, the skills library, the existing capabilities other orchestrators could compose. |
+| `cap.plan.compose-implementation` | plan | Given a goal + the tool inventory, proposes 2–3 candidate shapes with tradeoffs. |
+| `cap.gate.human-pick-shape` | gate | HITL: operator picks one of the candidate shapes. |
+| `cap.implement.emit-yaml` | implement | Renders the chosen shape into v0.2-conformant YAML. |
+| `cap.verify.check-config` | verify | Runs `mcp-flowgate check` against the emitted YAML; surfaces V1–V23 diagnostics. |
+| `cap.review.adversarial` | review | Adversarial review of the candidate YAML. Shadowed from cognitive-architectures' richer version when both repos are loaded. |
+| `cap.coordinate.pr-open` | coordinate | Opens the PR (same shadow pattern). |
+| `cap.audit.mine-transitions` | audit | (optimize-* only.) Mines transition records for the workflow you're refining — stalls, failing guards, human interventions, slow transitions. |
+| `cap.research.lexicon-lookup` | research | Typed wrapper over `gateway.lexicon.lookup` so authoring stays vocabulary-consistent. |
+| `cap.summarize.lexicon-define` | summarize | Typed wrapper over `gateway.lexicon.define` — register new terms the authored content introduces. |
+
+## Why "tool inventory" is the first step
+
+A meta-workflow that assumes "the operator has an LLM connection wired" is brittle. So is one that assumes a GitHub MCP server, or `cargo` on PATH, or a specific test runner. Different teams have different stacks.
+
+`cap.research.tool-inventory` runs first because every downstream decision depends on what's actually reachable. The compose step doesn't propose `kind: mcp` capabilities backed by an MCP server the operator doesn't have. The emit step doesn't reference a script subject that isn't in the library.
+
+This is what makes the meta-orchestrators portable across teams. The same workflow runs against an operator with a 20-MCP stack and another with bash and `gh` — the inventory adapts; the orchestrator shape doesn't.
+
+## Install
+
+```bash
+git clone https://github.com/matt-cochran/flowgate-meta ~/repos/flowgate-meta
+```
+
+Then load alongside cognitive-architectures (or whatever resource repos you already use):
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+repos:
+  - path: ~/repos/cognitive-architectures
+  - path: ~/repos/flowgate-meta
+```
+
+Validate the load:
+
+```bash
+mcp-flowgate check --config gateway.yaml
+```
+
+You should see the `meta/flow.author-*` and `meta/flow.optimize-*` orchestrators in the loaded ids alongside whatever the other repos provide.
+
+## Author your first capability
+
+```bash
+flowgate walk \
+    --workflow meta/flow.author-capability \
+    --input '{"goal": "Author cap.fetch.npm-registry to look up package metadata", "namespace": "draft", "base_ref": "main"}' \
+    --agent inventory=anthropic/claude-haiku-4-5 \
+    --agent compose=anthropic/claude-sonnet-4-6 \
+    --agent emit=anthropic/claude-sonnet-4-6 \
+    --agent review=anthropic/claude-opus-4-7 \
+    --max-sub-agent-seconds 300
+```
+
+The TUI walks through each state, surfacing the cap stack's per-state guidance and routing each cognitive step to the named sub-agent. You'll see:
+
+1. **`surveying_tools`** — the inventory cap fires; the sub-agent walks your gateway's reachable surface and emits the typed inventory.
+2. **`composing`** — given the inventory + goal, the compose cap proposes 2–3 shapes.
+3. **`picking_shape`** — HITL gate; you pick one.
+4. **`emitting`** — the emit cap renders the YAML.
+5. **`checking`** — `mcp-flowgate check` runs against it. If V-rules fail, the workflow lands in `failed`; you fix and rerun.
+6. **`reviewing`** — adversarial read of the YAML.
+7. **`opening_pr`** — PR opened against `base_ref`.
+
+The same shape applies to author-flow, optimize-capability, optimize-flow. The optimize variants swap `surveying_tools` for `mining_audit` (using `cap.audit.mine-transitions` against the workflow you're refining).
+
+## Shadow caps + override discipline
+
+flowgate-meta ships `cap.review.adversarial` and `cap.coordinate.pr-open` as stub shadows. These have the same bare id stems (`cap.review.adversarial`, `cap.coordinate.pr-open`) that cognitive-architectures provides — but under the `meta` namespace, so they don't collide.
+
+Operators who load both libraries should declare the cognitive versions in their top-level `overrides:` block to make the richer caps win:
+
+```yaml
+repos:
+  - path: ~/repos/cognitive-architectures
+  - path: ~/repos/flowgate-meta
+overrides:
+  - cognitive/cap.review.adversarial
+  - cognitive/cap.coordinate.pr-open
+workflows:
+  # ... operator's own choices ...
+```
+
+This is the same V23 override discipline that protects any vendored cap from anonymous shadowing — it makes shadowing intentional and audited.
+
+## What this is not
+
+This isn't AGI. The meta-orchestrators don't make decisions you wouldn't make. They're a structured workflow shape that catches the V-rule slips you'd otherwise discover at deploy, and a discipline for tracking what tooling each cap actually needs.
+
+The cognitive work — the snippet contract design, the verb selection, the state machine shape — still rides on whichever model the operator wires into each `delegate:`. The framework gives you good defaults (the skills shipped under each cap's `skills:` ref) and structural correctness checks. The model brings taste.
+
+## What's next
+
+- [Capabilities and orchestrators](/guides/capabilities-and-orchestrators/) — the composition model the meta-orchestrators target.
+- [Multi-repo loading](/guides/multi-repo-loading/) — wire flowgate-meta into your gateway.
+- [The TUI](/guides/tui/) — the runtime that drives meta-orchestrators via per-state sub-agent routing.

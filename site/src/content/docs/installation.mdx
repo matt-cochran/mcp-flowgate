@@ -11,7 +11,7 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 ```bash
 # Linux x86_64 example
-curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/mcp-flowgate-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/mcp-flowgate-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
 curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/checksums.sha256
 
 # Verify
@@ -61,3 +61,15 @@ mcp-flowgate --help
 ```
 
 You should see the CLI help with the `serve` subcommand listed. Head to the [quick start](/docs/quick-start) to wire up your first capability.
+
+## Optional: install the TUI
+
+The `mcp-flowgate-tui` crate ships a terminal client that drives the gateway interactively. Useful for trying workflows without a real MCP host attached, and for the per-state sub-agent routing (`delegate:`) pattern.
+
+```bash
+cargo install mcp-flowgate-tui
+```
+
+You get two binaries with the same behavior — `flowgate` (the short, recommended invocation) and `flowgate-tui` (the long form for environments where `flowgate` collides with something else). The TUI auto-discovers the `mcp-flowgate` binary; if you've put it somewhere unusual, point at it with `MCP_FLOWGATE_PATH=/path/to/mcp-flowgate`.
+
+See [The TUI](/guides/tui/) for the rundown — picking a workflow, driving transitions, routing cognitive states to different agent configs, and reading the logs the TUI drops in `~/.cache/flowgate/logs/`.

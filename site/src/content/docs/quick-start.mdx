@@ -1,9 +1,9 @@
 ---
 title: "Quick start"
-description: "Create a minimal config, wire mcp-flowgate into your MCP host, and see the seven tools in action — all in about 30 seconds."
+description: "Create a minimal config, wire mcp-flowgate into your MCP host, and see the ten tools in action — all in about 30 seconds."
 ---
 
-You're going to create one capability, connect it to your MCP host, and watch the model discover and call it through mcp-flowgate's seven tools. The whole thing takes about 30 seconds.
+You're going to create one capability, connect it to your MCP host, and watch the model discover and call it through mcp-flowgate's ten tools. The whole thing takes about 30 seconds.
 
 ## 1. Create a config file
 
@@ -58,7 +58,7 @@ Add it to `~/.config/zed/settings.json` under the `"language_models"` key. See t
 
 ## 4. Restart your host
 
-Restart Claude Desktop (or Zed). Seven tools appear in the model's tool list:
+Restart Claude Desktop (or Zed). Ten tools appear in the model's tool list:
 
 - `gateway.home` -- entry point, lists top-level links
 - `gateway.search` -- keyword search across all capabilities
@@ -68,7 +68,7 @@ Restart Claude Desktop (or Zed). Seven tools appear in the model's tool list:
 - `workflow.submit` -- advance a workflow with input
 - `workflow.explain` -- describe what a workflow does before running it
 
-That's it. Seven tools, always. Whether you have one capability or five hundred behind them.
+That's it. Ten tools, always. Whether you have one capability or five hundred behind them.
 
 ## 5. Try it
 
@@ -90,6 +90,6 @@ Even with this minimal example, you got a few things for free:
 - **Audit** -- every step (the search, the workflow start, the execution) emitted structured JSON events. You have a complete trace of what happened.
 - **HATEOAS links** -- every response included links telling the model what it could do next. No guessing, no memorized tool catalogs.
 
-That was one tool with a `noop` executor. The interesting part is what happens when you add real executors -- MCP servers, CLI commands, REST APIs -- and the model's tool list stays at seven.
+That was one tool with a `noop` executor. The interesting part is what happens when you add real executors -- MCP servers, CLI commands, REST APIs -- and the model's tool list stays at ten.
 
 Next up: learn how [discovery and search](/docs/guides/discovery) work, jump straight to [governance](/docs/guides/governance) to add guards and approval gates, or try [composing a small cognitive architecture from scratch](/guides/composing-an-architecture/) to see skills and workflows in action.

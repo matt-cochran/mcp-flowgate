@@ -1,0 +1,107 @@
+---
+title: "Cap verbs (the 24-token cloud)"
+description: "Capabilities carry a verb: from the closed 24-token CapVerb cloud — 10 cognitive, 12 deterministic, 2 coordination. The runtime enforces a per-category executor shape check at config load (V6)."
+---
+
+mcp-flowgate has three closed-vocabulary verb clouds. They're disjoint by design:
+
+- **Cognitive verbs** (10) — govern `skills`. Verbs that name what the LLM does. See [Cognitive verbs](/reference/cognitive-verbs/).
+- **Script verbs** (12) — govern `scripts:` entries. Verbs that name what a deterministic script does. See [Script verbs](/reference/script-verbs/).
+- **Cap verbs** (24) — govern `cap.*` workflow declarations. Verbs that name the role the capability plays in composition. The subject of this page.
+
+Different audience, different rules. Skills name how an LLM thinks. Scripts name deterministic action. Cap verbs name the role of a typed sub-workflow.
+
+## The 24-token cloud
+
+### Cognitive (10) — LLM is the actor
+
+| Verb | Subject root | Examples |
+|---|---|---|
+| `triage` | `cap.triage.*` | classify-severity, route-component |
+| `diagnose` | `cap.diagnose.*` | parse-error, reproduce, localize |
+| `plan` | `cap.plan.*` | draft, vet, fix, track-gaps |
+| `implement` | `cap.implement.*` | tdd-loop, scope-bounded |
+| `review` | `cap.review.*` | adversarial, final-approval |
+| `refactor` | `cap.refactor.*` | draft, extract-module |
+| `explain` | `cap.explain.*` | summarize-change, walk-architecture |
+| `compose` | `cap.compose.*` | integrate-plans, merge-reports |
+| `research` | `cap.research.*` | context-assemble, tool-inventory, lexicon-lookup |
+| `summarize` | `cap.summarize.*` | session-delta, lexicon-define |
+
+### Deterministic (12) — script or MCP tool is the actor
+
+| Verb | Subject root | Examples |
+|---|---|---|
+| `build` | `cap.build.*` | cargo-release |
+| `test` | `cap.test.*` | baseline-snapshot, compare-baseline |
+| `deploy` | `cap.deploy.*` | cargo-install |
+| `format` | `cap.format.*` | rust-check |
+| `lint` | `cap.lint.*` | rust-clippy-strict |
+| `install` | `cap.install.*` | npm-ci |
+| `verify` | `cap.verify.*` | workspace-green, regression-tests, check-config |
+| `run` | `cap.run.*` | cargo-bench |
+| `inspect` | `cap.inspect.*` | dependency-tree |
+| `search` | `cap.search.*` | codebase-ripgrep |
+| `fetch` | `cap.fetch.*` | docs-pull |
+| `audit` | `cap.audit.*` | security-scan, mine-transitions |
+
+### Coordination (2) — neither cognitive nor pure deterministic
+
+| Verb | Subject root | Description |
+|---|---|---|
+| `gate` | `cap.gate.*` | Awaits a permission signal: HITL approval, evidence quorum, manual acknowledgment. |
+| `coordinate` | `cap.coordinate.*` | Side effect to an external system: open a PR, create issues, post a comment. |
+
+## V6 — primary-executor verb-shape
+
+At config load, the runtime checks each capability's **primary executor** — the executor on the transition leaving the capability's initial state. The check is per-capability, primary-executor only (TRIZ Local Quality resolution): narrow enough to keep the runtime cost negligible, broad enough to catch gross verb misuse.
+
+| Verb category | Primary executor must satisfy |
+|---|---|
+| **Cognitive (10)** | `kind: mcp` OR `kind: noop` (the noop typically surfaces a `skills:` ref) |
+| **Deterministic (12)** | `kind: script` OR `kind: mcp` |
+| **`gate`** | At least one initial-state transition has `actor: human` OR `purpose: ask` |
+| **`coordinate`** | `kind: mcp` (the v0.2 check enforces only the kind half; spec §4.1's `external: true` connection flag is v0.7 work) |
+
+Mismatches are config-load errors with the rule code `V6` named in the message:
+
+```
+INVALID_PRIMARY_EXECUTOR: capability 'cognitive/cap.plan.draft' (verb 'plan', category
+Cognitive) has initial-state transitions whose primary executor kinds are ["script"];
+expected kind: mcp OR kind: noop (skill-surfacing) (SPEC §4.1, V6)
+```
+
+The error names the cap, the declared verb, the resolved category, the actual primary kinds, and the expected set. Operators paste-fix without spelunking.
+
+## Picking the right verb
+
+The cap verbs and skill verbs share names by design (`plan`, `review`, `implement`, etc.) but they carry different semantics:
+
+- A **skill** named `review.code.adversarial` is a guidance fragment the LLM reads.
+- A **cap** named `cap.review.adversarial` is a sub-workflow whose body invokes the LLM (via `kind: noop + skills: [review.code.adversarial]`).
+
+The cap binds the skill. The cap verb says "this composition surface is a review-shaped step." The skill verb says "this guidance is review-shaped advice." They line up most of the time — `cap.review.adversarial` references the `review.code.adversarial` skill — but they're independent vocabularies.
+
+For deterministic and coordination verbs there's no skill equivalent. `cap.verify.workspace-green` is a script invocation. `cap.coordinate.pr-open` is an MCP call. No LLM guidance needed; the cap is the script body or the MCP tool selection.
+
+## Closed enums and amendments
+
+The 24-token cloud is closed. Adding a new verb requires a spec amendment in `docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md §4`. The closed enum is what makes verb-aware search useful (`gateway.search?verb=review` returns a deterministic set) and what makes V6 surface verb drift loudly at load.
+
+The criterion for a new verb: it has to name a category that's structurally distinct from every existing verb's category. "Better word for `implement`" is not a new verb. "There's a class of caps that does X and no existing verb describes X without bending the semantics" might be.
+
+## Tier discrimination via the `cap.` prefix
+
+The runtime decides whether to apply cap-verb rules to a workflow by reading its id prefix:
+
+- `cap.<verb>.<name>` → capability tier; V1–V6, V10, V12, V13, V17, V18 apply.
+- `flow.<name>` → orchestrator tier; V7–V9, V11, V13, V14, V15, V16 apply.
+- Anything else → legacy pre-v0.2 workflow; no cap/flow rules apply.
+
+This is the [tier check](/reference/validation-rules/) at V2 and V7. The namespace prefix from [multi-repo loading](/guides/multi-repo-loading/) is stripped before the check, so `cognitive/cap.plan.draft` correctly tier-detects as `Cap`.
+
+## What this is not
+
+These aren't categories of LLM thinking, the way the 10 cognitive verbs are. They're **roles in composition**. `cap.fetch.docs-pull` and `cap.research.context-assemble` both gather information; the verb difference says "the fetch one is a script call to a known endpoint; the research one is LLM-driven open-ended exploration." That tier difference shapes the primary executor (V6) and surfaces in the workflow's audit trail.
+
+For the LLM-thinking taxonomy, see [Cognitive verbs](/reference/cognitive-verbs/). For deterministic action verbs, see [Script verbs](/reference/script-verbs/).

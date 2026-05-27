@@ -12,7 +12,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'mcp-flowgate',
-			description: 'Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with seven.',
+			description: 'Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with ten.',
 			logo: {
 				light: './src/assets/logo-light.svg',
 				dark: './src/assets/logo-dark.svg',
@@ -52,6 +52,10 @@ export default defineConfig({
 						{ label: 'Phase guidance', slug: 'guides/phase-guidance' },
 						{ label: 'Skills & cognitive architectures', slug: 'guides/skills-and-architectures' },
 						{ label: 'Composing an architecture', slug: 'guides/composing-an-architecture' },
+						{ label: 'Capabilities and orchestrators', slug: 'guides/capabilities-and-orchestrators', badge: { text: 'v0.2', variant: 'success' } },
+						{ label: 'Multi-repo loading', slug: 'guides/multi-repo-loading', badge: { text: 'v0.2', variant: 'success' } },
+						{ label: 'Self-authoring with flowgate-meta', slug: 'guides/self-authoring', badge: { text: 'v0.2', variant: 'success' } },
+						{ label: 'The TUI', slug: 'guides/tui' },
 						{ label: 'Hot reload', slug: 'guides/hot-reload' },
 						{ label: 'Going to production', slug: 'guides/production' },
 					],
@@ -65,7 +69,10 @@ export default defineConfig({
 						{ label: 'Executors', slug: 'reference/executors' },
 						{ label: 'Stores', slug: 'reference/stores' },
 						{ label: 'Cognitive verbs', slug: 'reference/cognitive-verbs' },
+						{ label: 'Cap verbs', slug: 'reference/cap-verbs', badge: { text: 'v0.2', variant: 'success' } },
 						{ label: 'Script verbs', slug: 'reference/script-verbs' },
+						{ label: 'Lexicon', slug: 'reference/lexicon', badge: { text: 'v0.2', variant: 'success' } },
+						{ label: 'Validation rules V1–V23', slug: 'reference/validation-rules', badge: { text: 'v0.2', variant: 'success' } },
 						{ label: 'Parallel execution', slug: 'reference/parallel-execution' },
 						{ label: 'Audit events', slug: 'reference/audit' },
 					],

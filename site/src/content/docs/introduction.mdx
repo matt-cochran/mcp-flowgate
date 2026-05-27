@@ -1,6 +1,6 @@
 ---
 title: "What is mcp-flowgate?"
-description: "Every MCP tool costs tokens. mcp-flowgate replaces your entire tool list with seven fixed tools, adds governance, and lets your model discover capabilities on demand."
+description: "Every MCP tool costs tokens. mcp-flowgate replaces your entire tool list with ten fixed tools, adds governance, and lets your model discover capabilities on demand."
 ---
 
 ## The problem you already have
@@ -11,14 +11,15 @@ It gets worse. The model has to *reason* about every tool in the list to pick th
 
 And none of this comes with audit trails, retries, approval gates, or any governance. You get a flat list and a prayer.
 
-## The fix: seven tools, any number of capabilities
+## The fix: ten tools, any number of capabilities
 
-mcp-flowgate exposes exactly seven MCP tools to your model, no matter how many capabilities you wire in behind them:
+mcp-flowgate exposes exactly ten MCP tools to your model, no matter how many capabilities you wire in behind them:
 
 | Layer | Tools | What they do |
 |-------|-------|--------------|
 | **Discovery** | `gateway.home`, `gateway.search`, `gateway.describe` | Find capabilities by keyword, get schemas on demand |
 | **Action** | `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain` | Execute capabilities through governed workflows |
+| **Vocabulary** | `gateway.lexicon.search`, `gateway.lexicon.lookup`, `gateway.lexicon.define` | A persistent project glossary the model can read and (with permission) extend across runs |
 
 Your 50 capabilities don't disappear -- they surface through search results and response links, loaded one at a time, only when relevant. The model's token cost for tool definitions stays fixed regardless of scale.
 
@@ -70,3 +71,23 @@ mcp-flowgate earns its keep when your tool count grows, when you need control ov
 ## Beyond tools: cognitive architectures
 
 Tools are the bottom of the stack. Above them sit **skills** (mental models the agent loads on demand), **workflows** (state machines that sequence which skill to load when), and **cognitive architectures** (the whole bundle — skills, workflow, agent configs, connections). The same gateway that governs your tool list also surfaces skills and runs workflows. See [Skills, workflows, and cognitive architectures](/guides/skills-and-architectures/) for the layered model.
+
+## v0.2: compose lifecycle pipelines, don't re-author them
+
+A workflow that ends well is one part of the story. The harder part: when you have ten of them, half re-implement the same three steps. "Run the tests, open a PR, review the diff" appears in feature delivery, in bugfix, in safe refactor. Copy-pasting it works until you fix a bug in one copy and forget the other four.
+
+v0.2 ships a two-tier composition model on top of v0.1's workflow primitive:
+
+- A **capability** (`cap.<verb>.<name>`) is a sub-workflow with a typed `snippet: { inputs, outputs }` contract. It does one thing — `cap.plan.vet`, `cap.verify.workspace-green`, `cap.coordinate.pr-open`. It runs in its own scoped blackboard; nothing leaks back to the caller except declared outputs.
+- An **orchestrator** (`flow.<name>`) composes capabilities. It declares `inputs:` at its entry signature and invokes caps through a `use: { inputs, outputs }` binding that projects typed outputs into named host slots.
+
+You write a capability once. You compose it from any number of orchestrators. The runtime enforces typing at load and at run — bad outputs fail at the snippet schema; bad inputs fail at the slot table. A breaking change to a capability surfaces as a load-time error on every orchestrator that depends on it.
+
+Two companion libraries ship as v0.2's first content:
+
+- **[cognitive-architectures](https://github.com/matt-cochran/cognitive-architectures)** — 22 capabilities + 4 lifecycle orchestrators (`flow.add-feature`, `flow.bugfix-from-error-log`, `flow.safe-refactor`, `flow.triage-issue`).
+- **[flowgate-meta](https://github.com/matt-cochran/flowgate-meta)** — the four meta-orchestrators (`flow.author-capability`, `flow.author-flow`, `flow.optimize-capability`, `flow.optimize-flow`) that use the framework to author content for the framework. Self-bootstrapping.
+
+Wire one or both into your gateway with a top-level `repos:` block. Loaded definitions get namespaced — `cognitive/flow.add-feature`, `meta/cap.research.tool-inventory` — so two repos can ship the same id without colliding.
+
+See [Capabilities and orchestrators](/guides/capabilities-and-orchestrators/) for the model, [Multi-repo loading](/guides/multi-repo-loading/) for the wiring, and [Self-authoring with flowgate-meta](/guides/self-authoring/) for the meta-loop.
