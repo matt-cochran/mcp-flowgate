@@ -30,14 +30,15 @@ mcp-flowgate is now running as an MCP server over stdio, waiting for a host to c
 
 ## 3. Wire it into your MCP host
 
-### Claude Desktop
+The fastest path — let the TUI generate the config files for you:
 
-Edit your Claude Desktop config file:
+```bash
+flowgate mcp init --cursor --claude-desktop
+```
 
-- **Linux:** `~/.config/Claude/claude_desktop_config.json`
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+That writes `.mcp.json` (Claude Code, Continue, Cline), `.cursor/mcp.json`, and a `claude_desktop_config.json` snippet. Zed needs a slightly different setup; the [editor guide](/guides/editors/) covers all of them in depth, plus the ACP path (Zed today) where the editor drives workflows directly rather than calling tools.
 
-Add mcp-flowgate as a server:
+If you'd rather hand-author the config — say, for Claude Desktop on macOS — the file lives at `~/Library/Application Support/Claude/claude_desktop_config.json` and the shape is:
 
 ```json
 {
@@ -50,11 +51,7 @@ Add mcp-flowgate as a server:
 }
 ```
 
-Replace both paths with the actual locations on your machine. Use absolute paths -- relative paths won't resolve correctly when the host launches the process.
-
-### Zed
-
-Add it to `~/.config/zed/settings.json` under the `"language_models"` key. See the [`examples/zed-gateway/`](https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/zed-gateway) directory for a working example.
+Absolute paths — relative paths won't resolve when the host launches the process.
 
 ## 4. Restart your host
 

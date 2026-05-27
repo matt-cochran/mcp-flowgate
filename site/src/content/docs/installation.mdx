@@ -73,3 +73,16 @@ cargo install mcp-flowgate-tui
 You get two binaries with the same behavior — `flowgate` (the short, recommended invocation) and `flowgate-tui` (the long form for environments where `flowgate` collides with something else). The TUI auto-discovers the `mcp-flowgate` binary; if you've put it somewhere unusual, point at it with `MCP_FLOWGATE_PATH=/path/to/mcp-flowgate`.
 
 See [The TUI](/guides/tui/) for the rundown — picking a workflow, driving transitions, routing cognitive states to different agent configs, and reading the logs the TUI drops in `~/.cache/flowgate/logs/`.
+
+## Wire flowgate into your editor
+
+With the binaries installed, generate the editor config files in one shot:
+
+```bash
+cd your-project
+flowgate mcp init --cursor --claude-desktop
+```
+
+That writes `.mcp.json` (Claude Code, Continue, Cline), `.cursor/mcp.json`, and a `claude_desktop_config.json` snippet. Zed needs a slightly different setup — copy the snippet from the guide.
+
+See [Wire flowgate into your editor](/guides/editors/) for the full per-editor walkthrough, both the MCP path (every editor) and the ACP path (Zed today, others adopting).

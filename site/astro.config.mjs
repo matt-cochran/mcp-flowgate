@@ -59,6 +59,7 @@ export default defineConfig({
 						{ label: 'Everything a repo can ship', slug: 'guides/reusable-primitives', badge: { text: 'v0.2', variant: 'success' } },
 						{ label: 'Self-authoring with flowgate-meta', slug: 'guides/self-authoring', badge: { text: 'v0.2', variant: 'success' } },
 						{ label: 'The TUI', slug: 'guides/tui' },
+						{ label: 'Wire flowgate into your editor', slug: 'guides/editors' },
 						{ label: 'Hot reload', slug: 'guides/hot-reload' },
 						{ label: 'Going to production', slug: 'guides/production' },
 					],

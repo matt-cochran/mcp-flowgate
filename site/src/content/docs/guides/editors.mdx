@@ -1,0 +1,222 @@
+---
+title: "Wire flowgate into your editor"
+description: "Two integration paths — MCP (Zed, Cursor, Claude Desktop, Claude Code, VS Code via Continue/Cline) and ACP (Zed, others adopting). One-liner setup via `flowgate mcp init`. Copy-paste config for each editor."
+---
+
+You install `mcp-flowgate`. You install the `flowgate` TUI. You write your `gateway.yaml`. Now the model in your editor needs to actually see the 10 fixed tools instead of whatever the editor ships with.
+
+Each editor wires it slightly differently. This guide walks each one — Zed, Cursor, Claude Desktop, Claude Code — and shows both integration paths.
+
+## Two paths
+
+There are two ways an editor talks to flowgate:
+
+**MCP path.** The editor's agent panel speaks the Model Context Protocol. It spawns `mcp-flowgate serve` as a child process, gets the 10 fixed tools (`gateway.home`, `gateway.search`, `gateway.describe`, `workflow.start`/`get`/`submit`/`explain`, `gateway.lexicon.search`/`lookup`/`define`), and the model uses them. Every editor in this guide supports MCP.
+
+**ACP path.** The editor speaks the Agent Communication Protocol (Zed today, others adopting). Instead of giving the model a tool surface, the editor drives a workflow through the deterministic interpreter — same code path the [TUI](/guides/tui/) uses for `flowgate walk`. The agent panel walks workflow states; the model fills in the cognitive blanks per state. Different shape, different ceiling.
+
+Operators who want the model to drive use MCP. Operators who want the workflow to drive the model use ACP.
+
+## One-liner setup
+
+The `flowgate` binary ships an `mcp init` subcommand that generates the config files for you:
+
+```bash
+cd your-project
+flowgate mcp init --cursor --claude-desktop
+```
+
+That writes three files in your project root:
+
+- `.mcp.json` — picked up by Claude Code, Continue, Cline, and any project-root MCP host
+- `.cursor/mcp.json` — Cursor's MCP config
+- `claude_desktop_config.json` — a snippet you merge into your real Claude Desktop config (which lives at a platform-specific path; the command prints the location)
+
+Each file declares flowgate as a single MCP server, using the same binary path your TUI uses and pointing at `flowgate.yaml` in the project directory if one exists. Re-run with `--force` to overwrite; without `--force` an existing file errors instead of silently clobbering.
+
+Zed is the only editor whose config the generator skips. Zed's `settings.json` carries operator-specific themes, keybindings, agent profiles — overwriting it would lose all that. Copy the snippet below and merge it by hand.
+
+## Zed
+
+Zed supports both paths.
+
+### MCP path
+
+Add to `.zed/settings.json`:
+
+```json
+{
+  "context_servers": {
+    "flowgate": {
+      "command": { "path": "mcp-flowgate", "args": ["serve"] }
+    }
+  },
+  "agent": {
+    "default_profile": "write",
+    "profiles": {
+      "flowgate": {
+        "name": "Flowgate",
+        "tools": {
+          "read_file": false,
+          "list_directory": false,
+          "terminal": false,
+          "edit_file": false,
+          "grep": false,
+          "find_path": false,
+          "diagnostics": false,
+          "fetch": false,
+          "copy_path": false,
+          "create_directory": false,
+          "delete_path": false,
+          "move_path": false,
+          "open": false,
+          "save_file": false,
+          "restore_file_from_disk": false,
+          "search_web": false,
+          "thinking": false,
+          "now": false,
+          "spawn_agent": false
+        },
+        "enable_all_context_servers": false,
+        "context_servers": {
+          "flowgate": {
+            "tools": {
+              "gateway.home": true,
+              "gateway.search": true,
+              "gateway.describe": true,
+              "workflow.start": true,
+              "workflow.get": true,
+              "workflow.submit": true,
+              "workflow.explain": true,
+              "gateway.lexicon.search": true,
+              "gateway.lexicon.lookup": true,
+              "gateway.lexicon.define": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+That's two things:
+
+1. **`context_servers.flowgate`** — registers `mcp-flowgate` as an MCP server Zed can spawn.
+2. **`agent.profiles.flowgate`** — a custom agent profile that disables all 19 of Zed's built-in tools (`read_file`, `terminal`, etc.) and enables only the 10 flowgate tools. Switching to this profile in the agent panel gives the model exactly the 10 tools, nothing else.
+
+Open the agent panel, pick **Flowgate** from the profile dropdown at the bottom. The model now sees only governed actions. Switch back to **Write** when you want raw editor access.
+
+### ACP path
+
+Add to `.zed/settings.json` (in parallel with or instead of the MCP setup above):
+
+```json
+{
+  "agent_servers": {
+    "flowgate": {
+      "command": "flowgate",
+      "args": ["acp"]
+    }
+  }
+}
+```
+
+Zed launches `flowgate acp` as the agent backend. Instead of the model picking tools from a list, Zed drives a workflow through the deterministic interpreter. The per-state agent routing (the `delegate:` field) lives on the workflow definition — Zed reads it and routes each cognitive state to whatever model that delegate names.
+
+ACP is simpler config (no profile gymnastics) but a more opinionated runtime. Pick it when you've authored a workflow and want the editor to execute it; pick MCP when you want the model to discover and call tools freely.
+
+## Cursor
+
+MCP path only. Run `flowgate mcp init --cursor` or paste this into `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "flowgate": {
+      "command": "mcp-flowgate",
+      "args": ["serve"],
+      "env": {
+        "FLOWGATE_CONFIG": "${workspaceFolder}/flowgate.yaml"
+      }
+    }
+  }
+}
+```
+
+Restart Cursor. The 10 flowgate tools show up in the agent's tool list alongside Cursor's built-ins.
+
+One caveat that Zed users don't have: Cursor doesn't let you disable built-in tools at the editor level. The model can still call Cursor's own file-editing, terminal, and web-search tools alongside flowgate's. If you want strict "only flowgate" governance in Cursor, enforce it in `gateway.yaml` — declare all the side-effecting connections (shell, GitHub, etc.) behind flowgate's `connections:` proxy with appropriate guards. The editor side stays permissive; the gateway side stays strict.
+
+## Claude Desktop
+
+MCP path. Run `flowgate mcp init --claude-desktop`. That generates `claude_desktop_config.json` in your project root — a snippet you merge into Claude Desktop's actual config file, which lives at a platform-specific path:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+The snippet shape:
+
+```json
+{
+  "mcpServers": {
+    "flowgate": {
+      "command": "mcp-flowgate",
+      "args": ["serve"],
+      "env": {
+        "FLOWGATE_CONFIG": "/absolute/path/to/your/flowgate.yaml"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop. Flowgate's 10 tools appear in the model's tool inventory.
+
+If you already have other MCP servers wired into Claude Desktop, merge under `mcpServers` — add a `"flowgate": { ... }` key alongside the existing ones. Don't overwrite the whole `mcpServers` block; you'd lose your other servers.
+
+## Claude Code
+
+MCP path. Two equivalent ways.
+
+### Via `.mcp.json`
+
+Run `flowgate mcp init` (no flags needed — `.mcp.json` is the default output). Claude Code auto-discovers `.mcp.json` in the project root on session start.
+
+### Via the CLI
+
+```bash
+claude mcp add flowgate -- mcp-flowgate serve
+```
+
+That registers flowgate in Claude Code's project-scoped MCP config without touching files directly. Subsequent `claude` invocations from this project pick it up. To see what's wired:
+
+```bash
+claude mcp list
+```
+
+Either path produces the same effect. Pick `.mcp.json` if you want the config in version control alongside your `gateway.yaml`; pick the CLI if you'd rather keep MCP wiring out of your repo.
+
+## VS Code (via Continue, Cline, or any MCP-client extension)
+
+VS Code itself doesn't ship MCP support, but most agent extensions (Continue, Cline, etc.) do. They use the same `.mcp.json` shape — run `flowgate mcp init` and the extension picks up flowgate as an MCP server. Restart the extension. The 10 tools surface in the extension's agent panel.
+
+A dedicated VS Code extension for `gateway.yaml` editing (analogous to a language server with hover docs and validation against the V1–V23 cloud) is plausible follow-up work — not shipping with v0.2.
+
+## When to pick ACP over MCP
+
+The MCP path is the default for a reason: every editor in this guide supports it, the model can discover and use tools freely, and existing workflows work without rewrite. Reach for ACP when:
+
+- **You've authored a lifecycle orchestrator** and want the editor to execute it end-to-end without manual prompting. ACP drives the workflow; MCP gives the model a menu.
+- **You want per-state sub-agent routing** via the workflow's `delegate:` field. Different states can run on different models — a cheap one for `plan.draft.scaffold`, a frontier one for `review.adversarial.deep`. The [TUI guide](/guides/tui/) covers the routing mechanics; ACP exposes the same mechanism through Zed.
+- **You want the audit trail to record workflow state transitions**, not raw tool calls. ACP sessions audit at the workflow level; MCP sessions audit per tool call.
+
+Both paths use the same underlying gateway. Workflows you author show up in both. Switch between them per project, or wire one project for each.
+
+## What's next
+
+- [The TUI](/guides/tui/) — the terminal-based agent that uses the same ACP code path Zed connects to.
+- [MCP tools reference](/reference/tools/) — what each of the 10 fixed tools does.
+- [Installation](/installation/) — binary install paths.
+- [Capabilities and orchestrators](/guides/capabilities-and-orchestrators/) — the workflow shapes that benefit most from the ACP path.
