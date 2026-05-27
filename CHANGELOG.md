@@ -10,7 +10,49 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
-(none currently — see 0.2.0 below)
+Adds the FMECA-vetted agent-resolver design: `agents.yaml` with closed-enum affinities/tiers, sparse overrides keyed by `<affinity>-<tier>`, eager auth preflight, and a guided-setup orchestrator (`meta/flow.configure-models`) in the sibling [flowgate-meta](https://github.com/matt-cochran/flowgate-meta) repo. Replaces the v0.2 pattern of repeating `--agent name=provider/model` CLI flags per workflow invocation.
+
+### Added — Agent resolver (`agents.yaml`)
+
+- **`crates/mcp-flowgate-tui/src/agent_resolver/`** — new module with sub-modules `config`, `classify`, `walk`, `preflight`. Loads `.flowgate/agents.yaml` (project) or `~/.config/flowgate/agents.yaml` (user); project shadows user whole-file.
+- **Closed enums** — `Affinity` (`coding | reasoning | prose | web-search | recon`), `Tier` (`frontier | standard | commoditized`), `Provider` (`anthropic | openai | google | ollama | lmstudio | custom`). Enum additions are minor-version compatible per the documented policy.
+- **Specificity walk** — `<affinity>-<tier>` → `<affinity>` → `<tier>` → `default`. Affinity wins tiebreaker. Opt-in `strict_specificity: true` upgrades the fall-through to a load-time error.
+- **`FailureClass`** — closed enum `Auth401 | Auth403 | RateLimit429 | NotFound404 | NetworkTimeout | ContentSchema | ContentSafety | ContentOther`. Unknown response status defaults to `ContentOther` (surface, never fall through).
+- **Eager auth preflight** at workflow load — every primary (index 0) binding referenced by any declared `delegate:` is auth-probed once. 401/403 is a startup error, never a runtime fall-through. `FLOWGATE_SKIP_PREFLIGHT=1` escape for CI / disconnected dev.
+- **Mutual exclusion** between `--agent` CLI flags and `agents.yaml` (FMECA T1). Both set → `AmbiguousAgentSource` startup error.
+- **Per-provider feature structs** with `#[serde(deny_unknown_fields)]` — `extended_thinking`, `reasoning_effort`, etc. Typos fail at load with the offending key named.
+- **Structured `AgentResolutionExhausted`** carrying `delegate`, `walked_levels`, `attempts: Vec<AttemptRecord { binding, class, detail }>`.
+
+### Added — Doctor checks
+
+- **`agents.yaml`** — loads project + user files; reports binding/override counts and `strict_specificity` status.
+- **`agents.yaml shadow`** — names the shadowed file when both project and user files exist.
+- **`workflow delegates`** — runs each `delegate:` state through `resolver.walk()` and reports the specificity level chosen (names every delegate whose only match is a less-specific fallback).
+
+### Added — `flowgate validate-agents-config <path>` subcommand
+
+- Loads an `agents.yaml` at an arbitrary path via the SAME `AgentsFile::from_path` the resolver uses at workflow start; emits a JSON envelope `{ok, summary, error_kind, detail}` on stdout. Stable `error_kind` codes (`MISSING_DEFAULT`, `EMPTY_DEFAULT`, `UNKNOWN_OVERRIDE_KEY`, `UNKNOWN_FEATURE_KEY`, etc.) scripts can switch on.
+- Powers the round-trip validation step in `meta/cap.implement.write-agents-config` (FMECA U3).
+
+### Added — `meta/flow.configure-models` orchestrator (in [flowgate-meta](https://github.com/matt-cochran/flowgate-meta))
+
+- Five caps: `cap.research.model-inventory`, `cap.plan.suggest-bindings`, `cap.gate.human-approve-plan`, `cap.implement.write-agents-config`, `cap.verify.auth-only-smoke-test`.
+- One orchestrator wiring them: inventory → plan → approve (`mode: auto` or `review_plan`) → atomic write + round-trip → 1-token smoke per binding.
+- Smoke-test output names its limitation explicitly: **auth verified, capability not tested**. v0.4 roadmap replaces it with a capability harness.
+- E2E walked-to-terminal test in `crates/mcp-flowgate-executors/tests/meta_orchestrators_e2e.rs::meta_flow_configure_models_walks_to_terminal_in_auto_mode`.
+
+### Documentation
+
+- **`site/src/content/docs/guides/agent-config.mdx`** — migration story, closed-enum reference, strict-mode discipline, `flow.configure-models` walkthrough.
+
+### Honest deferrals (v0.3.1 / v0.4 roadmap)
+
+- Per-list runtime CoR over actual provider failures (v0.3.1) — the classifier and structured exhaustion error are already in place.
+- Per-provider feature-toggle translation to upstream SDK extras (v0.3.1).
+- `flowgate doctor --refresh-agents` periodic re-probe (v0.4).
+- Capability-quality harness replacing the auth-only smoke test (v0.4).
+
+
 
 ## [0.2.0] — 2026-05-26
 

@@ -1,7 +1,7 @@
 schema: flowgate.repo/v1
 name: flowgate-meta
 namespace: meta
-version: 0.1.0
+version: 0.2.0
 description: |
   Meta-authoring workflows for mcp-flowgate v0.6+: capabilities and
   orchestrators whose job is to author or optimize other capabilities
@@ -17,19 +17,26 @@ description: |
   Loaded ids land under `meta/<id>` — e.g. `meta/flow.author-capability`,
   `meta/cap.research.tool-inventory`.
 
-  The four meta orchestrators (v0.1):
+  The meta orchestrators (v0.1 + v0.2):
     - meta/flow.author-capability
     - meta/flow.author-flow
     - meta/flow.optimize-capability
     - meta/flow.optimize-flow
+    - meta/flow.configure-models       (v0.2 — agents.yaml setup)
 
-  All four share a small cap stack: tool-inventory (introspect what's
-  reachable), compose-implementation (propose shapes), emit-yaml
-  (generate snippet-contract-compliant YAML), check-config (run
-  `mcp-flowgate check` on the result), audit-mine-transitions (for
-  the optimize variants), plus thin typed wrappers over the existing
-  `gateway.lexicon.*` MCP tools so authored content stays
+  The first four share a small cap stack: tool-inventory (introspect
+  what's reachable), compose-implementation (propose shapes),
+  emit-yaml (generate snippet-contract-compliant YAML), check-config
+  (run `mcp-flowgate check` on the result), audit-mine-transitions
+  (for the optimize variants), plus thin typed wrappers over the
+  existing `gateway.lexicon.*` MCP tools so authored content stays
   vocabulary-consistent.
+
+  `flow.configure-models` adds five caps for the LLM-binding setup
+  flow: research.model-inventory, plan.suggest-bindings,
+  gate.human-approve-plan, implement.write-agents-config,
+  verify.auth-only-smoke-test. Wires the FMECA-vetted agent
+  resolver design from mcp-flowgate v0.3.
 
 layout:
   capabilities:  capabilities

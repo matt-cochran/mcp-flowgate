@@ -193,3 +193,26 @@ async fn meta_flow_optimize_flow_walks_to_terminal() {
     )
     .await;
 }
+
+/// PR2 — `flow.configure-models` walks the full
+/// inventory → plan → gate → write → smoke chain in `mode=auto` so
+/// the deterministic auto_approve branch fires (no human gate
+/// blocking). Each cap is short-circuited by `CapShortCircuit` via
+/// its snippet outputs (FixtureRegistry pattern).
+#[tokio::test]
+async fn meta_flow_configure_models_walks_to_terminal_in_auto_mode() {
+    let td = TempDir::new().unwrap();
+    let host_path = write_host_config(&td);
+    let (config, _diags) = load_resolved_with_repos(&host_path).expect("config loads");
+    let _ = walk_to_terminal(
+        "meta/flow.configure-models",
+        json!({
+            "providers": "anthropic,openai",
+            "delegates": ["coding-frontier", "prose-standard"],
+            "mode":      "auto",
+            "target_path": ".flowgate/agents.yaml",
+        }),
+        &config,
+    )
+    .await;
+}

@@ -53,7 +53,8 @@ Modes:\n\
   agent       Manage agent configurations\n\
   walk        Drive a workflow via the deterministic interpreter\n\
   doctor      Pre-flight checks before walk\n\
-  mcp init    Generate .mcp.json (and optional editor configs)"
+  mcp init    Generate .mcp.json (and optional editor configs)\n\
+  validate-agents-config\n              Validate an agents.yaml at any path; JSON envelope on stdout"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -81,6 +82,20 @@ enum Command {
     /// MCP client config generators.
     #[command(subcommand)]
     Mcp(McpCommand),
+    /// Validate an `agents.yaml` file at an arbitrary path. Emits a
+    /// JSON envelope `{ok, summary, error}` on stdout; exits 0 on
+    /// pass, 1 on fail. Used by the meta library's
+    /// `cap.implement.write-agents-config` for post-write round-trip
+    /// validation (FMECA U3) when the operator's target path is
+    /// outside the resolver's standard `.flowgate/agents.yaml` /
+    /// `~/.config/flowgate/agents.yaml` lookup.
+    ValidateAgentsConfig(ValidateAgentsConfigArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ValidateAgentsConfigArgs {
+    /// Path to the `agents.yaml` file to validate.
+    pub path: PathBuf,
 }
 
 /// `flowgate mcp <subcommand>` — operator-facing MCP wiring helpers.
@@ -191,6 +206,7 @@ async fn main() -> Result<ExitCode> {
         Some(Command::Mcp(McpCommand::Init(args))) => {
             mcp_init::run_init(&args).map(|_| ExitCode::SUCCESS)
         }
+        Some(Command::ValidateAgentsConfig(args)) => Ok(run_validate_agents_config(&args.path)),
     }
 }
 
@@ -444,5 +460,20 @@ async fn run_doctor(args: DoctorCliArgs) -> Result<ExitCode> {
         Ok(ExitCode::FAILURE)
     } else {
         Ok(ExitCode::SUCCESS)
+    }
+}
+
+/// `flowgate validate-agents-config <path>` — load the file via the
+/// same `AgentsFile::from_path` the resolver uses at workflow start
+/// and emit the typed envelope on stdout. Used by
+/// `cap.implement.write-agents-config` for post-write round-trip
+/// validation (FMECA U3).
+fn run_validate_agents_config(path: &std::path::Path) -> ExitCode {
+    let envelope = mcp_flowgate_tui::agent_resolver::validate_agents_config_envelope(path);
+    println!("{}", envelope);
+    if envelope["ok"].as_bool().unwrap_or(false) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }

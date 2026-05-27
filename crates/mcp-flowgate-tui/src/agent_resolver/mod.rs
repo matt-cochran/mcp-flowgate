@@ -41,3 +41,47 @@ pub use preflight::{verify_all_primary_bindings, verify_primary_bindings, Prefli
 pub use walk::{
     AgentResolutionExhausted, AttemptRecord, ConfigSource, Delegate, DelegateParseError, Resolver,
 };
+
+/// Validate an `agents.yaml` file at an arbitrary path by loading it
+/// through `AgentsFile::from_path` — exactly the same path the
+/// resolver uses at workflow start. Returns the JSON envelope the
+/// `flowgate validate-agents-config` CLI emits.
+///
+/// On success: `{"ok": true, "summary": "..."}`. On failure:
+/// `{"ok": false, "error_kind": "<variant>", "detail": "<rendered>"}`.
+/// `error_kind` is one of: `MISSING_DEFAULT`, `EMPTY_DEFAULT`,
+/// `MISSING_PROVIDER_MODEL`, `UNKNOWN_OVERRIDE_KEY`,
+/// `UNKNOWN_FEATURE_KEY`, `PROVIDER_ENDPOINT_REQUIRED`,
+/// `VERSION_MISMATCH`, `YAML_SYNTAX`, `IO`. The kind is the
+/// stable contract; the detail is for humans.
+pub fn validate_agents_config_envelope(path: &std::path::Path) -> serde_json::Value {
+    match AgentsFile::from_path(path) {
+        Ok(file) => serde_json::json!({
+            "ok": true,
+            "summary": format!(
+                "{} default binding(s), {} override list(s), strict_specificity={}",
+                file.default.len(),
+                file.overrides.len(),
+                file.strict_specificity,
+            ),
+        }),
+        Err(e) => {
+            let kind = match &e {
+                AgentConfigError::MissingDefault => "MISSING_DEFAULT",
+                AgentConfigError::EmptyDefault => "EMPTY_DEFAULT",
+                AgentConfigError::MissingProviderModel => "MISSING_PROVIDER_MODEL",
+                AgentConfigError::UnknownOverrideKey(_) => "UNKNOWN_OVERRIDE_KEY",
+                AgentConfigError::UnknownFeatureKey { .. } => "UNKNOWN_FEATURE_KEY",
+                AgentConfigError::ProviderEndpointRequired => "PROVIDER_ENDPOINT_REQUIRED",
+                AgentConfigError::VersionMismatch { .. } => "VERSION_MISMATCH",
+                AgentConfigError::YamlSyntax(_) => "YAML_SYNTAX",
+                AgentConfigError::Io(_) => "IO",
+            };
+            serde_json::json!({
+                "ok": false,
+                "error_kind": kind,
+                "detail": e.to_string(),
+            })
+        }
+    }
+}

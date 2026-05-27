@@ -422,16 +422,35 @@ pub enum AgentConfigError {
 // inspection of the error message — but tests rely on the exact variant.
 // Implement a translation helper:
 impl AgentConfigError {
-    /// Inspect a `YamlSyntax` error and return `MissingDefault` if that's
-    /// what it really represents. Idempotent — non-missing-default errors
-    /// pass through unchanged.
+    /// Inspect a `YamlSyntax` error and re-extract the typed inner variant
+    /// when serde's wrapping has lost it. Idempotent — pass-through when
+    /// the inner cause isn't recognized.
+    ///
+    /// Why: custom deserializers (e.g. `OverrideKey::deserialize`) emit
+    /// our typed errors via `serde::de::Error::custom`, which serde wraps
+    /// in its own error chain. The string survives intact; the typed
+    /// variant doesn't. This refiner reconstructs the variant by matching
+    /// the stable marker strings embedded in each variant's `Display`
+    /// impl. Tests in `agent_resolver_config.rs` pin the marker strings.
     pub fn refine_missing_default(self) -> Self {
         if let AgentConfigError::YamlSyntax(e) = &self {
             let msg = e.to_string();
             if msg.contains("missing field `default`") {
                 return AgentConfigError::MissingDefault;
             }
+            // `OverrideKey::parse` emits its key in the form:
+            // ``agents.yaml override key `<KEY>` is not a valid``.
+            if let Some(key) = extract_between(&msg, "override key `", "` is not a valid") {
+                return AgentConfigError::UnknownOverrideKey(key.to_string());
+            }
         }
         self
     }
+}
+
+fn extract_between<'a>(haystack: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let s = haystack.find(start)? + start.len();
+    let rest = &haystack[s..];
+    let e = rest.find(end)?;
+    Some(&rest[..e])
 }

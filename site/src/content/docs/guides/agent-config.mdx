@@ -159,7 +159,44 @@ Per-provider feature structs use `#[serde(deny_unknown_fields)]`, so typos fail 
 In v0.3, feature toggles are **parsed and validated** at load time, but runtime translation to the provider's per-call API is deferred to v0.3.1. The TUI logs a warning when a binding's features are non-default so you know which model your spawn is missing toggles on. Track the upgrade at [the v0.3.1 milestone](https://github.com/matt-cochran/mcp-flowgate/milestones).
 </Aside>
 
+## Guided setup with `flow.configure-models`
+
+Hand-authoring `agents.yaml` is fine for two-line files, but as soon as you want per-affinity overrides + CoR fallbacks across multiple providers, the [`flowgate-meta`](https://github.com/matt-cochran/flowgate-meta) repo ships an orchestrator that walks you through it:
+
+```bash
+# After loading flowgate-meta in your gateway config
+flowgate walk --workflow meta/flow.configure-models
+```
+
+The orchestrator runs five stages:
+
+1. **`cap.research.model-inventory`** — probes each provider you name (`anthropic,openai,google,ollama,lmstudio`) for its model catalog. Failures are classified per the same `FailureClass` enum the resolver uses (`Auth401`, `RateLimit429`, `NetworkTimeout`, etc.) so a missing API key surfaces explicitly, not silently.
+2. **`cap.plan.suggest-bindings`** — an agent composes one opinionated plan: a `default:` list, sparse overrides keyed to the affinity-tier pairs your workflows actually reference, plus rationale + assumptions for each non-obvious choice.
+3. **`cap.gate.human-approve-plan`** — HITL gate. Two modes:
+   - `review_plan` (default) — surfaces the plan + rationale + assumptions for your approval. You can hand back an edited plan instead of approving the original.
+   - `auto` — skips the gate. Useful for CI / scripted setup.
+4. **`cap.implement.write-agents-config`** — atomic write (temp file in the target dir → `flowgate validate-agents-config` round-trip → `rename`). A failed round-trip rolls back the temp file rather than replacing a working `agents.yaml` with a broken one.
+5. **`cap.verify.auth-only-smoke-test`** — 1-token completion per binding in the just-written file. **This proves auth, not capability.** Output names the limitation explicitly:
+
+   > Auth verified for the bindings reported above. CAPABILITY NOT TESTED — a model that authenticates may still fail to code, reason, or follow safety constraints in your actual workflows.
+
+   The v0.4 roadmap replaces this with a capability harness that exercises bindings against real workflow tasks. Until then, the smoke test is honest about what it does and doesn't cover.
+
+Inputs:
+
+```bash
+flowgate walk --workflow meta/flow.configure-models --input '{
+  "providers":   "anthropic,openai,google",
+  "delegates":   ["coding-frontier", "reasoning-frontier", "prose-standard"],
+  "mode":        "review_plan",
+  "target_path": ".flowgate/agents.yaml"
+}'
+```
+
+If the round-trip fails or you reject the plan, the orchestrator terminates in `failed` rather than `done` — and your existing `agents.yaml` (if any) is untouched.
+
 ## What's next
 
-- The [`flow.configure-models`](/guides/self-authoring/) orchestrator (PR2, shipping in v0.3 or v0.3.1) will interview your provider catalog and write this file for you.
 - The full [validation rules](/reference/validation-rules/) cover every schema check the loader enforces.
+- v0.3.1 wires per-list runtime CoR over actual provider failures + per-provider feature-toggle translation. The classifier, structured `AgentResolutionExhausted`, and typed feature structs are already in place.
+- v0.4 ships `flowgate doctor --refresh-agents` for periodic re-probing of model availability + the capability harness that replaces the auth-only smoke test.
