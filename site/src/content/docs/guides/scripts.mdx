@@ -1,0 +1,216 @@
+---
+title: "How scripts work"
+description: "Scripts are the deterministic peer to skills. Hash-pinned, snapshot-stamped, invocable from any workflow via kind: script. Inline body or external uri+hash. Here's the operational rundown."
+---
+
+Where skills tell the model what to think, scripts tell the workflow what to do. Deterministically. Same shape conventions — verb, subject, lifecycle, body — but a fundamentally different runtime contract: the script executes, not the model.
+
+[Script verbs](/reference/script-verbs/) covers the 12-verb taxonomy. This page is the operational rundown — where scripts live, how the body gets materialized, how a workflow invokes them, and the hash-pinning + snapshot invariant.
+
+## Anatomy
+
+A script entry under the top-level `scripts:` block (or in a repo's `scripts-library/` directory):
+
+```yaml
+scripts:
+  test.cargo.workspace:
+    verb: test
+    lifecycle: stable
+    source: my-team
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo test --workspace --no-fail-fast "$@"
+```
+
+| Field | Required | What it does |
+|---|---|---|
+| `verb` | yes | One of the 12 script verbs ([reference](/reference/script-verbs/)). Closed enum. |
+| `lifecycle` | yes | `experimental` \| `stable` \| `deprecated`. Same conventions as skills. |
+| `body` | xor with `uri` | Inline script. Materialized to a `chmod 0700` tempfile at execute time. |
+| `uri` | xor with `body` | External script source. `file://`, `https://`, or `git+https://...@<ref>#<path>`. |
+| `hash` | required iff `uri` | `sha256:<64 hex chars>`. The runtime fetches the URI, hashes the body, and refuses to execute if it doesn't match. |
+| `source` | no | Provenance string (`my-team`, `cognitive-architectures`, `git+https://...`). Surfaced in audit. |
+
+The subject (the key — `test.cargo.workspace`) is a dotted namespace, same shape as skills. First segment must be a blessed root from the script subject roots; `build`, `test`, `deploy`, `format`, `lint`, `install`, `verify`, `run`, `inspect`, `search`, `fetch`, `audit`.
+
+## Inline vs external — pick the right one
+
+The two body sources solve different problems.
+
+### Inline `body:`
+
+```yaml
+scripts:
+  format.rust.check:
+    verb: format
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo fmt --all -- --check
+```
+
+Self-contained. The script body lives in the YAML; no external fetch at load time; no operator-side filesystem assumption beyond "bash is available." Good for small portable scripts every operator can run identically.
+
+### External `uri:` + required `hash:`
+
+```yaml
+scripts:
+  deploy.cargo-install:
+    verb: deploy
+    lifecycle: stable
+    uri: "file://scripts-library/deploy.cargo-install.sh"
+    hash: "sha256:c9f4b8...e2a"
+```
+
+The script body lives in an external file (or HTTP URL, or git ref). The runtime fetches it at load time, hashes the body, and aborts if the hash doesn't match. The hash is the integrity gate — a hijacked endpoint, a corrupted file, or a typo in the script content all surface as `SCRIPT_HASH_MISMATCH`.
+
+Use external `uri:` when:
+
+- The script is long enough that inlining bloats the YAML.
+- The script needs a real editor (syntax highlighting, linting) and shouldn't live in a YAML string.
+- The script is shared across multiple repos and you want one canonical source.
+
+Supported URI schemes:
+
+| Scheme | Resolution | When to use |
+|---|---|---|
+| `file://path/relative.sh` | Resolved at load time against the YAML file's directory. Becomes absolute before runtime sees it. | Scripts that ship in the same repo as the gateway config. The common case. |
+| `file:///absolute/path` | Already absolute. | Scripts installed system-wide. |
+| `https://...` | Blocking HTTP GET at load time. 30-second timeout. | Centrally-hosted script libraries. The hash is what makes the network call safe. |
+| `git+https://<host>/<repo>(.git)?@<ref>#<path>` | `git archive --remote=<url> <ref> <path>` at load time. | Scripts pinned to a specific git ref (SHA or signed tag). Many forges (GitHub, GitLab.com) disable `upload-archive` over HTTPS for security; if yours does, host the file via raw HTTPS or run a local mirror. |
+
+Inline + `hash:` is also legal: the hash is recomputed and verified at load. Useful for catching accidental edits to inline scripts before they ship.
+
+## Where scripts live
+
+Same two-place model as skills.
+
+### Inline in the gateway config
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+
+scripts:
+  test.cargo.workspace:
+    verb: test
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo test --workspace "$@"
+```
+
+Simplest path. One file, no repo manifest.
+
+### From a repo's `scripts-library/` directory
+
+A resource repo declares scripts under its manifest's `scripts:` layout key (defaults to `scripts-library/`):
+
+```yaml
+# repos/cognitive-architectures/flowgate.repo.yaml
+schema: flowgate.repo/v1
+namespace: cognitive
+layout:
+  scripts: scripts-library     # ← scripts-library/*.yaml load from here
+```
+
+```yaml
+# repos/cognitive-architectures/scripts-library/test.cargo.workspace.yaml
+scripts:
+  test.cargo.workspace:
+    verb: test
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo test --workspace "$@"
+```
+
+Loaded scripts get namespace-prefixed `cognitive/test.cargo.workspace`. Same disambiguation rules as skills — two repos can ship the same bare subject without colliding.
+
+## How a workflow invokes a script
+
+Via the `script` executor kind:
+
+```yaml
+workflows:
+  verify-pipeline:
+    initialState: verifying
+    states:
+      verifying:
+        transitions:
+          run:
+            target: done
+            actor: deterministic
+            executor:
+              kind: script
+              subject: test.cargo.workspace
+            output:
+              passed: "$.output.passed"
+```
+
+The runtime:
+
+1. Looks up `test.cargo.workspace` in the workflow's stamped `_scriptsLibrary` snapshot (see below).
+2. Materializes the body to a `chmod 0700` tempfile.
+3. Executes via shebang line (or bash fallback).
+4. Captures stdout / stderr / exit code.
+5. Emits a `script_output` evidence record with the body hash for audit replay.
+6. Surfaces the parsed stdout as the executor's output for the transition's `output:` mapping.
+
+For cross-namespace script references from a repo-loaded workflow, the same fall-through resolution applies as for skills:
+
+1. Try the workflow's own namespace prefix first (`cognitive/test.cargo.workspace`).
+2. Then the bare subject (`test.cargo.workspace`).
+
+Fully-qualify to reference scripts from a different namespace explicitly (`internal/deploy.kubectl-strict`).
+
+## Snapshot stamping (`_scriptsLibrary`)
+
+Same SPEC §8.2 invariant as `_skillsLibrary`. When `workflow.start` creates an instance, the runtime stamps a `_scriptsLibrary` onto the instance's definition snapshot — copy of every script the workflow references, with body, hash, and verb included.
+
+For inline `body:` scripts the snapshot carries the literal text. For external `uri:` scripts the snapshot carries the *resolved* body — the runtime fetched it at load time, verified the hash, and snapshotted the verified bytes. The instance executes against the snapshotted body, not against a re-fetch.
+
+What this buys:
+
+- **No mid-flight body swap.** An operator edits the script file. In-flight instances keep executing the version that was hashed and stamped at start.
+- **No network on the hot path.** Even `https://` and `git+https://` scripts execute from the local snapshot. The network is touched exactly once per gateway boot, at config load.
+- **Replay integrity.** A year-old audit log tells you the exact body hash; you can re-fetch the URI at that hash and confirm.
+
+The cost is the same as skills' snapshot stamping — the script body lives in the instance's snapshot. For typical 10–100-line scripts, this is negligible.
+
+## Hash normalization
+
+Script hashing collapses trailing newlines but preserves all internal whitespace exactly. Shell scripts treat whitespace as load-bearing (`if [[ $x == "y" ]]` vs `if [[ $x  ==  "y" ]]` are different programs); the normalization is stricter than skills'.
+
+The rule:
+
+- Collapse trailing newlines to exactly one terminal newline. `script\n` and `script\n\n\n` hash identically.
+- Preserve all internal whitespace exactly.
+
+If you compute a hash for a `uri:` script and the runtime rejects with `SCRIPT_HASH_MISMATCH`, the most common cause is editor-inserted trailing whitespace or a tab/space mix you didn't notice. Use `sha256sum` on the bytes you want hashed; the runtime uses the same normalization function for both load-time verification and the snapshot-stamp hash.
+
+## `file://` path resolution
+
+`file://path/script.sh` is relative to the YAML file that declares it. The loader rewrites the URI to an absolute path before any downstream code sees it. A repo at `~/repos/swe-core/` with `flowgate.repo.yaml` referencing `file://scripts-library/deploy.sh` resolves to `~/repos/swe-core/scripts-library/deploy.sh`.
+
+This means moving a repo around the filesystem doesn't break its scripts — relative paths follow the repo. It also means a config that uses `file://` URIs is portable across operators as long as the relative layout is the same.
+
+For absolute paths use `file:///etc/scripts/deploy.sh` (three slashes). The loader leaves absolute paths alone.
+
+## Authoring discipline
+
+- **One verb per script, per the closed enum.** `cargo test` is a `test` script, not a `verify` script. Reach for `verify` only when the script's job is the gating pass/fail (build green, lint clean, format check). The runtime doesn't enforce semantic verb choice; the audit log gets cleaner when verb usage is consistent.
+- **`set -euo pipefail` by default.** Most bugs in shell scripts are "the upstream command failed silently and the rest of the script kept going." `pipefail` catches half of those; `set -e` catches the rest.
+- **Exit codes are the verdict.** A script's stdout can be parsed for context, but the executor records pass/fail from exit code. Scripts that succeed with `exit 0` are passing; anything else is failing. Don't return error text on stdout with exit 0 expecting the workflow to read it as failure.
+- **Hash external scripts.** If you `uri:` a script, the hash is non-negotiable. The whole point of the external-body path is integrity-pinning. An unpinned external URI fails at load (`MISSING_SCRIPT_HASH`).
+- **Lifecycle promotion.** `experimental` scripts are expected to churn. Promoting to `stable` is a commitment to body stability — operators downstream of a stable script can safely hash-pin against today's body.
+
+## What's next
+
+- [Script verbs](/reference/script-verbs/) — the 12-verb taxonomy reference.
+- [How skills work](/guides/skills/) — the cognitive peer to scripts.
+- [How everything composes](/guides/reusable-primitives/) — the full repo author tour.
