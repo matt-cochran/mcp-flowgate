@@ -94,6 +94,7 @@ pub struct RestExecutor {
 impl RestExecutor {
     pub fn new(connections: Arc<RestConnections>) -> Self {
         let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()
             .expect("reqwest client");

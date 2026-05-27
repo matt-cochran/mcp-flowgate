@@ -1598,6 +1598,7 @@ fn read_git_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
 /// trust the network — operator-declared sha256 is the integrity gate.
 fn read_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
     let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(30))
         .user_agent(concat!("mcp-flowgate/", env!("CARGO_PKG_VERSION")))
         .build()
