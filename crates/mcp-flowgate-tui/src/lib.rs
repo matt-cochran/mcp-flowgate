@@ -11,6 +11,8 @@ pub mod agent_config;
 pub mod doctor;
 pub mod flowgate_mcp;
 pub mod interpreter;
+pub mod keyring;
 pub mod mcp_caller;
+pub mod mcp_init;
 pub mod sub_agent;
 pub mod tui_config;

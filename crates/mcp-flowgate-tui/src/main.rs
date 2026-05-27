@@ -21,7 +21,7 @@ mod theme;
 // flowgate_mcp) lives in src/lib.rs so integration tests + the
 // sub-agent spawner can reach them.
 use mcp_flowgate_tui::interpreter::McpToolCaller;
-use mcp_flowgate_tui::{agent_config, flowgate_mcp, tui_config};
+use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, mcp_init, tui_config};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -45,7 +45,10 @@ Modes:\n\
   (default)   Interactive TUI\n\
   headless    Run a single prompt non-interactively\n\
   acp         Start ACP server for editor integration\n\
-  agent       Manage agent configurations"
+  agent       Manage agent configurations\n\
+  walk        Drive a workflow via the deterministic interpreter\n\
+  doctor      Pre-flight checks before walk\n\
+  mcp init    Generate .mcp.json (and optional editor configs)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -70,6 +73,21 @@ enum Command {
     /// Exits 0 if all pass; 1 if any fail. Run before `walk` to catch
     /// env / config issues before the workflow starts.
     Doctor(DoctorCliArgs),
+    /// MCP client config generators.
+    #[command(subcommand)]
+    Mcp(McpCommand),
+}
+
+/// `flowgate mcp <subcommand>` — operator-facing MCP wiring helpers.
+/// Today: `init` generates `.mcp.json` (and optionally `.cursor/mcp.json`,
+/// `claude_desktop_config.json`) so editors connecting via ACP — or any
+/// MCP host like Cursor / Claude Desktop / Claude Code — see flowgate as
+/// the sole MCP server.
+#[derive(Subcommand)]
+enum McpCommand {
+    /// Generate MCP client config files for the project (`.mcp.json` plus
+    /// optional editor-specific outputs via `--cursor` / `--claude-desktop`).
+    Init(mcp_init::McpInitArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -139,6 +157,13 @@ pub struct WalkArgs {
 async fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
 
+    // Pre-flight: ensure the platform keyring service is running. The
+    // upstream ACP runtime eagerly initializes D-Bus Secret Service for
+    // OAuth credential storage; on Linux/WSL2 the daemon may not be
+    // running. See crates/mcp-flowgate-tui/src/keyring.rs. No-op on
+    // macOS and Windows.
+    keyring::ensure_keyring_available();
+
     match cli.command {
         None => run_tui().await,
         Some(Command::Headless(args)) => run_headless(args).await,
@@ -146,6 +171,9 @@ async fn main() -> Result<ExitCode> {
         Some(Command::Agent(cmd)) => run_agent(cmd).await,
         Some(Command::Walk(args)) => run_walk(args).await,
         Some(Command::Doctor(args)) => run_doctor(args).await,
+        Some(Command::Mcp(McpCommand::Init(args))) => {
+            mcp_init::run_init(&args).map(|_| ExitCode::SUCCESS)
+        }
     }
 }
 
