@@ -42,15 +42,83 @@
 
 use std::time::Duration;
 
-use aether_cli::headless::{run_headless, CliOutputFormat, HeadlessArgs};
+use aether_cli::headless::{run::run as run_aether_headless, OutputFormat, RunConfig};
 use aether_cli::mcp_config_args::McpConfigArgs;
+use aether_core::agent_spec::AgentSpec;
 use async_trait::async_trait;
+use llm::ReasoningEffort;
 use tokio::time::timeout;
 
-use crate::agent_resolver::ProviderFeatures;
+use crate::agent_resolver::{
+    AnthropicFeatures, GoogleFeatures, OpenAIFeatures, ProviderFeatures,
+};
 use crate::flowgate_mcp;
 use crate::interpreter::{InterpreterError, ResolvedAgent, SubAgentSpawner};
 use crate::tui_config::TuiConfig;
+
+// ── feature toggle translation ─────────────────────────────────────────────
+
+/// Map an `agents.yaml` per-provider feature set to aether's effective
+/// `ReasoningEffort`. The mapping is intentionally narrow: aether-llm
+/// normalizes all "think harder" knobs (Anthropic's extended_thinking,
+/// OpenAI's reasoning_effort, Google's thinking_budget) into a single
+/// `ReasoningEffort` enum on `AgentSpec`. This function does the reverse —
+/// taking the operator's provider-shaped intent and producing the
+/// aether-shaped knob.
+///
+/// `thinking_budget_tokens` is lossily snapped onto the nearest effort
+/// level (Low=1024 / Medium=4096 / High=10240 — the same internal map
+/// aether-llm uses to derive budget tokens from effort levels). When a
+/// budget is set, that strictly overrides `extended_thinking: bool` —
+/// setting an explicit budget without enabling thinking would be
+/// nonsensical.
+pub fn features_to_reasoning_effort(features: &ProviderFeatures) -> Option<ReasoningEffort> {
+    match features {
+        ProviderFeatures::None => None,
+        ProviderFeatures::Anthropic(AnthropicFeatures {
+            extended_thinking,
+            thinking_budget_tokens,
+        }) => match (thinking_budget_tokens, extended_thinking) {
+            (Some(n), _) => Some(budget_to_effort(*n)),
+            (None, true) => Some(ReasoningEffort::High),
+            (None, false) => None,
+        },
+        ProviderFeatures::OpenAI(OpenAIFeatures { reasoning_effort }) => {
+            reasoning_effort.as_deref().and_then(parse_openai_effort)
+        }
+        ProviderFeatures::Google(GoogleFeatures { thinking_budget_tokens }) => {
+            thinking_budget_tokens.map(budget_to_effort)
+        }
+    }
+}
+
+/// Snap a budget-token count onto the nearest aether effort level using
+/// the same thresholds aether-llm's anthropic provider uses internally
+/// (Low=1024, Medium=4096, High=Xhigh=10240).
+fn budget_to_effort(n: u32) -> ReasoningEffort {
+    if n <= 2048 {
+        ReasoningEffort::Low
+    } else if n <= 6144 {
+        ReasoningEffort::Medium
+    } else if n <= 16384 {
+        ReasoningEffort::High
+    } else {
+        ReasoningEffort::Xhigh
+    }
+}
+
+/// OpenAI accepts "low"/"medium"/"high"/"xhigh" plus a few extras we
+/// don't model. We pass through the four known levels and drop the
+/// rest with a warning at translation time (caller is expected to log).
+fn parse_openai_effort(s: &str) -> Option<ReasoningEffort> {
+    match s.to_ascii_lowercase().as_str() {
+        "low" => Some(ReasoningEffort::Low),
+        "medium" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "xhigh" => Some(ReasoningEffort::Xhigh),
+        _ => None,
+    }
+}
 
 /// Production sub-agent spawner. Holds a reference to the TUI config so
 /// each spawn applies the operator's timeout / blackboard caps.
@@ -92,21 +160,24 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
             );
         }
 
-        // FMECA T3 + PR1 scope note: per-provider feature toggles are
-        // parsed and stored on `ResolvedAgent.features` (load-time
-        // validation via `#[serde(deny_unknown_fields)]`). Runtime
-        // translation to aether's per-provider extras is deferred —
-        // logging here is the operator-visible signal that the toggle
-        // was recognized but not applied.
-        if !matches!(agent.features, ProviderFeatures::None) {
-            tracing::warn!(
-                agent = %agent.label,
-                provider = %agent.provider,
-                model = %agent.model,
-                features = ?agent.features,
-                "agents.yaml feature toggles parsed but not yet applied at spawn time \
-                 (deferred to v0.3.1 — see /guides/agent-config.mdx#features)"
-            );
+        // FMECA T3: translate the typed per-provider feature toggles to
+        // aether's effective `ReasoningEffort`. v0.3.0 parsed + stored
+        // these but didn't apply them at spawn time; v0.3.1 wires them
+        // through.
+        let reasoning_effort = features_to_reasoning_effort(&agent.features);
+        if let ProviderFeatures::OpenAI(OpenAIFeatures {
+            reasoning_effort: Some(raw),
+        }) = &agent.features
+        {
+            if reasoning_effort.is_none() {
+                tracing::warn!(
+                    agent = %agent.label,
+                    provider = %agent.provider,
+                    raw = %raw,
+                    "OpenAI reasoning_effort `{raw}` not recognized — passing through with no \
+                     effort level (valid: low|medium|high|xhigh)"
+                );
+            }
         }
 
         let workflow_state = workflow_response
@@ -120,6 +191,7 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
             provider = %agent.provider,
             model = %agent.model,
             state = %workflow_state,
+            ?reasoning_effort,
             max_seconds = self.config.max_sub_agent_seconds,
             max_steps = self.config.max_sub_agent_steps,
             "spawning sub-agent (max_steps is currently advisory only — \
@@ -127,7 +199,7 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
              the enforced cap)"
         );
 
-        // Build the headless args. The interpreter-built system_prompt
+        // Build mcp config + sources. The interpreter-built system_prompt
         // becomes the USER PROMPT (the sub-agent's "go do this thing"
         // directive); we don't set Aether's system_prompt override — the
         // agent's own settings.json system prompt + the user prompt
@@ -139,24 +211,36 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
                 source: e,
             }
         })?;
+        let cwd = std::path::PathBuf::from(".")
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let mcp_sources = mcp_config.sources(&cwd);
 
-        let args = HeadlessArgs {
-            prompt: vec![system_prompt.to_string()],
-            agent: None,
-            // Aether canonical model string: "provider:model".
-            model: Some(format!("{}:{}", agent.provider, agent.model)),
-            cwd: std::path::PathBuf::from("."),
-            settings_source: Default::default(),
-            provider_connection: Default::default(),
-            mcp_config,
+        // Build the AgentSpec directly so we can carry `reasoning_effort`
+        // through to the aether runtime. The default `run_headless` path
+        // would build a spec with `reasoning_effort: None` because
+        // `HeadlessArgs` has no field for it; bypassing it lets the
+        // operator's agents.yaml feature toggles actually take effect.
+        let model_str = format!("{}:{}", agent.provider, agent.model);
+        let parsed_model = model_str.parse().map_err(|e: String| InterpreterError::Mcp {
+            tool: format!("aether/sub_agent/{}/model_parse", agent.label),
+            source: anyhow::anyhow!("invalid model `{model_str}`: {e}"),
+        })?;
+        let spec = AgentSpec::default_spec(&parsed_model, reasoning_effort, Vec::new());
+
+        let config = RunConfig {
+            prompt: system_prompt.to_string(),
+            cwd,
+            mcp_config_sources: mcp_sources,
+            spec,
             system_prompt: None,
-            output: CliOutputFormat::Text,
+            output: OutputFormat::Text,
             verbose: false,
             events: vec![],
         };
 
         let total_timeout = Duration::from_secs(self.config.max_sub_agent_seconds);
-        match timeout(total_timeout, run_headless(args)).await {
+        match timeout(total_timeout, run_aether_headless(config)).await {
             Ok(Ok(_exit_code)) => {
                 // Natural completion — LLM emitted AgentMessage::Done.
                 // The interpreter checks workflow.version post-return; if

@@ -11,6 +11,10 @@ aether_cli = { version = "0.7", package = "aether-agent-cli" }
 wisp = { version = "0.4", package = "aether-wisp" }
 tui = { version = "0.2", package = "aether-tui", features = ["syntax"] }
 aether_core = { version = "0.6", package = "aether-agent-core" }
+# T19: `ReasoningEffort` is owned by aether-llm; we depend on it
+# directly to translate `agents.yaml` per-provider feature toggles into
+# the effective effort level aether's runtime takes.
+llm = { version = "0.7", package = "aether-llm" }
 
 # Note: no Cargo-level dependency on `mcp-flowgate`. The TUI spawns the
 # mcp-flowgate binary as a child process at runtime; binary discovery is

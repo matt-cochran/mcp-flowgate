@@ -10,6 +10,14 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — Per-provider feature toggles applied at spawn time
+
+- **`sub_agent::features_to_reasoning_effort`** — translates `agents.yaml` per-provider feature structs (`AnthropicFeatures`, `OpenAIFeatures`, `GoogleFeatures`) into aether-llm's effective `ReasoningEffort`. Anthropic `extended_thinking: true` with no budget defaults to High; explicit `thinking_budget_tokens` snaps to the nearest effort level (Low ≤2048 / Medium ≤6144 / High ≤16384 / Xhigh) using the same thresholds aether-llm's anthropic provider uses internally. OpenAI's `reasoning_effort` string passes through `low|medium|high|xhigh`; unknown values drop with a warning. Google's `thinking_budget_tokens` reuses the same budget-to-effort mapping.
+- **AetherSubAgentSpawner now bypasses `run_headless`** in favor of constructing an `AgentSpec` directly + calling `headless::run::run`. The wrapper's `HeadlessArgs` shape has no field for reasoning effort; the spec-direct path lets the translated effort actually take effect. The TUI's "deferred to v0.3.1" warning is gone — toggles apply.
+- **`crates/mcp-flowgate-tui/Cargo.toml`** — new direct dep on `aether-llm` (the existing transitive dep was already in the lockfile; this just promotes it). Used to reference `ReasoningEffort`.
+- **Tests** — `tests/feature_translation.rs` pins every cell of the mapping table.
+- **Docs** — `agent-config.mdx` "Feature toggles" section drops the deferred-Aside and documents the new mapping.
+
 ### Added — Runtime CoR over the binding list
 
 - **`interpreter::spawn_with_cor`** — walks a `ResolvedBindingList` in order, attempting each binding via the existing `SubAgentSpawner::spawn_and_wait`. Infrastructure-class failures (401/403/429/404/network) advance to the next binding; content-class failures surface immediately (FMECA R1). All-bindings-fail returns a structured `AgentResolutionExhausted` carrying the full attempt trail. `walk_workflow` now uses this path instead of single-binding spawn.
