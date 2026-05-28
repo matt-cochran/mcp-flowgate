@@ -11,7 +11,7 @@ description: "Pre-flight checks before walking a workflow. Reference for every c
 flowgate doctor --config flowgate.yaml --workflow swe_agent --agent planning=anthropic/claude-sonnet-4-6
 ```
 
-All flags optional. `--config` defaults to `$FLOWGATE_CONFIG`. Omit `--workflow` to skip workflow-declared checks. Omit `--agent` to skip API key checks for legacy CLI-flag agents.
+All flags optional. `--config` defaults to `$FLOWGATE_CONFIG`. Omit `--workflow` to skip workflow-declared checks. Omit `--agent` to skip API key checks for legacy CLI-flag agents. Pass `--refresh-agents` to re-probe every `agents.yaml` binding against its provider's `/v1/models` endpoint and cache the result (see "agents.yaml live-probe cache" below).
 
 ## What gets checked
 
@@ -77,6 +77,20 @@ If both `.flowgate/agents.yaml` and `~/.config/flowgate/agents.yaml` are present
 
 - **Status:** Always passes (informational).
 - **Operator action:** If you intended the user file to apply, remove the project file. If you intended the project file, acknowledge the shadow and proceed.
+
+### `agents.yaml live-probe cache` + `agents.yaml probe age` — Are the bindings in your `agents.yaml` still valid against their providers' current model listings?
+
+`agents.yaml` is parsed at workflow load and the primary bindings get an eager auth preflight, but the resolver does NOT call `/v1/models` on every walk — that would be both slow and rate-limit-noisy. The probe cache fills the gap: `flowgate doctor --refresh-agents` re-probes every distinct `(provider, model)` pair declared in your `agents.yaml`, classifies each one (`Ok`, `ModelNotListed`, `AuthFailed`, `Unreachable`, `NoCredential`, `Skipped`), and writes the results to `~/.cache/flowgate/agents-last-probe.json` (or platform equivalent). Subsequent doctor runs read the cache and surface:
+
+- one `probe age` check summarizing how many hours/days since the last refresh, and
+- one per-binding `probe: <provider>/<model>` check showing the cached verdict.
+
+The probe age check fails with `CACHE_STALE` when the cache is older than 7 days. The per-binding checks fail with `PROBE_MODEL_NOT_LISTED` if the provider's catalog no longer includes your model id — the strongest signal that you need to rotate the binding.
+
+- **Pass:** Cache exists, age under 7d, every binding's last probe returned `Ok`.
+- **Skip condition:** No `agents.yaml`, OR no cache exists yet (run `flowgate doctor --refresh-agents` to populate).
+- **Fail codes:** `CACHE_STALE` (cache age >7d), `PROBE_MODEL_NOT_LISTED` (provider dropped the model), `PROBE_AUTH_FAILED` (credentials no longer work for the listing endpoint), `PROBE_UNREACHABLE` (network/server issue), `PROBE_NO_CREDENTIAL` (provider's API key env var was unset at probe time), `CACHE_WRITE_FAILED` / `CACHE_READ_FAILED`.
+- **Operator action:** Re-run `flowgate doctor --refresh-agents` weekly (e.g., as a cron / CI job). When a `PROBE_MODEL_NOT_LISTED` fires, swap the named model in `agents.yaml` and re-probe. Local providers (`ollama`, `lmstudio`) and `custom` always report `Skipped` — there's no listing convention to probe against.
 
 ### `workflow delegates` — Each `delegate:` state in the workflow resolves through the resolver?
 

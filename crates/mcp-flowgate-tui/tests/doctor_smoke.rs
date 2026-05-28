@@ -32,6 +32,7 @@ async fn doctor_passes_against_smoke_ete_with_anthropic_key_set() {
         ),
         workflow: Some("smoke_ete".to_string()),
         agents: vec!["test=anthropic/claude-haiku-4-5-20251001".to_string()],
+        refresh_agents: false,
     };
     let results = run_doctor(&args).await;
     let failures = count_failures(&results);
@@ -55,6 +56,7 @@ async fn doctor_reports_config_not_found_for_missing_path() {
         config: Some("/nonexistent/path/flowgate.yaml".to_string()),
         workflow: None,
         agents: vec![],
+        refresh_agents: false,
     };
     let results = run_doctor(&args).await;
     assert!(
@@ -70,6 +72,7 @@ async fn doctor_reports_workflow_not_declared() {
         config: Some("../../examples/smoke-ete/gateway.yaml".to_string()),
         workflow: Some("nonexistent_workflow".to_string()),
         agents: vec![],
+        refresh_agents: false,
     };
     let results = run_doctor(&args).await;
     let fail = find_status(&results, "WORKFLOW_NOT_DECLARED")
@@ -91,6 +94,7 @@ async fn doctor_reports_missing_api_key_when_env_var_absent() {
         config: None,
         workflow: None,
         agents: vec!["planner=openai/gpt-4o".to_string()],
+        refresh_agents: false,
     };
     let results = run_doctor(&args).await;
     let fail = find_status(&results, "MISSING_API_KEY");

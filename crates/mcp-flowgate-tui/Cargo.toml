@@ -53,6 +53,13 @@ rmcp = { workspace = true }
 mcp-flowgate-core = { workspace = true }
 serde_yaml = { workspace = true }
 
+# T23: doctor's live-probe cache. chrono for timestamps in
+# ~/.cache/flowgate/agents-last-probe.json; reqwest for the actual
+# HTTP probe of provider /v1/models endpoints. `--refresh-agents`
+# flag re-probes; default doctor runs read the cache + warn on stale.
+chrono = { workspace = true }
+reqwest = { workspace = true }
+
 # Library surface: `interpreter`, `agent_config`, `tui_config`, `sub_agent`
 # (see src/lib.rs). Integration tests import via `mcp_flowgate_tui::…`.
 [lib]

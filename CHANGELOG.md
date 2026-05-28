@@ -10,6 +10,14 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — `flowgate doctor --refresh-agents` + live-probe cache
+
+- **`--refresh-agents` flag** — re-probes every distinct `(provider, model)` pair in `agents.yaml` against the provider's `/v1/models` endpoint (Anthropic `x-api-key`, OpenAI `Authorization: Bearer`, Google `?key=`); writes the result to `~/.cache/flowgate/agents-last-probe.json` (or platform-equivalent cache dir). Local providers (`ollama`, `lmstudio`) and `custom` are skipped — there's no listing convention to probe against.
+- **`agents.yaml live-probe cache` + `agents.yaml probe age` checks** — run on every `flowgate doctor` invocation. The cache check emits one `CheckResult` per cached binding, with the cached `ProbeStatus` (`Ok` / `ModelNotListed` / `AuthFailed` / `Unreachable` / `NoCredential` / `Skipped` / `UnexpectedResponse`) surfaced as pass / skip / fail. The age check fires `CACHE_STALE` when the cache is older than `PROBE_STALE_AFTER_DAYS = 7`. Operators run weekly (cron / CI) to catch model deprecations before they hit a workflow walk.
+- **`mcp_flowgate_tui::doctor_probe_cache`** — versioned cache schema (`version: 1`); future-version caches are tolerated by treating as empty so a doctor upgrade doesn't crash on the operator's stale file. Atomic write (tempfile + fsync + rename). Cache covers cross-list duplicates: the same `(provider, model)` listed in `default:` and an override only produces one cache entry.
+- **Tests** — `tests/doctor_probe_cache.rs` covers cache round-trip, version mismatch, corrupt-JSON tolerance, parent-dir create, distinct-binding dedup, and per-provider skip behavior. Live HTTP probes are deferred to the nightly live-integration workflow.
+- **Docs** — `doctor.mdx` reference page documents the new check, its codes, and the operator-action runbook.
+
 ### Added — Sibling: flowgate-meta capability-harness scaffolding
 
 - The sibling [`flowgate-meta`](https://github.com/matt-cochran/flowgate-meta) repo now ships `cap.verify.capability-harness` + a starter `contracts/` directory (reasoning / coding / prose). `flow.configure-models` gained an optional `capability_contract` input that, when set, runs the named contract against the just-written `agents.yaml`. Empty default keeps the flow's existing auto-mode path unchanged. See `flowgate-meta/CHANGELOG.md` for the full diff; fixture copies under `crates/mcp-flowgate-core/tests/fixtures/flowgate-meta/` are synced so the meta-orchestrator e2e covers the new transitions.

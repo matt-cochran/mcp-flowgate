@@ -143,6 +143,13 @@ pub struct DoctorCliArgs {
     /// API key env var presence is verified.
     #[arg(long = "agent")]
     pub agents: Vec<String>,
+    /// Re-probe every binding in agents.yaml against its provider's
+    /// `/v1/models` endpoint and write the result to
+    /// `~/.cache/flowgate/agents-last-probe.json`. Without this flag,
+    /// doctor only reads the cache and surfaces stale-since-N-days
+    /// warnings (cheap, no network).
+    #[arg(long, default_value_t = false)]
+    pub refresh_agents: bool,
 }
 
 /// CLI args for `flowgate walk` — drives a workflow end-to-end through
@@ -491,6 +498,7 @@ async fn run_doctor(args: DoctorCliArgs) -> Result<ExitCode> {
         config: args.config,
         workflow: args.workflow,
         agents: args.agents,
+        refresh_agents: args.refresh_agents,
     };
     let results = mcp_flowgate_tui::doctor::run_doctor(&doctor_args).await;
     print!("{}", mcp_flowgate_tui::doctor::render_results(&results));

@@ -15,7 +15,15 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::agent_resolver::{AgentsFile, ConfigSource, Delegate, Resolver};
+use crate::doctor_probe_cache::{
+    self, default_cache_path, read_cache, refresh_cache, write_cache, ProbeCache, ProbeStatus,
+};
 use crate::flowgate_mcp::find_flowgate_binary;
+
+/// `agents.yaml` is flagged stale this many days after the last
+/// recorded probe. 7 days is loose enough to not nag operators but
+/// tight enough to catch model deprecations within a typical sprint.
+pub const PROBE_STALE_AFTER_DAYS: u64 = 7;
 
 #[derive(Debug, Clone)]
 pub struct CheckResult {
@@ -60,6 +68,12 @@ pub struct DoctorArgs {
     pub config: Option<String>,
     pub workflow: Option<String>,
     pub agents: Vec<String>,
+    /// When true, re-probe every binding in agents.yaml against its
+    /// provider's `/v1/models` endpoint, write the result to
+    /// `~/.cache/flowgate/agents-last-probe.json`, and emit per-binding
+    /// `CheckResult`s. When false, doctor only reads the cache to
+    /// surface stale-since-N-days warnings (cheap, no I/O).
+    pub refresh_agents: bool,
 }
 
 /// Run all pre-flight checks in order. Returns the per-check results.
@@ -218,6 +232,11 @@ pub async fn run_doctor(args: &DoctorArgs) -> Vec<CheckResult> {
     // 7. agents.yaml (v0.3+) presence + parse. Both project and user
     //    files are reported; mutual-presence is flagged as a shadow.
     let resolver = check_agents_yaml(&mut results);
+
+    // 7b. Live-probe cache freshness OR refresh, per --refresh-agents.
+    if let Some(r) = &resolver {
+        check_agents_probe_cache(&mut results, r.file(), args.refresh_agents).await;
+    }
 
     // 8. Workflow delegates ↔ resolver coverage. For each `delegate:`
     //    string in the resolved workflow, run the resolver's walk and
@@ -421,6 +440,147 @@ fn check_workflow_delegate_coverage(
             format!("{} delegate(s) resolved to explicit overrides", delegates.len()),
         ));
     }
+}
+
+/// Cache freshness check + optional refresh. When `refresh` is false,
+/// reads the cache only and emits one `CheckResult` per (provider,
+/// model) describing the stored status and how stale it is. When
+/// `refresh` is true, re-probes every binding in `file`, writes the
+/// fresh cache, and emits the updated results.
+///
+/// Cache missing / corrupt → emits a `Skip` with "run doctor
+/// --refresh-agents to populate". Stale (>`PROBE_STALE_AFTER_DAYS`)
+/// → the per-binding entry's status becomes a `Fail` so the operator
+/// sees the staleness alongside the cached verdict.
+async fn check_agents_probe_cache(
+    results: &mut Vec<CheckResult>,
+    file: &AgentsFile,
+    refresh: bool,
+) {
+    let Some(cache_path) = default_cache_path() else {
+        results.push(CheckResult::skip(
+            "agents.yaml live-probe cache",
+            "no platform cache directory",
+        ));
+        return;
+    };
+
+    let cache = if refresh {
+        let fresh = refresh_cache(file).await;
+        if let Err(e) = write_cache(&fresh, &cache_path) {
+            results.push(CheckResult::fail(
+                "agents.yaml live-probe cache",
+                "CACHE_WRITE_FAILED",
+                format!("failed to write {}: {e}", cache_path.display()),
+            ));
+            return;
+        }
+        results.push(CheckResult::pass(
+            "agents.yaml live-probe cache",
+            format!(
+                "refreshed ({} entries) at {}",
+                fresh.entries.len(),
+                cache_path.display()
+            ),
+        ));
+        fresh
+    } else {
+        match read_cache(&cache_path) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                results.push(CheckResult::skip(
+                    "agents.yaml live-probe cache",
+                    "no cache yet (run `flowgate doctor --refresh-agents` to populate)",
+                ));
+                return;
+            }
+            Err(e) => {
+                results.push(CheckResult::fail(
+                    "agents.yaml live-probe cache",
+                    "CACHE_READ_FAILED",
+                    format!("read {} failed: {e}", cache_path.display()),
+                ));
+                return;
+            }
+        }
+    };
+
+    // Surface cache age as its own check so the operator sees one
+    // line summarizing "your cache is N days old."
+    let stale_threshold =
+        std::time::Duration::from_secs(PROBE_STALE_AFTER_DAYS * 24 * 60 * 60);
+    match cache.age() {
+        Some(age) if age > stale_threshold => {
+            results.push(CheckResult::fail(
+                "agents.yaml probe age",
+                "CACHE_STALE",
+                format!(
+                    "{} days since last probe (>{}d threshold). Re-run \
+                     `flowgate doctor --refresh-agents` to verify bindings.",
+                    age.as_secs() / 86_400,
+                    PROBE_STALE_AFTER_DAYS,
+                ),
+            ));
+        }
+        Some(age) => {
+            results.push(CheckResult::pass(
+                "agents.yaml probe age",
+                format!(
+                    "{}h since last probe (under {}d threshold)",
+                    age.as_secs() / 3600,
+                    PROBE_STALE_AFTER_DAYS,
+                ),
+            ));
+        }
+        None => {} // empty cache already surfaced above
+    }
+
+    // Per-binding entries from the cache.
+    for entry in &cache.entries {
+        let name = format!("probe: {}/{}", entry.provider, entry.model);
+        match &entry.status {
+            ProbeStatus::Ok => {
+                results.push(CheckResult::pass(name, entry.detail.clone()));
+            }
+            ProbeStatus::Skipped => {
+                results.push(CheckResult::skip(name, entry.detail.clone()));
+            }
+            ProbeStatus::NoCredential => {
+                results.push(CheckResult::fail(
+                    name,
+                    "PROBE_NO_CREDENTIAL",
+                    entry.detail.clone(),
+                ));
+            }
+            ProbeStatus::AuthFailed => {
+                results.push(CheckResult::fail(name, "PROBE_AUTH_FAILED", entry.detail.clone()));
+            }
+            ProbeStatus::ModelNotListed => {
+                results.push(CheckResult::fail(
+                    name,
+                    "PROBE_MODEL_NOT_LISTED",
+                    entry.detail.clone(),
+                ));
+            }
+            ProbeStatus::Unreachable => {
+                results.push(CheckResult::fail(name, "PROBE_UNREACHABLE", entry.detail.clone()));
+            }
+            ProbeStatus::UnexpectedResponse => {
+                results.push(CheckResult::fail(
+                    name,
+                    "PROBE_UNEXPECTED_RESPONSE",
+                    entry.detail.clone(),
+                ));
+            }
+        }
+    }
+
+    // Touch the unused import warning when refresh is false (the
+    // `doctor_probe_cache::ProbeCache` type is reachable via the
+    // `Cache` re-export; this no-op silences unused-import in the
+    // refresh=false code path).
+    let _ = std::any::type_name::<ProbeCache>();
+    let _ = std::any::type_name::<doctor_probe_cache::BindingProbeRecord>();
 }
 
 fn provider_env_var(provider: &str) -> &'static str {

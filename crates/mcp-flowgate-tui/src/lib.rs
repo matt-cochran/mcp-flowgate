@@ -10,6 +10,7 @@
 pub mod agent_config;
 pub mod agent_resolver;
 pub mod doctor;
+pub mod doctor_probe_cache;
 pub mod flowgate_mcp;
 pub mod interpreter;
 pub mod keyring;
