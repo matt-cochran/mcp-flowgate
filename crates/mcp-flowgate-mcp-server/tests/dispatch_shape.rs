@@ -18,7 +18,8 @@ use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
 use mcp_flowgate_core::WorkflowRuntime;
 use mcp_flowgate_mcp_server::args::{CommandArgs, QueryArgs};
 use mcp_flowgate_mcp_server::FlowgateServer;
-use serde_json::json;
+use rmcp::model::{CallToolRequestParams, JsonObject};
+use serde_json::{json, Value};
 
 // ── Test server helper ────────────────────────────────────────────────────────
 
@@ -481,5 +482,106 @@ async fn command_empty_args_returns_ambiguous_intent() {
     assert!(
         resp["links"].as_array().is_some(),
         "AMBIGUOUS_INTENT response must include HATEOAS links; got: {resp}"
+    );
+}
+
+// ── HATEOAS link method names ─────────────────────────────────────────────────
+
+/// Search response must emit HATEOAS links pointing at `flowgate.query`, not
+/// the old `gateway.home` / `gateway.search` tool names (T27 regression guard).
+#[tokio::test]
+async fn search_response_links_use_new_tool_names() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_query(json!({ "query": "x" }), Principal::anonymous())
+        .await
+        .expect("search returns Ok");
+    let links = resp["links"].as_array().expect("links array present");
+    let home_link = links.iter().find(|l| l["rel"] == "home")
+        .expect("home link present");
+    assert_eq!(
+        home_link["method"].as_str(),
+        Some("flowgate.query"),
+        "home link method must be flowgate.query, not gateway.home; got: {home_link}"
+    );
+}
+
+// ── lexicon_writes gate via dispatch_call ─────────────────────────────────────
+
+/// Helper to build a `CallToolRequestParams` for dispatch_call.
+fn call(tool: &'static str, args: Value) -> CallToolRequestParams {
+    let m: JsonObject = args.as_object().cloned().unwrap_or_default();
+    CallToolRequestParams::new(tool).with_arguments(m)
+}
+
+/// Default server has lexicon_writes OFF — define via dispatch_call must return
+/// LEXICON_WRITES_DISABLED structured error with HATEOAS links.
+#[tokio::test]
+async fn lexicon_define_via_dispatch_call_is_blocked_when_writes_disabled() {
+    let server = test_server().await; // default: with_lexicon_writes NOT enabled
+    let params = call("flowgate.command", json!({
+        "subject": "lexicon:churn",
+        "definition": { "definition": "loss of paying customer" }
+    }));
+    let resp = server.dispatch_call(params).await.expect("dispatch_call");
+    assert_eq!(
+        resp["error"]["code"].as_str(),
+        Some("LEXICON_WRITES_DISABLED"),
+        "expected LEXICON_WRITES_DISABLED; got: {resp}"
+    );
+    assert!(
+        resp["links"].as_array().is_some(),
+        "LEXICON_WRITES_DISABLED response must include HATEOAS links; got: {resp}"
+    );
+}
+
+/// Server built with with_lexicon_writes(true) — define via dispatch_call must
+/// NOT return LEXICON_WRITES_DISABLED (human principal passes governance gate).
+#[tokio::test]
+async fn lexicon_define_via_dispatch_call_succeeds_when_writes_enabled() {
+    use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
+    use mcp_flowgate_core::guards::DefaultGuardEvaluator;
+    use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
+    use mcp_flowgate_core::WorkflowRuntime;
+
+    let cfg = json!({ "version": "1.0.0", "workflows": {} });
+    let resolved = mcp_flowgate_core::config::resolve(cfg).expect("resolve");
+    let defs = Arc::new(ConfigDefinitionStore::from_config(&resolved));
+    let store = Arc::new(InMemoryWorkflowStore::new());
+    let audit = Arc::new(MemoryAuditSink::new());
+    let guards = Arc::new(DefaultGuardEvaluator::new());
+    let runtime = WorkflowRuntime::new(
+        defs,
+        store,
+        Arc::new(NoopRegistry),
+        guards,
+        audit as Arc<dyn AuditSink>,
+    );
+    let server = FlowgateServer::new(runtime).with_lexicon_writes(true);
+
+    // Human principal — passes governance gate on new terms (default human-only).
+    // dispatch_call uses Self::principal() → anonymous, but the gate check is
+    // at the lexicon_writes_enabled level. We use dispatch_command directly
+    // with a human principal so the governance gate inside handle_lexicon_define
+    // also passes.
+    let human = mcp_flowgate_core::model::Principal {
+        subject: "tester".to_string(),
+        roles: vec![mcp_flowgate_core::model::Principal::HUMAN_ROLE.to_string()],
+        permissions: vec![],
+    };
+    let resp = server
+        .dispatch_command(
+            json!({
+                "subject": "lexicon:churn",
+                "definition": { "definition": "loss of paying customer" }
+            }),
+            human,
+        )
+        .await
+        .expect("dispatch_command ok");
+    assert_ne!(
+        resp.get("error").and_then(|e| e.get("code")),
+        Some(&json!("LEXICON_WRITES_DISABLED")),
+        "LEXICON_WRITES_DISABLED must NOT fire when writes are enabled; got: {resp}"
     );
 }

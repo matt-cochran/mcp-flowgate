@@ -38,7 +38,7 @@ impl FlowgateServer {
             "kind": kind.map(|k| k.as_str()),
             "items": hits,
             "links": [
-                { "rel": "home", "method": "gateway.home", "args": {} }
+                { "rel": "home", "method": "flowgate.query", "args": {} }
             ]
         }))
     }
@@ -102,10 +102,10 @@ impl FlowgateServer {
                     obj.insert(
                         "links".into(),
                         json!([
-                            { "rel": "home", "method": "gateway.home", "args": {} },
+                            { "rel": "home", "method": "flowgate.query", "args": {} },
                             {
                                 "rel": "get",
-                                "method": "workflow.get",
+                                "method": "flowgate.query",
                                 "args": { "workflowId": workflow_id }
                             }
                         ]),
@@ -145,10 +145,10 @@ impl FlowgateServer {
                     obj.insert(
                         "links".into(),
                         json!([
-                            { "rel": "home", "method": "gateway.home", "args": {} },
+                            { "rel": "home", "method": "flowgate.query", "args": {} },
                             {
                                 "rel": "get",
-                                "method": "workflow.get",
+                                "method": "flowgate.query",
                                 "args": { "workflowId": workflow_id }
                             }
                         ]),
@@ -194,8 +194,8 @@ impl FlowgateServer {
                     "verb": item.verb.as_deref().unwrap_or_default(),
                     "body": item.body.as_deref().unwrap_or_default(),
                     "links": [
-                        { "rel": "home", "method": "gateway.home", "args": {} },
-                        { "rel": "search", "method": "gateway.search", "args": { "query": "" } }
+                        { "rel": "home", "method": "flowgate.query", "args": {} },
+                        { "rel": "search", "method": "flowgate.query", "args": { "query": "" } }
                     ]
                 }));
             }
@@ -219,8 +219,8 @@ impl FlowgateServer {
                     "verb": item.verb.as_deref().unwrap_or_default(),
                     "body": item.body.as_deref().unwrap_or_default(),
                     "links": [
-                        { "rel": "home", "method": "gateway.home", "args": {} },
-                        { "rel": "search", "method": "gateway.search", "args": { "query": "" } }
+                        { "rel": "home", "method": "flowgate.query", "args": {} },
+                        { "rel": "search", "method": "flowgate.query", "args": { "query": "" } }
                     ]
                 }));
             }
@@ -242,8 +242,8 @@ impl FlowgateServer {
             "id": id,
             "item": item,
             "links": [
-                { "rel": "home", "method": "gateway.home", "args": {} },
-                { "rel": "search", "method": "gateway.search", "args": { "query": "" } }
+                { "rel": "home", "method": "flowgate.query", "args": {} },
+                { "rel": "search", "method": "flowgate.query", "args": { "query": "" } }
             ]
         }))
     }

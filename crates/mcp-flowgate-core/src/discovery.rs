@@ -401,7 +401,7 @@ fn default_home() -> Value {
             {
                 "rel": "search",
                 "title": "Search workflows and capabilities",
-                "method": "gateway.search",
+                "method": "flowgate.query",
                 "args": { "query": "" },
                 "inputSchema": {
                     "type": "object",
@@ -417,13 +417,13 @@ fn default_home() -> Value {
             {
                 "rel": "list_workflows",
                 "title": "List configured workflows",
-                "method": "gateway.search",
+                "method": "flowgate.query",
                 "args": { "query": "", "kind": "workflow" }
             },
             {
                 "rel": "list_capabilities",
                 "title": "List proxy capabilities",
-                "method": "gateway.search",
+                "method": "flowgate.query",
                 "args": { "query": "", "kind": "capability" }
             }
         ]

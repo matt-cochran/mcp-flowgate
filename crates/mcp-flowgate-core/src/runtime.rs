@@ -403,7 +403,7 @@ impl WorkflowRuntime {
                                 "title": t_def.get("title").and_then(Value::as_str)
                                     .unwrap_or(&failed_transition),
                                 "description": t_def.get("description"),
-                                "method": "workflow.submit",
+                                "method": "flowgate.command",
                                 "actor": "deterministic",
                                 "args": {
                                     "workflowId": partial.instance.id,

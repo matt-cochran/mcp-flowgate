@@ -71,7 +71,7 @@ pub(crate) fn links(definition: &Value, instance: &WorkflowInstance) -> Vec<Valu
                 "rel": rel,
                 "title": transition.get("title").and_then(Value::as_str).unwrap_or(rel),
                 "description": transition.get("description"),
-                "method": "workflow.submit",
+                "method": "flowgate.command",
                 "actor": transition.get("actor").and_then(Value::as_str).unwrap_or("agent"),
                 "args": args,
                 "inputSchema": transition.get("inputSchema").cloned().unwrap_or_else(empty_object_schema),
