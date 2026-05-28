@@ -10,6 +10,9 @@ description = "Core runtime for mcp-flowgate: workflow engine, ports, audit, rel
 [lib]
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }

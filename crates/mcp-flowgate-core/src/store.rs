@@ -24,7 +24,7 @@ impl InMemoryWorkflowStore {
 #[async_trait]
 impl WorkflowStore for InMemoryWorkflowStore {
     async fn create(&self, instance: WorkflowInstance) -> anyhow::Result<WorkflowInstance> {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().expect("LOCK_POISONED: workflow store");
         if g.contains_key(&instance.id) {
             bail!("workflow id collision: {}", instance.id);
         }
@@ -35,7 +35,7 @@ impl WorkflowStore for InMemoryWorkflowStore {
     async fn load(&self, workflow_id: &str) -> anyhow::Result<WorkflowInstance> {
         self.inner
             .lock()
-            .unwrap()
+            .expect("LOCK_POISONED: workflow store")
             .get(workflow_id)
             .cloned()
             .ok_or_else(|| anyhow!("workflow {} not found", workflow_id))
@@ -46,7 +46,7 @@ impl WorkflowStore for InMemoryWorkflowStore {
         instance: WorkflowInstance,
         expected_version: u64,
     ) -> anyhow::Result<WorkflowInstance> {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().expect("LOCK_POISONED: workflow store");
         match g.get(&instance.id) {
             Some(existing) if existing.version != expected_version => {
                 bail!(
@@ -144,7 +144,7 @@ impl InMemoryWritableDefinitionStore {
     }
 
     pub fn known_ids(&self) -> Vec<String> {
-        self.inner.read().unwrap().keys().cloned().collect()
+        self.inner.read().expect("LOCK_POISONED: writable definition store").keys().cloned().collect()
     }
 }
 
@@ -153,7 +153,7 @@ impl DefinitionStore for InMemoryWritableDefinitionStore {
     async fn load(&self, definition_id: &str) -> anyhow::Result<Value> {
         self.inner
             .read()
-            .unwrap()
+            .expect("LOCK_POISONED: writable definition store")
             .get(definition_id)
             .cloned()
             .ok_or_else(|| anyhow!("workflow definition '{}' not found", definition_id))
@@ -182,7 +182,7 @@ impl crate::ports::GuidanceAcknowledgmentStore for InMemoryGuidanceAcknowledgmen
         subject: &str,
         body_hash: &str,
     ) -> anyhow::Result<()> {
-        self.inner.write().unwrap().insert(
+        self.inner.write().expect("LOCK_POISONED: guidance acknowledgment store").insert(
             (workflow_id.to_string(), subject.to_string()),
             body_hash.to_string(),
         );
@@ -197,7 +197,7 @@ impl crate::ports::GuidanceAcknowledgmentStore for InMemoryGuidanceAcknowledgmen
         Ok(self
             .inner
             .read()
-            .unwrap()
+            .expect("LOCK_POISONED: guidance acknowledgment store")
             .get(&(workflow_id.to_string(), subject.to_string()))
             .cloned())
     }
@@ -226,7 +226,7 @@ impl crate::ports::ScriptAcknowledgmentStore for InMemoryScriptAcknowledgmentSto
         subject: &str,
         body_hash: &str,
     ) -> anyhow::Result<()> {
-        self.inner.write().unwrap().insert(
+        self.inner.write().expect("LOCK_POISONED: script acknowledgment store").insert(
             (workflow_id.to_string(), subject.to_string()),
             body_hash.to_string(),
         );
@@ -241,7 +241,7 @@ impl crate::ports::ScriptAcknowledgmentStore for InMemoryScriptAcknowledgmentSto
         Ok(self
             .inner
             .read()
-            .unwrap()
+            .expect("LOCK_POISONED: script acknowledgment store")
             .get(&(workflow_id.to_string(), subject.to_string()))
             .cloned())
     }
@@ -263,7 +263,7 @@ impl crate::ports::DefinitionStoreWritable for InMemoryWritableDefinitionStore {
         }
         // Commit becomes visible only after audit succeeded.
         {
-            let mut guard = self.inner.write().unwrap();
+            let mut guard = self.inner.write().expect("LOCK_POISONED: writable definition store");
             guard.insert(definition_id.to_string(), definition);
         }
         // Post-commit best-effort event (mirrors §5.8 non-critical semantics).
@@ -312,7 +312,7 @@ impl InMemoryEvidenceStore {
 #[async_trait]
 impl EvidenceStore for InMemoryEvidenceStore {
     async fn record(&self, workflow_id: &str, evidence: Evidence) -> anyhow::Result<()> {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock().expect("LOCK_POISONED: evidence store");
         g.entry(workflow_id.to_string()).or_default().push(evidence);
         Ok(())
     }
@@ -321,7 +321,7 @@ impl EvidenceStore for InMemoryEvidenceStore {
         Ok(self
             .inner
             .lock()
-            .unwrap()
+            .expect("LOCK_POISONED: evidence store")
             .get(workflow_id)
             .cloned()
             .unwrap_or_default())

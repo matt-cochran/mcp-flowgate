@@ -55,6 +55,9 @@ serde_yaml = { workspace = true }
 name = "mcp_flowgate_tui"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 # SPEC §B.1 — two `[[bin]]` entries pointing at the same source. `flowgate`
 # is the primary alias users type; `flowgate-tui` is the discoverable
 # long-form. The `fg` alias was deliberately NOT shipped — it collides

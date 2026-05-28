@@ -135,27 +135,27 @@ impl MemoryAuditSink {
     }
 
     pub fn snapshot(&self) -> Vec<AuditEvent> {
-        self.events.lock().unwrap().clone()
+        self.events.lock().expect("LOCK_POISONED: audit event buffer").clone()
     }
 
     pub fn event_types(&self) -> Vec<String> {
         self.events
             .lock()
-            .unwrap()
+            .expect("LOCK_POISONED: audit event buffer")
             .iter()
             .map(|e| e.event_type.clone())
             .collect()
     }
 
     pub fn clear(&self) {
-        self.events.lock().unwrap().clear();
+        self.events.lock().expect("LOCK_POISONED: audit event buffer").clear();
     }
 }
 
 #[async_trait]
 impl AuditSink for MemoryAuditSink {
     async fn record(&self, event: AuditEvent) -> anyhow::Result<()> {
-        self.events.lock().unwrap().push(event);
+        self.events.lock().expect("LOCK_POISONED: audit event buffer").push(event);
         Ok(())
     }
 

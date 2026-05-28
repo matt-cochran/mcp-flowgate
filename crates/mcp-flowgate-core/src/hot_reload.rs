@@ -18,14 +18,14 @@ impl SwappableDefinitionStore {
     }
 
     pub fn swap(&self, new: Arc<dyn DefinitionStore>) {
-        *self.inner.write().unwrap() = new;
+        *self.inner.write().expect("LOCK_POISONED: swappable definition store") = new;
     }
 }
 
 #[async_trait]
 impl DefinitionStore for SwappableDefinitionStore {
     async fn load(&self, definition_id: &str) -> anyhow::Result<Value> {
-        let store = self.inner.read().unwrap().clone();
+        let store = self.inner.read().expect("LOCK_POISONED: swappable definition store").clone();
         store.load(definition_id).await
     }
 }
@@ -42,13 +42,13 @@ impl SwappableExecutorRegistry {
     }
 
     pub fn swap(&self, new: Arc<dyn ExecutorRegistry>) {
-        *self.inner.write().unwrap() = new;
+        *self.inner.write().expect("LOCK_POISONED: swappable executor registry") = new;
     }
 }
 
 impl ExecutorRegistry for SwappableExecutorRegistry {
     fn get(&self, kind: &str) -> Option<Arc<dyn Executor>> {
-        let registry = self.inner.read().unwrap().clone();
+        let registry = self.inner.read().expect("LOCK_POISONED: swappable executor registry").clone();
         registry.get(kind)
     }
 }
@@ -65,29 +65,29 @@ impl SwappableDiscoveryIndex {
     }
 
     pub fn swap(&self, new: Arc<dyn DiscoveryIndex>) {
-        *self.inner.write().unwrap() = new;
+        *self.inner.write().expect("LOCK_POISONED: swappable discovery index") = new;
     }
 }
 
 #[async_trait]
 impl DiscoveryIndex for SwappableDiscoveryIndex {
     async fn search(&self, request: SearchRequest) -> anyhow::Result<Vec<SearchHit>> {
-        let index = self.inner.read().unwrap().clone();
+        let index = self.inner.read().expect("LOCK_POISONED: swappable discovery index").clone();
         index.search(request).await
     }
 
     async fn describe(&self, id: &str) -> anyhow::Result<Option<DiscoveryItem>> {
-        let index = self.inner.read().unwrap().clone();
+        let index = self.inner.read().expect("LOCK_POISONED: swappable discovery index").clone();
         index.describe(id).await
     }
 
     async fn list(&self, kind: Option<DiscoveryKind>) -> anyhow::Result<Vec<DiscoveryItem>> {
-        let index = self.inner.read().unwrap().clone();
+        let index = self.inner.read().expect("LOCK_POISONED: swappable discovery index").clone();
         index.list(kind).await
     }
 
     async fn home(&self) -> anyhow::Result<Value> {
-        let index = self.inner.read().unwrap().clone();
+        let index = self.inner.read().expect("LOCK_POISONED: swappable discovery index").clone();
         index.home().await
     }
 }

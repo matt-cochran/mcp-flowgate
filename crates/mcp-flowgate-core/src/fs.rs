@@ -141,7 +141,7 @@ impl InMemoryFilesystem {
     /// in tests that want to assert on the written data without going through
     /// the async trait methods.
     pub fn files(&self) -> Vec<(PathBuf, String)> {
-        let state = self.inner.lock().unwrap();
+        let state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
         state
             .files
             .iter()
@@ -155,7 +155,7 @@ impl InMemoryFilesystem {
 #[async_trait]
 impl Filesystem for InMemoryFilesystem {
     async fn create_dir_all(&self, path: &Path) -> anyhow::Result<()> {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
         // Record the directory and all parents.
         let mut p = path.to_path_buf();
         loop {
@@ -169,7 +169,7 @@ impl Filesystem for InMemoryFilesystem {
     }
 
     async fn append(&self, path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
         // Mirror RealFilesystem: the parent directory must exist.
         if let Some(parent) = path.parent() {
             let parent_key = parent.to_string_lossy().into_owned();
@@ -186,7 +186,7 @@ impl Filesystem for InMemoryFilesystem {
     }
 
     async fn read_dir(&self, path: &Path) -> anyhow::Result<Vec<PathBuf>> {
-        let state = self.inner.lock().unwrap();
+        let state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
         let prefix = path.to_string_lossy().into_owned();
         let paths: Vec<PathBuf> = state
             .files
@@ -206,7 +206,7 @@ impl Filesystem for InMemoryFilesystem {
     }
 
     async fn read_to_string(&self, path: &Path) -> anyhow::Result<String> {
-        let state = self.inner.lock().unwrap();
+        let state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
         let key = path.to_string_lossy().into_owned();
         match state.files.get(&key) {
             Some(bytes) => {

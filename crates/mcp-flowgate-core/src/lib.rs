@@ -3,6 +3,20 @@
 //! Every exposed proxy tool is internally represented as a workflow transition.
 //! A simple proxy config and a fully-governed workflow share one execution
 //! model — see `proxy_workflow::compile_proxy_workflow` for the bridge.
+//!
+//! # Lock poisoning policy
+//!
+//! Every `RwLock` / `Mutex` in this crate is acquired via
+//! `.expect("LOCK_POISONED: ...")` rather than `.unwrap()`. The
+//! invariant: NO holder of any lock in this crate performs fallible
+//! I/O or holds an `await` point while the guard is live. Under
+//! that invariant, the locks cannot be poisoned (poisoning requires
+//! a panic in a holder, which the invariant forbids).
+//!
+//! If you add a `?`, `.await`, or `panic!()` inside a lock guard,
+//! the invariant is broken and the `expect` becomes a real panic
+//! risk. Either refactor to release the guard first or upgrade to
+//! `parking_lot` (no poisoning).
 
 pub mod audit;
 pub mod cap_verb;

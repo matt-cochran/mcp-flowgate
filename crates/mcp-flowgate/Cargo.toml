@@ -12,6 +12,9 @@ default-run = "mcp-flowgate"
 name = "mcp-flowgate"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 mcp-flowgate-core = { workspace = true }
 mcp-flowgate-executors = { workspace = true }

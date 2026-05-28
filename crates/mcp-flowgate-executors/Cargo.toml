@@ -10,6 +10,9 @@ description = "Default executors for mcp-flowgate (cli, rest, mcp, human, workfl
 [lib]
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 mcp-flowgate-core = { workspace = true }
 anyhow = { workspace = true }

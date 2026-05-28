@@ -10,6 +10,9 @@ description = "MCP server tool surface for mcp-flowgate (workflow.start/get/subm
 [lib]
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 mcp-flowgate-core = { workspace = true }
 anyhow = { workspace = true }
