@@ -1,4 +1,6 @@
 use mcp_flowgate_tui::provider_keys;
+use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
@@ -43,4 +45,52 @@ fn resolve_path_whitespace_env_falls_through_to_default() {
         "whitespace env should fall through; got {}", p.display()
     );
     unsafe { std::env::remove_var("FLOWGATE_PROVIDER_KEYS_FILE"); }
+}
+
+#[test]
+fn read_missing_file_returns_empty_map() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("nope.env");
+    let m = provider_keys::read(&p).expect("missing-file is fine");
+    assert!(m.is_empty());
+}
+
+#[test]
+fn read_parses_two_var_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    let mut f = std::fs::File::create(&p).unwrap();
+    writeln!(f, "ANTHROPIC_API_KEY=sk-ant-aaa").unwrap();
+    writeln!(f, "OPENAI_API_KEY=sk-bbb").unwrap();
+    let m = provider_keys::read(&p).unwrap();
+    let expected: BTreeMap<String, String> = BTreeMap::from([
+        ("ANTHROPIC_API_KEY".into(), "sk-ant-aaa".into()),
+        ("OPENAI_API_KEY".into(), "sk-bbb".into()),
+    ]);
+    assert_eq!(m, expected);
+}
+
+#[test]
+fn read_skips_malformed_lines_and_blank_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    let mut f = std::fs::File::create(&p).unwrap();
+    writeln!(f).unwrap();
+    writeln!(f, "this-has-no-equals-sign").unwrap();
+    writeln!(f, "ANTHROPIC_API_KEY=sk-ant-valid").unwrap();
+    let m = provider_keys::read(&p).unwrap();
+    assert_eq!(m.get("ANTHROPIC_API_KEY"), Some(&"sk-ant-valid".to_string()));
+    assert_eq!(m.len(), 1);
+}
+
+#[test]
+fn read_trims_whitespace_around_equals() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    let mut f = std::fs::File::create(&p).unwrap();
+    writeln!(f, "ANTHROPIC_API_KEY = sk-ant-aaa").unwrap();
+    writeln!(f, "  OPENAI_API_KEY =sk-bbb  ").unwrap();
+    let m = provider_keys::read(&p).unwrap();
+    assert_eq!(m.get("ANTHROPIC_API_KEY"), Some(&"sk-ant-aaa".to_string()));
+    assert_eq!(m.get("OPENAI_API_KEY"),    Some(&"sk-bbb".to_string()));
 }
