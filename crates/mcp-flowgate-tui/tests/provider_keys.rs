@@ -259,3 +259,15 @@ fn provider_id_slugs_are_stable() {
     assert_eq!(ProviderId::Bedrock.slug(),    "bedrock");
     assert_eq!(ProviderId::Gemini.slug(),     "gemini");
 }
+
+#[test]
+fn mask_value_shows_short_prefix_and_last4() {
+    assert_eq!(provider_keys::mask_value("sk-ant-1234567890abcd"), "sk-ant-***abcd");
+}
+
+#[test]
+fn mask_value_handles_short_values() {
+    // <=8 chars: don't risk leaking by showing prefix; mask entirely.
+    assert_eq!(provider_keys::mask_value("short"), "***");
+    assert_eq!(provider_keys::mask_value(""), "***");
+}

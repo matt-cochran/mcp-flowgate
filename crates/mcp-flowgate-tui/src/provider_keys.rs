@@ -211,6 +211,26 @@ impl ProviderId {
     }
 }
 
+/// Mask a secret value for `--list` display. Long values become
+/// `<7-char-prefix>***<last-4>`; values of 8 chars or less are masked
+/// entirely (the prefix-plus-last4 form would leak too much of the
+/// original).
+pub fn mask_value(s: &str) -> String {
+    if s.len() <= 8 {
+        return "***".to_string();
+    }
+    let prefix: String = s.chars().take(7).collect();
+    let last4: String = s
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    format!("{prefix}***{last4}")
+}
+
 /// Production wrapper. Calls [`load_into_env_with`] against the real
 /// process env, swallows missing-file (silent ok), logs other errors
 /// as a single warning and continues. Called once from `main()`
