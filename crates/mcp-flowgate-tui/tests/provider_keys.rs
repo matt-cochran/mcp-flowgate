@@ -62,6 +62,13 @@ fn read_parses_two_var_file() {
     let mut f = std::fs::File::create(&p).unwrap();
     writeln!(f, "ANTHROPIC_API_KEY=sk-ant-aaa").unwrap();
     writeln!(f, "OPENAI_API_KEY=sk-bbb").unwrap();
+    drop(f);
+    #[cfg(unix)]
+    {
+        let mut perm = std::fs::metadata(&p).unwrap().permissions();
+        perm.set_mode(0o600);
+        std::fs::set_permissions(&p, perm).unwrap();
+    }
     let m = provider_keys::read(&p).unwrap();
     let expected: BTreeMap<String, String> = BTreeMap::from([
         ("ANTHROPIC_API_KEY".into(), "sk-ant-aaa".into()),
@@ -78,6 +85,13 @@ fn read_skips_malformed_lines_and_blank_lines() {
     writeln!(f).unwrap();
     writeln!(f, "this-has-no-equals-sign").unwrap();
     writeln!(f, "ANTHROPIC_API_KEY=sk-ant-valid").unwrap();
+    drop(f);
+    #[cfg(unix)]
+    {
+        let mut perm = std::fs::metadata(&p).unwrap().permissions();
+        perm.set_mode(0o600);
+        std::fs::set_permissions(&p, perm).unwrap();
+    }
     let m = provider_keys::read(&p).unwrap();
     assert_eq!(m.get("ANTHROPIC_API_KEY"), Some(&"sk-ant-valid".to_string()));
     assert_eq!(m.len(), 1);
@@ -90,6 +104,13 @@ fn read_trims_whitespace_around_equals() {
     let mut f = std::fs::File::create(&p).unwrap();
     writeln!(f, "ANTHROPIC_API_KEY = sk-ant-aaa").unwrap();
     writeln!(f, "  OPENAI_API_KEY =sk-bbb  ").unwrap();
+    drop(f);
+    #[cfg(unix)]
+    {
+        let mut perm = std::fs::metadata(&p).unwrap().permissions();
+        perm.set_mode(0o600);
+        std::fs::set_permissions(&p, perm).unwrap();
+    }
     let m = provider_keys::read(&p).unwrap();
     assert_eq!(m.get("ANTHROPIC_API_KEY"), Some(&"sk-ant-aaa".to_string()));
     assert_eq!(m.get("OPENAI_API_KEY"),    Some(&"sk-bbb".to_string()));
@@ -111,6 +132,23 @@ fn write_atomic_creates_0600_file_in_0700_parent() {
     assert_eq!(f_mode, 0o600, "file mode should be 0600, got {:o}", f_mode);
     let parent_mode = std::fs::metadata(p.parent().unwrap()).unwrap().permissions().mode() & 0o777;
     assert_eq!(parent_mode, 0o700, "parent dir mode should be 0700, got {:o}", parent_mode);
+}
+
+#[test]
+#[cfg(unix)]
+fn read_rejects_world_readable_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    std::fs::write(&p, "ANTHROPIC_API_KEY=x\n").unwrap();
+    let mut perm = std::fs::metadata(&p).unwrap().permissions();
+    perm.set_mode(0o644);
+    std::fs::set_permissions(&p, perm).unwrap();
+
+    let err = provider_keys::read(&p).unwrap_err();
+    assert!(
+        matches!(err, provider_keys::ProviderKeysError::PermissionsTooOpen { .. }),
+        "got {err:?}"
+    );
 }
 
 #[test]

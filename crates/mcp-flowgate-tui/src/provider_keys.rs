@@ -53,6 +53,18 @@ pub fn read(path: &Path) -> Result<BTreeMap<String, String>, ProviderKeysError> 
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(e) => return Err(ProviderKeysError::Io(e)),
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)?.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(ProviderKeysError::PermissionsTooOpen {
+                path: path.display().to_string(),
+                mode,
+            });
+        }
+    }
+
     let mut out = BTreeMap::new();
     for (i, line) in raw.lines().enumerate() {
         let line = line.trim();
