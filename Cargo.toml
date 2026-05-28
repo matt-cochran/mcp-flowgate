@@ -29,6 +29,7 @@ clap = { version = "4", features = ["derive"] }
 futures = "0.3"
 jsonschema = { version = "0.46", default-features = false }
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+rpassword = "7"
 rmcp = { version = "1.6", default-features = false, features = ["server", "client", "macros", "transport-io", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
