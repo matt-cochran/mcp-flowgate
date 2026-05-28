@@ -74,6 +74,16 @@ and that you have the right to license it under Apache-2.0. We use
 the [Developer Certificate of Origin](https://developercertificate.org/) —
 sign commits with `git commit -s`.
 
+## Nightly CI secrets
+
+`.github/workflows/nightly.yml` requires the following repository secrets:
+
+- `ANTHROPIC_API_KEY_CI` — a CI-scoped API key. Spend cap recommended at $5/month; the nightly's smoke-ete walk uses ~$0.10–$0.50 per run.
+- `OPENAI_API_KEY_CI` — same shape.
+- `GOOGLE_API_KEY_CI` — same shape.
+
+Set these in repo Settings → Secrets and variables → Actions. The nightly workflow is gated to the canonical repo (`if: github.repository == 'matt-cochran/mcp-flowgate'`) so forks don't accidentally trigger live API calls.
+
 ## Maintainer expectations
 
 We aim for:
