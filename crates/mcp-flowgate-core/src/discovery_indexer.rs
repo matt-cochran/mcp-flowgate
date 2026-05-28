@@ -213,7 +213,7 @@ fn workflow_item(id: &str, def: &Value) -> DiscoveryItem {
             rel: "start".into(),
             title: Some(format!("Start workflow '{id}'")),
             description: None,
-            method: "workflow.start".into(),
+            method: "flowgate.command".into(),
             args: Value::Object(start_args),
             input_schema,
         }],
@@ -262,7 +262,7 @@ fn capability_item(exposure: &Value) -> Option<DiscoveryItem> {
             description: Some(format!(
                 "After starting, submit transition '{name}' from the 'ready' state."
             )),
-            method: "workflow.start".into(),
+            method: "flowgate.command".into(),
             args: Value::Object(start_args),
             input_schema,
         }],
