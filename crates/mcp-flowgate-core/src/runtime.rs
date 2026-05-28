@@ -134,6 +134,44 @@ impl WorkflowRuntime {
         &self.audit
     }
 
+    /// T24 — cancel a running workflow. Sets `cancelled_at` +
+    /// `cancelled_reason` on the instance (without changing `state`,
+    /// so the operator can later recover by reading the original
+    /// position). Subsequent `submit` calls return `WORKFLOW_CANCELLED`;
+    /// `get` surfaces `result.status: "cancelled"`. Emits a
+    /// `workflow.cancelled` audit event.
+    ///
+    /// Idempotent: re-cancelling an already-cancelled workflow refreshes
+    /// the reason but does not double-emit the audit event (the second
+    /// call returns Ok without writing).
+    pub async fn cancel(&self, workflow_id: &str, reason: &str) -> anyhow::Result<()> {
+        let instance = self.store.load(workflow_id).await?;
+        if instance.cancelled_at.is_some() {
+            // Already cancelled — idempotent no-op. Re-cancelling
+            // shouldn't surprise callers (e.g. a retry loop). The
+            // reason from the first cancel wins.
+            return Ok(());
+        }
+        let expected_version = instance.version;
+        let mut updated = instance.clone();
+        updated.cancelled_at = Some(Utc::now());
+        updated.cancelled_reason = Some(reason.to_string());
+        // bump version so concurrent submits using stale `expected_version`
+        // hit the version-conflict path rather than racing past cancel.
+        updated.version = updated.version.saturating_add(1);
+        let saved = self.store.save_if_version(updated, expected_version).await?;
+
+        let event = saved
+            .audit_event("workflow.cancelled")
+            .with_payload(serde_json::json!({
+                "reason": reason,
+                "state_at_cancel": saved.state,
+                "version_at_cancel": saved.version,
+            }));
+        self.record_or_self_event(event).await;
+        Ok(())
+    }
+
     /// SPEC §5.8 non-critical-path audit pattern (FMECA FM-8 mitigation,
     /// audit-resolution plan C.1). Records `event` to the audit sink; on
     /// sink failure, emits an `audit.write_failed` self-event so the loss
@@ -202,6 +240,8 @@ impl WorkflowRuntime {
             // downstream audit event for this workflow inherits them.
             trace_id: request.trace_id,
             run_id: request.run_id,
+            cancelled_at: None,
+            cancelled_reason: None,
         };
         let correlation_id = format!("cor_{}", Uuid::new_v4().simple());
 
@@ -333,6 +373,26 @@ impl WorkflowRuntime {
         // snapshot, never from the live `DefinitionStore`. A config edit or
         // hot reload must not disturb a running instance (SPEC §8.3).
         let definition = instance.definition.clone();
+        // T24 — cancellation takes precedence over timeout. The
+        // original state is preserved on the instance; the response's
+        // `result.status` carries the cancelled signal so callers
+        // (interpreter, LLM resume) see the workflow is terminal even
+        // though its `state` field still names the recoverable position.
+        if instance.cancelled_at.is_some() {
+            let cancelled_payload = serde_json::json!({
+                "cancelled_at":  instance.cancelled_at,
+                "cancelled_reason": instance.cancelled_reason,
+            });
+            return Ok(self
+                .response(
+                    &definition,
+                    &instance,
+                    "cancelled",
+                    Some(cancelled_payload),
+                    &request.principal,
+                )
+                .await);
+        }
         if let Some(timed_out) = self
             .check_and_apply_timeout(&definition, instance.clone(), &request.principal)
             .await?

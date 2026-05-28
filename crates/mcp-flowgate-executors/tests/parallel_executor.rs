@@ -37,6 +37,8 @@ fn instance_stub() -> WorkflowInstance {
         started_at: Utc::now(),
         trace_id: None,
         run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     }
 }
 

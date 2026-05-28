@@ -175,6 +175,8 @@ fn exec_request(
             started_at: Utc::now(),
             trace_id: None,
             run_id: None,
+            cancelled_at: None,
+            cancelled_reason: None,
         },
         transition: Some("run".into()),
         arguments: json!({}),

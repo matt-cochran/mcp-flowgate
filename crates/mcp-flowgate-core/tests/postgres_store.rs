@@ -43,6 +43,8 @@ fn make_instance(id: &str, version: u64, state: &str) -> WorkflowInstance {
         started_at: chrono::Utc::now(),
         trace_id: None,
         run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     }
 }
 

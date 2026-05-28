@@ -38,6 +38,17 @@ pub struct WorkflowInstance {
     /// SPEC §20.2 — caller-supplied run id, same lifecycle as `trace_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// T24 — when set, the workflow has been cancelled via
+    /// `WorkflowRuntime::cancel`. The original `state` is preserved
+    /// (recoverable); `result.status` in `get` responses surfaces as
+    /// `"cancelled"` and `submit` calls are rejected with
+    /// `WORKFLOW_CANCELLED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled_at: Option<DateTime<Utc>>,
+    /// Operator-supplied reason for cancellation (audit trail). Paired
+    /// with `cancelled_at`; only meaningful when that is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled_reason: Option<String>,
 }
 
 impl WorkflowInstance {

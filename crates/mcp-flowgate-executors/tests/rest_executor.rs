@@ -42,6 +42,8 @@ fn make_request(
             started_at: chrono::Utc::now(),
                     trace_id: None,
             run_id: None,
+            cancelled_at: None,
+            cancelled_reason: None,
         },
         transition: None,
         arguments,

@@ -35,6 +35,8 @@ fn bench_in_memory_store(c: &mut Criterion) {
                     started_at: chrono::Utc::now(),
                     trace_id: None,
                     run_id: None,
+                    cancelled_at: None,
+                    cancelled_reason: None,
                 };
                 (store, instance)
             },
@@ -64,6 +66,8 @@ fn bench_sqlite_store(c: &mut Criterion) {
                 started_at: chrono::Utc::now(),
                 trace_id: None,
                 run_id: None,
+                cancelled_at: None,
+                cancelled_reason: None,
             },
             |instance| {
                 rt.block_on(store.create(instance)).unwrap();

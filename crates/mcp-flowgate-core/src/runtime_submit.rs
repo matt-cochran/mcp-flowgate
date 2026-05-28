@@ -3,6 +3,7 @@
 //! entry points (`start`, `get`) remain in `runtime.rs`. All methods
 //! share the same `impl WorkflowRuntime` block split across sibling files.
 
+use anyhow::bail;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -22,6 +23,18 @@ impl WorkflowRuntime {
         let definition = instance.definition.clone();
 
         let correlation_id = format!("cor_{}", Uuid::new_v4().simple());
+
+        // T24 — cancelled workflows refuse submit. The caller sees
+        // WORKFLOW_CANCELLED with the original reason in the error
+        // body so retry loops don't loop forever.
+        if let Some(cancelled_at) = instance.cancelled_at {
+            bail!(
+                "WORKFLOW_CANCELLED: workflow {} was cancelled at {} (reason: {})",
+                request.workflow_id,
+                cancelled_at,
+                instance.cancelled_reason.as_deref().unwrap_or("(none)"),
+            );
+        }
 
         // Lazy timeout check: if more than `definition.timeoutMs` has elapsed
         // since start, fire onTimeout and short-circuit before the submit

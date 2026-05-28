@@ -27,6 +27,8 @@ async fn human_executor_emits_approval_requested() {
             started_at: chrono::Utc::now(),
                     trace_id: None,
             run_id: None,
+            cancelled_at: None,
+            cancelled_reason: None,
         },
         transition: Some("request_approval".into()),
         arguments: json!({}),

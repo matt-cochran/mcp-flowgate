@@ -10,6 +10,13 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — `WorkflowRuntime::cancel(workflow_id, reason)` API
+
+- **`WorkflowRuntime::cancel`** — sets `cancelled_at` + `cancelled_reason` on the instance without changing `state` (recoverable: the original position is preserved). Subsequent `get()` returns `result.status: "cancelled"` with the reason in `error.cancelled_reason`; subsequent `submit()` refuses with `WORKFLOW_CANCELLED` so retry loops don't poll forever. Idempotent — re-cancelling an already-cancelled workflow returns Ok without re-emitting the audit event.
+- **`workflow.cancelled` audit event** — emitted on first cancel, carrying the reason + `state_at_cancel` + `version_at_cancel` so the audit trail records exactly where the workflow stopped.
+- **`WorkflowInstance.cancelled_at` + `cancelled_reason` fields** — new optional persisted fields (`#[serde(default, skip_serializing_if = "Option::is_none")]`), so existing store rows continue to deserialize.
+- **Activated previously-ignored test**: `tests/workflow_failure_paths.rs::cancellation_mid_walk_leaves_recoverable_state` is now `#[tokio::test]` (was `#[ignore]`), exercising cancel + get + submit + re-cancel-idempotence in one walk.
+
 ### Added — `flowgate doctor --refresh-agents` + live-probe cache
 
 - **`--refresh-agents` flag** — re-probes every distinct `(provider, model)` pair in `agents.yaml` against the provider's `/v1/models` endpoint (Anthropic `x-api-key`, OpenAI `Authorization: Bearer`, Google `?key=`); writes the result to `~/.cache/flowgate/agents-last-probe.json` (or platform-equivalent cache dir). Local providers (`ollama`, `lmstudio`) and `custom` are skipped — there's no listing convention to probe against.

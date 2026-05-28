@@ -65,6 +65,8 @@ async fn inspect_workflow_shows_state() {
         started_at: chrono::Utc::now(),
             trace_id: None,
         run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     };
 
     store.create(instance).await.unwrap();

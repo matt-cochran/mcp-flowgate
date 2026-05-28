@@ -29,6 +29,8 @@ fn instance_with_scripts_library(lib: Value) -> WorkflowInstance {
         started_at: Utc::now(),
         trace_id: None,
         run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     }
 }
 

@@ -35,6 +35,8 @@ fn instance_with_script(subject: &str, hash: &str) -> WorkflowInstance {
         started_at: Utc::now(),
         trace_id: None,
         run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     }
 }
 
@@ -209,6 +211,8 @@ async fn script_ack_does_not_satisfy_guidance_guard_and_vice_versa() {
         started_at: Utc::now(),
         trace_id: None,
         run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     };
 
     // Script guard passes (the script ack was recorded).

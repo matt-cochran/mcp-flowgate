@@ -373,17 +373,130 @@ fn runtime_timeout_transitions_workflow_to_terminal() {
 //
 // Tracking: cancellation API — file as v0.4 task before GA if needed.
 
-#[test]
-#[ignore = "WorkflowRuntime has no cancel/stop API; no CancellationToken, no fn cancel. \
-            Workflows are abandoned by callers simply not calling submit/get again. \
-            A proper cancel API is a v0.4 task. See runtime.rs — no cancel surface exists."]
-fn cancellation_mid_walk_leaves_recoverable_state() {
-    // Intended shape when the API exists:
-    //
-    //   let resp = runtime.start(...).await.unwrap();
-    //   let workflow_id = resp.pointer("/workflow/id")...;
-    //   runtime.cancel(workflow_id).await.unwrap();
-    //   let get_resp = runtime.get(GetWorkflow { workflow_id, ... }).await.unwrap();
-    //   // Workflow should be in a terminal "cancelled" state, not silently "done".
-    //   assert_eq!(get_resp.pointer("/workflow/state")..., "cancelled");
+#[tokio::test]
+async fn cancellation_mid_walk_leaves_recoverable_state() {
+    // T24 contract: WorkflowRuntime::cancel(workflow_id, reason) sets
+    // a cancelled flag on the instance without changing its `state`
+    // field. Subsequent get() returns result.status="cancelled" but
+    // workflow.state preserves the original position (recoverable).
+    // Subsequent submit() refuses with WORKFLOW_CANCELLED.
+    use mcp_flowgate_core::model::GetWorkflow;
+
+    let config = json!({
+        "workflows": {
+            "test.cancel": {
+                "initialState": "ready",
+                "states": {
+                    "ready": {
+                        "transitions": {
+                            "go": {
+                                "target": "done",
+                                "actor": "agent",
+                                "argumentsSchema": {"type": "object"},
+                            }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+
+    let audit = Arc::new(MemoryAuditSink::new());
+    let definitions = Arc::new(ConfigDefinitionStore::from_config(&config));
+    let store: Arc<dyn WorkflowStore> = Arc::new(InMemoryWorkflowStore::new());
+    let evidence = Arc::new(InMemoryEvidenceStore::new());
+    let guards = Arc::new(DefaultGuardEvaluator::with_evidence(evidence.clone()));
+    let registry: Arc<dyn ExecutorRegistry> = Arc::new(NoopRegistry);
+
+    let runtime = WorkflowRuntime::new(
+        definitions,
+        store,
+        registry,
+        guards,
+        audit.clone() as Arc<dyn AuditSink>,
+    )
+    .with_evidence(evidence);
+
+    let resp = runtime
+        .start(StartWorkflow {
+            definition_id: "test.cancel".to_string(),
+            input: json!({}),
+            principal: Principal::anonymous(),
+            trace_id: None,
+            run_id: None,
+        })
+        .await
+        .expect("start succeeds");
+    let workflow_id = resp
+        .pointer("/workflow/id")
+        .and_then(Value::as_str)
+        .expect("workflow id present")
+        .to_string();
+
+    // Cancel.
+    runtime
+        .cancel(&workflow_id, "operator-requested abort")
+        .await
+        .expect("cancel succeeds");
+
+    // get() surfaces the cancellation; state is recoverable.
+    let get_resp = runtime
+        .get(GetWorkflow {
+            workflow_id: workflow_id.clone(),
+            principal: Principal::anonymous(),
+            trace_id: None,
+            run_id: None,
+        })
+        .await
+        .expect("get succeeds after cancel");
+    assert_eq!(
+        get_resp.pointer("/result/status").and_then(Value::as_str),
+        Some("cancelled"),
+        "result.status must be 'cancelled' after cancel; got: {get_resp:#}"
+    );
+    assert_eq!(
+        get_resp.pointer("/workflow/state").and_then(Value::as_str),
+        Some("ready"),
+        "workflow.state must be PRESERVED (recoverable) after cancel; got: {get_resp:#}"
+    );
+    // Cancellation reason flows back through the response error payload.
+    let err_reason = get_resp
+        .pointer("/error/cancelled_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(
+        err_reason.contains("operator-requested abort"),
+        "cancellation reason must appear in error body; got: {get_resp:#}"
+    );
+
+    // Submit refuses with WORKFLOW_CANCELLED.
+    let submit_err = runtime
+        .submit(SubmitTransition {
+            workflow_id: workflow_id.clone(),
+            transition: "go".to_string(),
+            arguments: json!({}),
+            principal: Principal::anonymous(),
+            expected_version: 0,
+            summary: None,
+            trace_id: None,
+            run_id: None,
+        })
+        .await
+        .expect_err("submit must refuse after cancel");
+    let msg = submit_err.to_string();
+    assert!(
+        msg.contains("WORKFLOW_CANCELLED"),
+        "submit error must name WORKFLOW_CANCELLED; got: {msg}"
+    );
+    assert!(
+        msg.contains("operator-requested abort"),
+        "submit error must surface the cancellation reason; got: {msg}"
+    );
+
+    // Idempotency: a second cancel returns Ok without erroring.
+    runtime
+        .cancel(&workflow_id, "re-cancel ignored")
+        .await
+        .expect("re-cancel is idempotent");
 }
