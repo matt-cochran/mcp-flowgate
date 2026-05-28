@@ -411,18 +411,18 @@ async fn run_walk(args: WalkArgs) -> Result<ExitCode> {
     // Start the workflow to acquire a workflowId.
     let start_resp = caller
         .call(
-            "workflow.start",
-            serde_json::json!({ "definition": args.workflow, "input": input_value }),
+            "flowgate.command",
+            serde_json::json!({ "definitionId": args.workflow, "input": input_value }),
         )
         .await
-        .map_err(|e| anyhow::anyhow!("workflow.start failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("flowgate.command (start) failed: {e}"))?;
 
     let workflow_id = start_resp
         .pointer("/workflow/id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "workflow.start response missing /workflow/id: {start_resp}"
+                "flowgate.command (start) response missing /workflow/id: {start_resp}"
             )
         })?
         .to_string();
