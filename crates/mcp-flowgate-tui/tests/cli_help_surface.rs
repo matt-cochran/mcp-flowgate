@@ -100,3 +100,40 @@ fn top_level_help_groups_subcommands_under_headings() {
         assert!(stdout.contains(cmd), "expected '{cmd}' in --help; got:\n{stdout}");
     }
 }
+
+#[test]
+fn walk_long_help_mentions_deterministic_interpreter() {
+    let out = Command::new(binary())
+        .args(["help", "walk"])
+        .output()
+        .expect("help walk");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("deterministic interpreter"),
+        "expected `help walk` to surface long_about; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_long_help_mentions_preflight() {
+    let out = Command::new(binary())
+        .args(["help", "doctor"])
+        .output()
+        .expect("help doctor");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lower = stdout.to_lowercase();
+    assert!(lower.contains("pre-flight") || lower.contains("preflight"));
+}
+
+#[test]
+fn set_provider_keys_long_help_mentions_file_location() {
+    let out = Command::new(binary())
+        .args(["help", "set-provider-keys"])
+        .output()
+        .expect("help set-provider-keys");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("providers.env"));
+}
