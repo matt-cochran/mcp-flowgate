@@ -132,3 +132,48 @@ pub fn write_atomic(
     temp.persist(path).map_err(|e| ProviderKeysError::Io(e.error))?;
     Ok(())
 }
+
+/// Inject-friendly load. Read the file, then for each `(k, v)`:
+/// - if `read_env(k)` returns Some, leave it (env wins over file).
+/// - otherwise call `set_env(k, v)`.
+///
+/// Errors are returned, not silently swallowed — the production
+/// wrapper [`load_into_env_if_present`] decides the swallow policy.
+pub fn load_into_env_with(
+    path: &Path,
+    read_env: impl Fn(&str) -> Option<String>,
+    mut set_env: impl FnMut(&str, &str),
+) -> Result<(), ProviderKeysError> {
+    let vars = read(path)?;
+    for (k, v) in vars {
+        if read_env(&k).is_some() {
+            continue;
+        }
+        set_env(&k, &v);
+    }
+    Ok(())
+}
+
+/// Production wrapper. Calls [`load_into_env_with`] against the real
+/// process env, swallows missing-file (silent ok), logs other errors
+/// as a single warning and continues. Called once from `main()`
+/// before any CLI dispatch.
+pub fn load_into_env_if_present() {
+    let path = resolve_path();
+    let result = load_into_env_with(
+        &path,
+        |k| std::env::var(k).ok(),
+        // SAFETY: called synchronously at the top of `main()` before
+        // the first `.await`, so no `tokio::spawn`-ed task exists yet
+        // that could race on the process env. The same invariant
+        // applies to `keyring::ensure_keyring_available`.
+        |k, v| unsafe { std::env::set_var(k, v) },
+    );
+    if let Err(e) = result {
+        tracing::warn!(
+            error = %e,
+            path = %path.display(),
+            "failed to load provider-keys file"
+        );
+    }
+}

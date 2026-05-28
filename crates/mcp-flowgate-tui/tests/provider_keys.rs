@@ -162,3 +162,52 @@ fn write_atomic_round_trips_via_read() {
     let back = provider_keys::read(&p).unwrap();
     assert_eq!(back, vars);
 }
+
+use std::cell::RefCell;
+
+#[test]
+fn load_into_env_with_skips_already_set_vars() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    let mut vars = BTreeMap::new();
+    vars.insert("ANTHROPIC_API_KEY".into(), "file-value".into());
+    vars.insert("OPENAI_API_KEY".into(), "file-openai".into());
+    provider_keys::write_atomic(&p, &vars).unwrap();
+
+    let written: RefCell<BTreeMap<String, String>> = RefCell::new(BTreeMap::new());
+    let read_env = |k: &str| {
+        if k == "ANTHROPIC_API_KEY" {
+            Some("env-wins".to_string())
+        } else {
+            None
+        }
+    };
+    let set_env = |k: &str, v: &str| {
+        written.borrow_mut().insert(k.to_string(), v.to_string());
+    };
+    provider_keys::load_into_env_with(&p, read_env, set_env).unwrap();
+
+    let w = written.borrow();
+    assert_eq!(
+        w.get("OPENAI_API_KEY"),
+        Some(&"file-openai".to_string()),
+        "file value loaded"
+    );
+    assert!(
+        !w.contains_key("ANTHROPIC_API_KEY"),
+        "env-set var must not be overwritten"
+    );
+}
+
+#[test]
+fn load_into_env_with_missing_file_is_silent_ok() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("nope.env");
+    let written: RefCell<BTreeMap<String, String>> = RefCell::new(BTreeMap::new());
+    let read_env = |_: &str| None;
+    let set_env = |k: &str, v: &str| {
+        written.borrow_mut().insert(k.to_string(), v.to_string());
+    };
+    provider_keys::load_into_env_with(&p, read_env, set_env).unwrap();
+    assert!(written.borrow().is_empty());
+}
