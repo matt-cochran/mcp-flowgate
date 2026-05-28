@@ -74,3 +74,49 @@ pub fn read(path: &Path) -> Result<BTreeMap<String, String>, ProviderKeysError> 
     }
     Ok(out)
 }
+
+/// Write the provider-keys map atomically: tempfile in the same dir,
+/// chmod 0600, then rename over the target. Parent dir created with
+/// mode 0700 if missing. Atomic rename means a partial-write torn
+/// state is impossible.
+pub fn write_atomic(
+    path: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Result<(), ProviderKeysError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perm = std::fs::metadata(parent)?.permissions();
+            perm.set_mode(0o700);
+            std::fs::set_permissions(parent, perm)?;
+        }
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let temp = tempfile::Builder::new()
+        .prefix(".providers.env.")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+
+    {
+        use std::io::Write;
+        let mut f = temp.as_file();
+        for (k, v) in vars {
+            writeln!(f, "{k}={v}")?;
+        }
+        f.flush()?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(temp.path())?.permissions();
+        perm.set_mode(0o600);
+        std::fs::set_permissions(temp.path(), perm)?;
+    }
+
+    temp.persist(path).map_err(|e| ProviderKeysError::Io(e.error))?;
+    Ok(())
+}

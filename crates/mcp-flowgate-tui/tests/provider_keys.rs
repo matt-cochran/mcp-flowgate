@@ -94,3 +94,33 @@ fn read_trims_whitespace_around_equals() {
     assert_eq!(m.get("ANTHROPIC_API_KEY"), Some(&"sk-ant-aaa".to_string()));
     assert_eq!(m.get("OPENAI_API_KEY"),    Some(&"sk-bbb".to_string()));
 }
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+#[test]
+#[cfg(unix)]
+fn write_atomic_creates_0600_file_in_0700_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("sub").join("providers.env");
+    let mut vars = BTreeMap::new();
+    vars.insert("ANTHROPIC_API_KEY".into(), "sk-ant-aaa".into());
+    provider_keys::write_atomic(&p, &vars).unwrap();
+
+    let f_mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(f_mode, 0o600, "file mode should be 0600, got {:o}", f_mode);
+    let parent_mode = std::fs::metadata(p.parent().unwrap()).unwrap().permissions().mode() & 0o777;
+    assert_eq!(parent_mode, 0o700, "parent dir mode should be 0700, got {:o}", parent_mode);
+}
+
+#[test]
+fn write_atomic_round_trips_via_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    let mut vars = BTreeMap::new();
+    vars.insert("ANTHROPIC_API_KEY".into(), "sk-ant-aaa".into());
+    vars.insert("OPENAI_API_KEY".into(), "sk-bbb".into());
+    provider_keys::write_atomic(&p, &vars).unwrap();
+    let back = provider_keys::read(&p).unwrap();
+    assert_eq!(back, vars);
+}
