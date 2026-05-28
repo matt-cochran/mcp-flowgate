@@ -21,7 +21,8 @@ mod theme;
 // flowgate_mcp) lives in src/lib.rs so integration tests + the
 // sub-agent spawner can reach them.
 use mcp_flowgate_tui::agent_resolver::{
-    verify_all_primary_bindings, AgentsFile, ConfigSource, Resolver,
+    validate_agent_source_exclusivity, verify_all_primary_bindings, AgentsFile, ConfigSource,
+    Resolver,
 };
 use mcp_flowgate_tui::interpreter::{
     AgentRegistry, LegacyAgentRegistry, McpToolCaller, YamlAgentRegistry,
@@ -309,13 +310,8 @@ async fn build_agent_registry(args: &WalkArgs) -> Result<Box<dyn AgentRegistry>>
         }
     };
 
-    if yaml_path.is_some() && !args.agents.is_empty() {
-        anyhow::bail!(
-            "ambiguous agent source: both `--agent` CLI flag(s) AND an agents.yaml file are \
-             present. Choose one — agents.yaml takes precedence going forward; the `--agent` \
-             flag is deprecated. See /guides/agent-config.mdx for the migration path."
-        );
-    }
+    validate_agent_source_exclusivity(yaml_path.is_some(), !args.agents.is_empty())
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     if let Some((path, source)) = yaml_path {
         let file = AgentsFile::from_path(&path)

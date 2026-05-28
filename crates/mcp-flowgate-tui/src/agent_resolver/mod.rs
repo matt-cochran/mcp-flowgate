@@ -42,6 +42,31 @@ pub use walk::{
     AgentResolutionExhausted, AttemptRecord, ConfigSource, Delegate, DelegateParseError, Resolver,
 };
 
+/// FMECA T1: refuse to start when both `--agent` CLI flags AND an
+/// on-disk `agents.yaml` are present. Picking one silently would mask
+/// operator intent — surfacing the ambiguity is the only safe choice.
+///
+/// Pure function so `main.rs` can call it and tests can exercise the
+/// poka-yoke without shelling out to the binary.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "ambiguous agent source: both `--agent` CLI flag(s) AND an agents.yaml file are present. \
+     Choose one — agents.yaml takes precedence going forward; the `--agent` flag is deprecated. \
+     See /guides/agent-config.mdx for the migration path."
+)]
+pub struct AmbiguousAgentSourceError;
+
+pub fn validate_agent_source_exclusivity(
+    has_yaml: bool,
+    has_cli_agent_flag: bool,
+) -> Result<(), AmbiguousAgentSourceError> {
+    if has_yaml && has_cli_agent_flag {
+        Err(AmbiguousAgentSourceError)
+    } else {
+        Ok(())
+    }
+}
+
 /// Validate an `agents.yaml` file at an arbitrary path by loading it
 /// through `AgentsFile::from_path` — exactly the same path the
 /// resolver uses at workflow start. Returns the JSON envelope the

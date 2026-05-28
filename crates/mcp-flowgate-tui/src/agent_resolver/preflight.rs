@@ -84,6 +84,46 @@ pub enum PreflightOutcome {
     MissingCredential { env_var: &'static str },
 }
 
+/// Classify a probe outcome into a startup error (if any) for the given
+/// (label, binding). Pure function so the warn-vs-fail dispatch logic is
+/// testable without HTTP plumbing.
+///
+/// FMECA U2: only `Fail` and `MissingCredential` block startup. `Warn`
+/// (429/404/transient network) is logged at the call site and lets
+/// startup proceed — the resolver's runtime CoR will route around it.
+pub fn classify_outcome(
+    label: &str,
+    binding: &Binding,
+    outcome: PreflightOutcome,
+) -> Option<PreflightError> {
+    match outcome {
+        PreflightOutcome::Ok => None,
+        PreflightOutcome::Warn { class, detail } => {
+            tracing::warn!(
+                target: "flowgate.agent_resolver",
+                label = %label,
+                provider = binding.provider.display_name(),
+                model = %binding.model,
+                ?class,
+                %detail,
+                "primary preflight: transient — runtime CoR will handle"
+            );
+            None
+        }
+        PreflightOutcome::Fail { class, detail } => Some(PreflightError::PrimaryAuthFailed {
+            delegate: label.to_string(),
+            binding: binding.clone(),
+            class,
+            detail,
+        }),
+        PreflightOutcome::MissingCredential { env_var } => Some(PreflightError::MissingCredential {
+            delegate: label.to_string(),
+            binding: binding.clone(),
+            env_var,
+        }),
+    }
+}
+
 /// Verify primary bindings for the given delegates. Returns Ok(()) if
 /// every primary either probed Ok or warned; returns a list of all
 /// failures otherwise.
@@ -116,34 +156,8 @@ pub async fn verify_primary_bindings(
             continue;
         }
         let outcome = probe_binding(primary).await;
-        match outcome {
-            PreflightOutcome::Ok => {}
-            PreflightOutcome::Warn { class, detail } => {
-                tracing::warn!(
-                    target: "flowgate.agent_resolver",
-                    delegate = %d,
-                    provider = primary.provider.display_name(),
-                    model = %primary.model,
-                    ?class,
-                    %detail,
-                    "primary preflight: transient — runtime CoR will handle"
-                );
-            }
-            PreflightOutcome::Fail { class, detail } => {
-                errors.push(PreflightError::PrimaryAuthFailed {
-                    delegate: d.to_string(),
-                    binding: primary.clone(),
-                    class,
-                    detail,
-                });
-            }
-            PreflightOutcome::MissingCredential { env_var } => {
-                errors.push(PreflightError::MissingCredential {
-                    delegate: d.to_string(),
-                    binding: primary.clone(),
-                    env_var,
-                });
-            }
+        if let Some(err) = classify_outcome(&d.to_string(), primary, outcome) {
+            errors.push(err);
         }
     }
     if errors.is_empty() {
@@ -217,34 +231,9 @@ pub async fn verify_all_primary_bindings(
         if !seen.insert(key) {
             continue;
         }
-        match probe_binding(b).await {
-            PreflightOutcome::Ok => {}
-            PreflightOutcome::Warn { class, detail } => {
-                tracing::warn!(
-                    target: "flowgate.agent_resolver",
-                    label = %label,
-                    provider = b.provider.display_name(),
-                    model = %b.model,
-                    ?class,
-                    %detail,
-                    "primary preflight: transient — runtime CoR will handle"
-                );
-            }
-            PreflightOutcome::Fail { class, detail } => {
-                errors.push(PreflightError::PrimaryAuthFailed {
-                    delegate: label,
-                    binding: b.clone(),
-                    class,
-                    detail,
-                });
-            }
-            PreflightOutcome::MissingCredential { env_var } => {
-                errors.push(PreflightError::MissingCredential {
-                    delegate: label,
-                    binding: b.clone(),
-                    env_var,
-                });
-            }
+        let outcome = probe_binding(b).await;
+        if let Some(err) = classify_outcome(&label, b, outcome) {
+            errors.push(err);
         }
     }
     if errors.is_empty() {

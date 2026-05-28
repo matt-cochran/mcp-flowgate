@@ -234,6 +234,39 @@ default:
 }
 
 #[test]
+fn cor_over_bindings_surfaces_on_content_failure() {
+    // FMECA R1: a content-class failure on any prior attempt must
+    // SURFACE through `try_next` rather than silently advance to the
+    // next binding. Mirrors `try_next_advances_past_failed_infrastructure_attempt`
+    // — same inputs except the failure class. Different outcome.
+    let yaml = r#"
+version: 1
+default:
+  - provider: { name: anthropic }
+    model: claude-sonnet-4-6
+  - provider: { name: openai }
+    model: gpt-5
+  - provider: { name: google }
+    model: gemini-2.0-flash
+"#;
+    let r = resolver_from(yaml);
+    let d = Delegate::parse("coding").unwrap();
+    let (bindings, _) = r.walk(&d).unwrap();
+    let prior = vec![(
+        0usize,
+        FailureClass::ContentOther,
+        "unmapped 418 from provider".into(),
+    )];
+    let err = r
+        .try_next(&d, &bindings, &prior)
+        .expect_err("content failure must surface, not advance to index 1");
+    assert_eq!(err.delegate, "coding");
+    assert_eq!(err.attempts.len(), 1);
+    assert_eq!(err.attempts[0].class, FailureClass::ContentOther);
+    assert!(err.attempts[0].detail.contains("418"));
+}
+
+#[test]
 fn try_next_returns_structured_exhaustion_when_all_failed() {
     let yaml = r#"
 version: 1

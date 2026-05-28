@@ -181,19 +181,26 @@ impl Resolver {
     /// list, skipping indices that already failed; returns the first
     /// untried binding OR a structured exhaustion error.
     ///
-    /// Caller invariant: `prior_failures` is in order of attempt, with
-    /// `(index, class)` pointing into `bindings`. Only `class.is_infrastructure()`
-    /// failures should appear here — content failures must short-circuit
-    /// before re-entering `try_next`.
+    /// Defense-in-depth: if any entry in `prior_failures` is a
+    /// non-infrastructure (content) class, surface immediately as
+    /// `AgentResolutionExhausted` rather than advancing. Callers are
+    /// expected to short-circuit on content failures before re-entering
+    /// `try_next`, but the check here prevents the "no silent fallback"
+    /// invariant from depending on caller discipline alone (FMECA R1).
     pub fn try_next<'a>(
         &self,
         delegate: &Delegate,
         bindings: &'a [Binding],
         prior_failures: &[(usize, FailureClass, String)],
     ) -> Result<(usize, &'a Binding), AgentResolutionExhausted> {
-        let next_idx = prior_failures.iter().map(|(i, _, _)| *i + 1).max().unwrap_or(0);
-        if let Some(b) = bindings.get(next_idx) {
-            return Ok((next_idx, b));
+        let has_content_failure = prior_failures
+            .iter()
+            .any(|(_, class, _)| !class.is_infrastructure());
+        if !has_content_failure {
+            let next_idx = prior_failures.iter().map(|(i, _, _)| *i + 1).max().unwrap_or(0);
+            if let Some(b) = bindings.get(next_idx) {
+                return Ok((next_idx, b));
+            }
         }
         let attempts: Vec<AttemptRecord> = prior_failures
             .iter()

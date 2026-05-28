@@ -2,10 +2,12 @@
 //! CLI-flag/YAML mutual-exclusion check (the latter lives in main.rs
 //! but is exercised via the public preflight surface).
 
-use mcp_flowgate_tui::agent_resolver::preflight::{api_key_env_for, probe_binding, PreflightOutcome};
+use mcp_flowgate_tui::agent_resolver::preflight::{
+    api_key_env_for, classify_outcome, probe_binding, PreflightOutcome,
+};
 use mcp_flowgate_tui::agent_resolver::{
-    verify_primary_bindings, AgentsFile, Binding, ConfigSource, Delegate, PreflightError,
-    Provider, ProviderFeatures, Resolver,
+    verify_primary_bindings, AgentsFile, Binding, ConfigSource, Delegate, FailureClass,
+    PreflightError, Provider, ProviderFeatures, Resolver,
 };
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -159,6 +161,47 @@ default:
     verify_primary_bindings(&r, &[d])
         .await
         .expect("SKIP=1 bypasses preflight even with missing creds");
+}
+
+// ── classify_outcome (dispatch logic) ──────────────────────────────────────
+
+#[test]
+fn primary_rate_limit_logs_warning_but_passes() {
+    // FMECA U2: 429 (and 404 / network) on a primary preflight is a
+    // transient class — the resolver's runtime CoR will route around it.
+    // Startup must NOT fail. classify_outcome is the pure dispatch helper
+    // both verify_* functions delegate to; testing it pins the contract
+    // without needing real HTTP plumbing.
+    let binding = Binding {
+        provider: Provider::Anthropic,
+        model: "claude-sonnet-4-6".into(),
+        features: ProviderFeatures::None,
+    };
+    let outcome = PreflightOutcome::Warn {
+        class: FailureClass::RateLimit429,
+        detail: "429 from anthropic".into(),
+    };
+    assert!(
+        classify_outcome("coding", &binding, outcome).is_none(),
+        "429 on primary must warn-but-pass; only 401/403/missing-cred block startup"
+    );
+}
+
+#[test]
+fn primary_auth_401_blocks_startup() {
+    // Inverse of the above — pins the boundary: 401 IS a hard failure.
+    let binding = Binding {
+        provider: Provider::Anthropic,
+        model: "claude-sonnet-4-6".into(),
+        features: ProviderFeatures::None,
+    };
+    let outcome = PreflightOutcome::Fail {
+        class: FailureClass::Auth401,
+        detail: "401 unauthorized".into(),
+    };
+    let err = classify_outcome("coding", &binding, outcome)
+        .expect("401 on primary must produce a startup error");
+    assert!(matches!(err, PreflightError::PrimaryAuthFailed { .. }));
 }
 
 #[tokio::test]
