@@ -21,5 +21,6 @@ pub mod keyring;
 pub mod mcp_caller;
 pub mod mcp_init;
 pub mod migrate;
+pub mod provider_keys;
 pub mod sub_agent;
 pub mod tui_config;
