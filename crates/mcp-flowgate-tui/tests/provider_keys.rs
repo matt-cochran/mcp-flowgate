@@ -271,3 +271,42 @@ fn mask_value_handles_short_values() {
     assert_eq!(provider_keys::mask_value("short"), "***");
     assert_eq!(provider_keys::mask_value(""), "***");
 }
+
+#[test]
+fn set_var_upserts_one_var_preserving_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    let mut existing = BTreeMap::new();
+    existing.insert("OPENAI_API_KEY".into(), "sk-keep".into());
+    provider_keys::write_atomic(&p, &existing).unwrap();
+
+    provider_keys::set_var(&p, "ANTHROPIC_API_KEY", "sk-new").unwrap();
+
+    let back = provider_keys::read(&p).unwrap();
+    assert_eq!(back.get("OPENAI_API_KEY"), Some(&"sk-keep".to_string()));
+    assert_eq!(back.get("ANTHROPIC_API_KEY"), Some(&"sk-new".to_string()));
+    assert_eq!(back.len(), 2);
+}
+
+#[test]
+fn remove_provider_deletes_only_that_providers_vars() {
+    use provider_keys::ProviderId;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("providers.env");
+    let mut existing = BTreeMap::new();
+    existing.insert("ANTHROPIC_API_KEY".into(), "sk-ant".into());
+    existing.insert("OPENAI_API_KEY".into(), "sk-oai".into());
+    existing.insert("AWS_ACCESS_KEY_ID".into(), "AKIA".into());
+    existing.insert("AWS_SECRET_ACCESS_KEY".into(), "secret".into());
+    existing.insert("AWS_REGION".into(), "us-east-1".into());
+    provider_keys::write_atomic(&p, &existing).unwrap();
+
+    provider_keys::remove_provider(&p, ProviderId::Bedrock).unwrap();
+
+    let back = provider_keys::read(&p).unwrap();
+    assert_eq!(back.get("ANTHROPIC_API_KEY"), Some(&"sk-ant".to_string()));
+    assert_eq!(back.get("OPENAI_API_KEY"), Some(&"sk-oai".to_string()));
+    assert!(!back.contains_key("AWS_ACCESS_KEY_ID"));
+    assert!(!back.contains_key("AWS_SECRET_ACCESS_KEY"));
+    assert!(!back.contains_key("AWS_REGION"));
+}

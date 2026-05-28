@@ -60,6 +60,7 @@ serde_yaml = { workspace = true }
 # flag re-probes; default doctor runs read the cache + warn on stale.
 chrono = { workspace = true }
 reqwest = { workspace = true }
+rpassword.workspace = true
 
 # Library surface: `interpreter`, `agent_config`, `tui_config`, `sub_agent`
 # (see src/lib.rs). Integration tests import via `mcp_flowgate_tui::…`.
