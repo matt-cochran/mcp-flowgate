@@ -345,6 +345,7 @@ fn run_set_one(
     provider: ProviderId,
     from_stdin: bool,
 ) -> anyhow::Result<ExitCode> {
+    let mut any = false;
     for env_var in provider.env_vars() {
         let value = if from_stdin {
             let mut s = String::new();
@@ -360,8 +361,13 @@ fn run_set_one(
             continue;
         }
         set_var(path, env_var, &value)?;
+        any = true;
     }
-    eprintln!("saved {} keys to {}", provider.display(), path.display());
+    if any {
+        eprintln!("saved {} keys to {}", provider.display(), path.display());
+    } else {
+        eprintln!("no keys written for {}", provider.display());
+    }
     Ok(ExitCode::SUCCESS)
 }
 
