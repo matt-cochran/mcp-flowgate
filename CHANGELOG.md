@@ -10,6 +10,11 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — Active timeout watchdog + activated timeout test
+
+- **`WorkflowRuntime::spawn_timeout_watchdog`** — when a workflow definition declares `timeoutMs`, `start()` now spawns a tokio task that sleeps the timeout, then calls `get()` once. The internal call triggers the existing lazy timeout check; the workflow transitions to `onTimeout.target` and emits `workflow.timed_out` without needing any external caller to poke it. Fire-and-forget: handle detached, self-cleans when the task returns. Lost watchdogs across process restarts are still covered by the existing lazy check on next get/submit.
+- **Activated previously-ignored test**: `tests/workflow_failure_paths.rs::runtime_timeout_transitions_workflow_to_terminal` is now `#[tokio::test]` (was `#[ignore]`), starting a `timeoutMs: 50` workflow, sleeping past it, and asserting the state machine landed on `timed_out`.
+
 ### Added — `WorkflowRuntime::cancel(workflow_id, reason)` API
 
 - **`WorkflowRuntime::cancel`** — sets `cancelled_at` + `cancelled_reason` on the instance without changing `state` (recoverable: the original position is preserved). Subsequent `get()` returns `result.status: "cancelled"` with the reason in `error.cancelled_reason`; subsequent `submit()` refuses with `WORKFLOW_CANCELLED` so retry loops don't poll forever. Idempotent — re-cancelling an already-cancelled workflow returns Ok without re-emitting the audit event.

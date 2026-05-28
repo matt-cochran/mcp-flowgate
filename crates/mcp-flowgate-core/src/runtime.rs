@@ -202,6 +202,46 @@ impl WorkflowRuntime {
         }
     }
 
+    /// T25 — spawn a tokio watchdog that fires after the workflow's
+    /// `timeoutMs` elapses and triggers the lazy-timeout path (which
+    /// transitions to `onTimeout.target`, emits `workflow.timed_out`,
+    /// and runs the existing deterministic-chain expansion). The
+    /// watchdog is best-effort: if the workflow completes naturally
+    /// before the timeout, the watchdog's `get()` call is cheap and
+    /// observes the terminal state without re-firing. Lost watchdogs
+    /// across process restarts are recovered on next get/submit via
+    /// the existing lazy check — this active watchdog only matters
+    /// for workflows that complete (or stall) without any caller
+    /// touching them after `start`.
+    ///
+    /// Returns the spawned `JoinHandle` so callers can keep / abort
+    /// it; the runtime itself doesn't track these (no Drop hook
+    /// needed). For most callers — the gateway's MCP server, tests —
+    /// the handle is dropped on the floor and the task self-cleans
+    /// when it finishes.
+    fn spawn_timeout_watchdog(
+        &self,
+        workflow_id: &str,
+        timeout_ms: u64,
+    ) -> tokio::task::JoinHandle<()> {
+        let rt = self.clone();
+        let wid = workflow_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(timeout_ms)).await;
+            // Triggering get() runs the existing lazy timeout check.
+            // We swallow the result + any error — the watchdog is
+            // observational, not assertive.
+            let _ = rt
+                .get(GetWorkflow {
+                    workflow_id: wid,
+                    principal: Principal::anonymous(),
+                    trace_id: None,
+                    run_id: None,
+                })
+                .await;
+        })
+    }
+
     pub async fn start(&self, request: StartWorkflow) -> anyhow::Result<Value> {
         if self.is_draining() {
             bail!("gateway is shutting down; please retry shortly");
@@ -246,6 +286,19 @@ impl WorkflowRuntime {
         let correlation_id = format!("cor_{}", Uuid::new_v4().simple());
 
         let instance = self.store.create(instance).await?;
+
+        // T25 — spawn the timeout watchdog as soon as the instance
+        // exists in the store. Definitions without `timeoutMs` (the
+        // common case) skip this; the lazy check still covers any
+        // workflow that does get touched after a notional deadline.
+        if let Some(timeout_ms) = definition.get("timeoutMs").and_then(Value::as_u64) {
+            // Fire-and-forget: the watchdog self-cleans when its
+            // sleep + get returns. The JoinHandle is detached
+            // intentionally — no Drop hook on the runtime needs to
+            // abort it, and the workflow itself doesn't outlive the
+            // process.
+            drop(self.spawn_timeout_watchdog(&instance.id, timeout_ms));
+        }
 
         self.audit
             .record(
