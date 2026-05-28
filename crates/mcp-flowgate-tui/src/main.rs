@@ -33,7 +33,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use wisp::runtime_state::RuntimeState;
 
 #[derive(Parser)]
@@ -103,6 +104,11 @@ enum Command {
     /// Supported providers: anthropic, openai, openrouter, bedrock,
     /// gemini.
     SetProviderKeys(provider_keys::SetProviderKeysArgs),
+    /// Print a shell completion script to stdout. Source it from your
+    /// shell rc to get tab-completion for every flowgate subcommand
+    /// and flag. Example:
+    ///   flowgate completions bash > ~/.local/share/bash-completion/completions/flowgate
+    Completions(CompletionsArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -135,6 +141,12 @@ enum McpCommand {
     /// Generate MCP client config files for the project (`.mcp.json` plus
     /// optional editor-specific outputs via `--cursor` / `--claude-desktop`).
     Init(mcp_init::McpInitArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for (bash, zsh, fish, powershell, elvish).
+    pub shell: Shell,
 }
 
 #[derive(clap::Args, Debug)]
@@ -219,6 +231,13 @@ pub struct WalkArgs {
     pub config: Option<String>,
 }
 
+fn run_completions(args: CompletionsArgs) -> ExitCode {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    clap_complete::generate(args.shell, &mut cmd, name, &mut std::io::stdout());
+    ExitCode::SUCCESS
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
@@ -244,6 +263,7 @@ async fn main() -> Result<ExitCode> {
         Some(Command::ValidateAgentsConfig(args)) => Ok(run_validate_agents_config(&args.path)),
         Some(Command::MigrateAgentsFromCli(args)) => run_migrate_agents_from_cli(args),
         Some(Command::SetProviderKeys(args)) => provider_keys::run(args),
+        Some(Command::Completions(args)) => Ok(run_completions(args)),
     }
 }
 

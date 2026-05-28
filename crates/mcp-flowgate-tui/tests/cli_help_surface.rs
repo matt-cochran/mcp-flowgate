@@ -5,6 +5,32 @@ fn binary() -> String {
 }
 
 #[test]
+fn completions_bash_emits_nonempty_script_with_command_name() {
+    let out = Command::new(binary())
+        .args(["completions", "bash"])
+        .output()
+        .expect("run completions bash");
+    assert!(out.status.success(), "completions bash failed: {:?}", out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.is_empty(), "expected non-empty completion script");
+    assert!(
+        stdout.contains("flowgate"),
+        "expected completion script to reference 'flowgate'; got first 200 chars:\n{}",
+        &stdout.chars().take(200).collect::<String>()
+    );
+}
+
+#[test]
+fn completions_zsh_also_works() {
+    let out = Command::new(binary())
+        .args(["completions", "zsh"])
+        .output()
+        .expect("run completions zsh");
+    assert!(out.status.success(), "completions zsh failed: {:?}", out);
+    assert!(!out.stdout.is_empty());
+}
+
+#[test]
 fn set_provider_keys_is_listed_in_help() {
     let out = Command::new(binary()).arg("--help").output().expect("run --help");
     assert!(out.status.success(), "--help failed: {:?}", out);
