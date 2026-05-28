@@ -12,17 +12,17 @@
 //! 2. Warn (don't block) if context exceeds `max_blackboard_bytes`.
 //! 3. Spawn an Aether headless session with `provider:model` + Flowgate
 //!    MCP config (Flowgate is the sole MCP server the sub-agent can see).
-//! 4. Wait for the session to either issue `workflow.submit` (advancing
+//! 4. Wait for the session to either issue `flowgate.command` (advancing
 //!    the workflow) or hit the operator-configured timeout.
 //! 5. Return `Ok(())` on natural completion (the LLM emitted
-//!    `AgentMessage::Done`). The interpreter then re-fetches `workflow.get`
+//!    `AgentMessage::Done`). The interpreter then re-fetches `flowgate.query`
 //!    and compares `version` to confirm the sub-agent actually advanced
 //!    the workflow.
 //!
 //! The Aether `run_headless` API is run-to-completion: it doesn't expose
 //! a per-tool-call hook. That's fine — the interpreter detects whether
 //! the sub-agent actually advanced the workflow by re-fetching
-//! `workflow.get` after each spawn and comparing `version`. A spawn that
+//! `flowgate.query` after each spawn and comparing `version`. A spawn that
 //! returns `Ok` but didn't advance is treated as a soft timeout (the
 //! retry path covers it).
 //!

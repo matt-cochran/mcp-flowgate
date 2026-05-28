@@ -515,10 +515,10 @@ pub async fn spawn_with_cor(
 // ── helpers ────────────────────────────────────────────────────────────────
 
 async fn mcp_get(mcp: &dyn McpToolCaller, workflow_id: &str) -> Result<Value, InterpreterError> {
-    mcp.call("workflow.get", json!({ "workflowId": workflow_id }))
+    mcp.call("flowgate.query", json!({ "workflowId": workflow_id }))
         .await
         .map_err(|e| InterpreterError::Mcp {
-            tool: "workflow.get".into(),
+            tool: "flowgate.query".into(),
             source: e,
         })
 }
@@ -609,9 +609,9 @@ fn pick_link(resp: &Value) -> Option<Value> {
 async fn submit_link(mcp: &dyn McpToolCaller, link: &Value) -> Result<(), InterpreterError> {
     let args = link.get("args").cloned().unwrap_or_else(|| json!({}));
     let state = current_state(link);
-    let resp = mcp.call("workflow.submit", args).await.map_err(|e| {
+    let resp = mcp.call("flowgate.command", args).await.map_err(|e| {
         InterpreterError::Mcp {
-            tool: "workflow.submit".into(),
+            tool: "flowgate.command".into(),
             source: e,
         }
     })?;

@@ -164,11 +164,11 @@ fn resp_at_state(state: &str, version: u64, links: Vec<Value>, delegate: Option<
 }
 
 fn link(rel: &str, args: Value) -> Value {
-    json!({ "rel": rel, "method": "workflow.submit", "args": args, "actor": "agent" })
+    json!({ "rel": rel, "method": "flowgate.command", "args": args, "actor": "agent" })
 }
 
 fn link_deterministic(rel: &str, args: Value) -> Value {
-    json!({ "rel": rel, "method": "workflow.submit", "args": args, "actor": "deterministic" })
+    json!({ "rel": rel, "method": "flowgate.command", "args": args, "actor": "deterministic" })
 }
 
 // ── 1. Terminal state — returns context ───────────────────────────────────
@@ -176,7 +176,7 @@ fn link_deterministic(rel: &str, args: Value) -> Value {
 #[tokio::test]
 async fn terminal_state_returns_context_immediately() {
     let mcp = ScriptedMcpCaller::new();
-    mcp.expect("workflow.get", resp_completed());
+    mcp.expect("flowgate.query", resp_completed());
     let spawner = ScriptedSpawner::new();
     let agents = agent_registry();
 
@@ -184,8 +184,8 @@ async fn terminal_state_returns_context_immediately() {
         .await
         .expect("walk completes");
     assert_eq!(ctx, json!({ "summary": "all good" }));
-    assert_eq!(mcp.call_count("workflow.get"), 1);
-    assert_eq!(mcp.call_count("workflow.submit"), 0);
+    assert_eq!(mcp.call_count("flowgate.query"), 1);
+    assert_eq!(mcp.call_count("flowgate.command"), 0);
     assert_eq!(spawner.spawn_count(), 0);
 }
 
@@ -195,18 +195,18 @@ async fn terminal_state_returns_context_immediately() {
 async fn single_actionable_link_auto_submits() {
     let mcp = ScriptedMcpCaller::new();
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state("ready", 1, vec![link("go", json!({ "x": 1 }))], None),
     );
-    mcp.expect("workflow.submit", json!({})); // accepted
-    mcp.expect("workflow.get", resp_completed());
+    mcp.expect("flowgate.command", json!({})); // accepted
+    mcp.expect("flowgate.query", resp_completed());
 
     let spawner = ScriptedSpawner::new();
     let agents = agent_registry();
     let _ = walk_workflow(&mcp, &spawner, "wf_x", &agents)
         .await
         .expect("walk completes");
-    let submit_calls = mcp.calls_to("workflow.submit");
+    let submit_calls = mcp.calls_to("flowgate.command");
     assert_eq!(submit_calls.len(), 1);
     assert_eq!(submit_calls[0], json!({ "x": 1 }));
 }
@@ -221,7 +221,7 @@ async fn deterministic_links_are_ignored_by_interpreter() {
     // the agent link.
     let mcp = ScriptedMcpCaller::new();
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state(
             "branch",
             1,
@@ -232,15 +232,15 @@ async fn deterministic_links_are_ignored_by_interpreter() {
             None,
         ),
     );
-    mcp.expect("workflow.submit", json!({}));
-    mcp.expect("workflow.get", resp_completed());
+    mcp.expect("flowgate.command", json!({}));
+    mcp.expect("flowgate.query", resp_completed());
 
     let spawner = ScriptedSpawner::new();
     let agents = agent_registry();
     let _ = walk_workflow(&mcp, &spawner, "wf_x", &agents)
         .await
         .expect("walk completes");
-    let submit_calls = mcp.calls_to("workflow.submit");
+    let submit_calls = mcp.calls_to("flowgate.command");
     assert_eq!(submit_calls.len(), 1);
     assert_eq!(
         submit_calls[0],
@@ -255,7 +255,7 @@ async fn deterministic_links_are_ignored_by_interpreter() {
 async fn multi_link_with_escalate_picks_non_escalate() {
     let mcp = ScriptedMcpCaller::new();
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state(
             "branch",
             1,
@@ -267,15 +267,15 @@ async fn multi_link_with_escalate_picks_non_escalate() {
             None,
         ),
     );
-    mcp.expect("workflow.submit", json!({}));
-    mcp.expect("workflow.get", resp_completed());
+    mcp.expect("flowgate.command", json!({}));
+    mcp.expect("flowgate.query", resp_completed());
 
     let spawner = ScriptedSpawner::new();
     let agents = agent_registry();
     let _ = walk_workflow(&mcp, &spawner, "wf_x", &agents)
         .await
         .expect("walk completes");
-    let submit_calls = mcp.calls_to("workflow.submit");
+    let submit_calls = mcp.calls_to("flowgate.command");
     assert_eq!(submit_calls.len(), 1);
     assert_eq!(
         submit_calls[0],
@@ -290,7 +290,7 @@ async fn multi_link_with_escalate_picks_non_escalate() {
 async fn multi_link_no_escalate_picks_first_link() {
     let mcp = ScriptedMcpCaller::new();
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state(
             "branch",
             1,
@@ -301,15 +301,15 @@ async fn multi_link_no_escalate_picks_first_link() {
             None,
         ),
     );
-    mcp.expect("workflow.submit", json!({}));
-    mcp.expect("workflow.get", resp_completed());
+    mcp.expect("flowgate.command", json!({}));
+    mcp.expect("flowgate.query", resp_completed());
 
     let spawner = ScriptedSpawner::new();
     let agents = agent_registry();
     let _ = walk_workflow(&mcp, &spawner, "wf_x", &agents)
         .await
         .expect("walk completes");
-    let submit_calls = mcp.calls_to("workflow.submit");
+    let submit_calls = mcp.calls_to("flowgate.command");
     assert_eq!(submit_calls[0], json!({ "path": "a" }));
 }
 
@@ -319,7 +319,7 @@ async fn multi_link_no_escalate_picks_first_link() {
 async fn unknown_delegate_agent_surfaces_actionable_error() {
     let mcp = ScriptedMcpCaller::new();
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state("planning", 1, vec![], Some("ghost-agent")),
     );
     let spawner = ScriptedSpawner::new();
@@ -347,24 +347,24 @@ async fn sub_agent_success_advances_workflow_and_continues() {
     let mcp = ScriptedMcpCaller::new();
     // Initial get → delegate state (version 1).
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state("planning", 1, vec![], Some("planner")),
     );
     // After sub-agent returns Ok: interpreter re-fetches to confirm
     // the workflow advanced (version 2 means it did).
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state("editing", 2, vec![link("done", json!({}))], None),
     );
-    // Loop back to top: interpreter calls workflow.get AGAIN before
+    // Loop back to top: interpreter calls flowgate.query AGAIN before
     // deciding what to do at the new state.
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state("editing", 2, vec![link("done", json!({}))], None),
     );
     // Single-link auto-advance.
-    mcp.expect("workflow.submit", json!({}));
-    mcp.expect("workflow.get", resp_completed());
+    mcp.expect("flowgate.command", json!({}));
+    mcp.expect("flowgate.query", resp_completed());
 
     let spawner = ScriptedSpawner::new();
     spawner.expect_spawn(Ok(())); // sub-agent claims success
@@ -385,14 +385,14 @@ async fn sub_agent_timeout_exhausting_budget_without_escalate_propagates() {
     // it re-fetches once more and tries to find an escalate link.
     for _ in 0..SUB_AGENT_RETRY_BUDGET {
         mcp.expect(
-            "workflow.get",
+            "flowgate.query",
             resp_at_state("planning", 1, vec![], Some("planner")),
         );
     }
     // After budget exhaust, the interpreter re-fetches before trying
     // escalate.
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state("planning", 1, vec![], Some("planner")),
     );
 
@@ -420,7 +420,7 @@ async fn sub_agent_timeout_exhausting_budget_with_escalate_submits_escalate() {
     let mcp = ScriptedMcpCaller::new();
     for _ in 0..SUB_AGENT_RETRY_BUDGET {
         mcp.expect(
-            "workflow.get",
+            "flowgate.query",
             resp_at_state(
                 "planning",
                 1,
@@ -431,7 +431,7 @@ async fn sub_agent_timeout_exhausting_budget_with_escalate_submits_escalate() {
     }
     // Re-fetch before escalate.
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state(
             "planning",
             1,
@@ -440,9 +440,9 @@ async fn sub_agent_timeout_exhausting_budget_with_escalate_submits_escalate() {
         ),
     );
     // Escalate submit accepted.
-    mcp.expect("workflow.submit", json!({}));
+    mcp.expect("flowgate.command", json!({}));
     // Next loop iteration sees completed (post-escalate workflow done).
-    mcp.expect("workflow.get", resp_completed());
+    mcp.expect("flowgate.query", resp_completed());
 
     let spawner = ScriptedSpawner::new();
     for _ in 0..SUB_AGENT_RETRY_BUDGET {
@@ -455,7 +455,7 @@ async fn sub_agent_timeout_exhausting_budget_with_escalate_submits_escalate() {
     let _ = walk_workflow(&mcp, &spawner, "wf_x", &agents)
         .await
         .expect("escalate path completes walk");
-    let submits = mcp.calls_to("workflow.submit");
+    let submits = mcp.calls_to("flowgate.command");
     assert_eq!(submits.len(), 1);
     assert_eq!(submits[0], json!({ "esc": true }));
 }
@@ -465,7 +465,7 @@ async fn sub_agent_timeout_exhausting_budget_with_escalate_submits_escalate() {
 #[tokio::test]
 async fn no_delegate_no_links_returns_workflow_stuck() {
     let mcp = ScriptedMcpCaller::new();
-    mcp.expect("workflow.get", resp_at_state("stuck", 1, vec![], None));
+    mcp.expect("flowgate.query", resp_at_state("stuck", 1, vec![], None));
     let spawner = ScriptedSpawner::new();
     let agents = agent_registry();
     let err = walk_workflow(&mcp, &spawner, "wf_x", &agents)
@@ -483,12 +483,12 @@ async fn no_delegate_no_links_returns_workflow_stuck() {
 async fn gateway_submit_rejection_surfaces_as_submit_rejected() {
     let mcp = ScriptedMcpCaller::new();
     mcp.expect(
-        "workflow.get",
+        "flowgate.query",
         resp_at_state("ready", 1, vec![link("go", json!({}))], None),
     );
     // Gateway returns body-level error (INVALID_TRANSITION-style).
     mcp.expect(
-        "workflow.submit",
+        "flowgate.command",
         json!({
             "error": { "code": "INVALID_TRANSITION", "message": "no such txn" }
         }),
