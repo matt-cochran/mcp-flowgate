@@ -44,19 +44,29 @@ use wisp::runtime_state::RuntimeState;
     about = "Flowgate governed agent runtime",
     long_about = "AI coding agent with workflow governance.\n\
 \n\
-Aagent framework with mcp-flowgate as its\n\
-sole MCP server. Every model action goes through governed\n\
-workflows — no ungoverned tool access.\n\
+Agent framework with mcp-flowgate as its sole MCP server. Every model action\n\
+goes through governed workflows — no ungoverned tool access.\n\
 \n\
-Modes:\n\
+Agent runtime:\n\
   (default)   Interactive TUI\n\
   headless    Run a single prompt non-interactively\n\
   acp         Start ACP server for editor integration\n\
-  agent       Manage agent configurations\n\
   walk        Drive a workflow via the deterministic interpreter\n\
+\n\
+Agent configuration:\n\
+  agent       Manage agent configurations\n\
+  validate-agents-config\n\
+              Validate an agents.yaml at any path; JSON envelope on stdout\n\
+  migrate-agents-from-cli\n\
+              Migrate v0.2 --agent flags to a v0.3 agents.yaml\n\
+  set-provider-keys\n\
+              Write provider API keys to ~/.config/flowgate/providers.env\n\
+\n\
+Diagnostics & generators:\n\
   doctor      Pre-flight checks before walk\n\
   mcp init    Generate .mcp.json (and optional editor configs)\n\
-  validate-agents-config\n              Validate an agents.yaml at any path; JSON envelope on stdout"
+  completions Print a shell completion script to stdout\n\
+  man         Render the man page to stdout (roff format)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -66,23 +76,27 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run a single prompt non-interactively
+    #[command(next_help_heading = "Agent runtime")]
     Headless(aether_cli::headless::HeadlessArgs),
     /// Start the ACP server (for editor integration)
+    #[command(next_help_heading = "Agent runtime")]
     Acp(aether_cli::acp::AcpArgs),
     /// Manage agent configurations
-    #[command(subcommand)]
+    #[command(subcommand, next_help_heading = "Agent configuration")]
     Agent(aether_cli::agent::AgentCommand),
     /// Walk a Flowgate workflow to completion using the deterministic
     /// interpreter (SPEC §21). Spawns isolated sub-agents per delegate
     /// state; auto-advances states with no delegate.
+    #[command(next_help_heading = "Agent runtime")]
     Walk(WalkArgs),
     /// Pre-flight checks for `flowgate walk` — binary discovery, config
     /// resolution, workflow declared, agent API keys, script file URIs.
     /// Exits 0 if all pass; 1 if any fail. Run before `walk` to catch
     /// env / config issues before the workflow starts.
+    #[command(next_help_heading = "Diagnostics & generators")]
     Doctor(DoctorCliArgs),
     /// MCP client config generators.
-    #[command(subcommand)]
+    #[command(subcommand, next_help_heading = "Diagnostics & generators")]
     Mcp(McpCommand),
     /// Validate an `agents.yaml` file at an arbitrary path. Emits a
     /// JSON envelope `{ok, summary, error}` on stdout; exits 0 on
@@ -91,27 +105,32 @@ enum Command {
     /// validation (FMECA U3) when the operator's target path is
     /// outside the resolver's standard `.flowgate/agents.yaml` /
     /// `~/.config/flowgate/agents.yaml` lookup.
+    #[command(next_help_heading = "Agent configuration")]
     ValidateAgentsConfig(ValidateAgentsConfigArgs),
     /// Migrate v0.2 `--agent NAME=PROVIDER/MODEL` flags to a v0.3
     /// `agents.yaml`. Operators with many workflows still on the legacy
     /// CLI path can run this once + commit the file. Names must parse
     /// as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` or the
     /// literal `default`.
+    #[command(next_help_heading = "Agent configuration")]
     MigrateAgentsFromCli(MigrateAgentsArgs),
     /// Write provider API keys to ~/.config/flowgate/providers.env
     /// (override via $FLOWGATE_PROVIDER_KEYS_FILE). Loaded into env at
     /// flowgate-agent startup; existing env vars take precedence.
     /// Supported providers: anthropic, openai, openrouter, bedrock,
     /// gemini.
+    #[command(next_help_heading = "Agent configuration")]
     SetProviderKeys(provider_keys::SetProviderKeysArgs),
     /// Print a shell completion script to stdout. Source it from your
     /// shell rc to get tab-completion for every flowgate subcommand
     /// and flag. Example:
     ///   flowgate completions bash > ~/.local/share/bash-completion/completions/flowgate
+    #[command(next_help_heading = "Diagnostics & generators")]
     Completions(CompletionsArgs),
     /// Render the man page to stdout (roff format). Install to a
     /// MANPATH directory to enable `man flowgate`. Example:
     ///   flowgate man | sudo tee /usr/local/share/man/man1/flowgate.1
+    #[command(next_help_heading = "Diagnostics & generators")]
     Man,
 }
 
