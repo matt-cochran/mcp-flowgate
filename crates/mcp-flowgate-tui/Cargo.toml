@@ -25,6 +25,7 @@ llm = { version = "0.7", package = "aether-llm" }
 
 # Shared
 clap.workspace = true
+clap_complete.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 serde.workspace = true
