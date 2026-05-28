@@ -184,9 +184,40 @@ impl Executor for ScriptExecutor {
         cmd.env("FLOWGATE_SCRIPT_SUBJECT", subject);
         cmd.env("FLOWGATE_SCRIPT_HASH", &hash);
 
-        let output = cmd.output().await.map_err(|e| {
-            ExecutorError::Connection(format!("script spawn failed ({program}): {e}"))
-        })?;
+        // ETXTBSY retry loop. Linux returns ETXTBSY ("Text file busy",
+        // errno 26 on Linux/macOS/BSD — POSIX defines the symbol but
+        // not a portable numeric value, which is why we cfg-guard the
+        // constant) when execve targets an inode that any process holds
+        // open for writing. Even though our std::fs::write closed its
+        // fd before we get here, a concurrent thread's Command::spawn()
+        // can briefly inherit our fd during its own fork() (the window
+        // between fork and execve, before the kernel runs the CLOEXEC
+        // sweep). The race is well-known on multi-threaded test runs;
+        // the standard mitigation is a small retry with backoff — once
+        // the other child execves or exits, our fd reference vanishes
+        // and the next attempt succeeds.
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
+        const ETXTBSY_ERRNO: i32 = 26;
+        let output = {
+            let mut attempt = 0u32;
+            loop {
+                match cmd.output().await {
+                    Ok(out) => break out,
+                    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
+                    Err(e) if e.raw_os_error() == Some(ETXTBSY_ERRNO) && attempt < 5 => {
+                        attempt += 1;
+                        tokio::time::sleep(std::time::Duration::from_millis(10 * (1 << attempt)))
+                            .await;
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(ExecutorError::Connection(format!(
+                            "script spawn failed ({program}): {e}"
+                        )));
+                    }
+                }
+            }
+        };
 
         let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
         let parsed_json: Value =

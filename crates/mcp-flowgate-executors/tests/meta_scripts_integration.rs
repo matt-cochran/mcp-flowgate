@@ -77,6 +77,9 @@ fn spawn_mock(status: u16, body: &'static str) -> (String, thread::JoinHandle<()
         loop {
             match listener.accept() {
                 Ok((mut sock, _)) => {
+                    // Bound the read-from-curl phase so a slow client
+                    // can't hang the mock thread forever.
+                    let _ = sock.set_read_timeout(Some(Duration::from_secs(2)));
                     let mut buf = [0u8; 4096];
                     let _ = sock.read(&mut buf);
                     let status_line = match status {
@@ -98,7 +101,13 @@ fn spawn_mock(status: u16, body: &'static str) -> (String, thread::JoinHandle<()
                         eprintln!("spawn_mock: no connection within 10s deadline; exiting");
                         return;
                     }
-                    std::thread::sleep(Duration::from_millis(50));
+                    // yield_now lets the OS scheduler run the accept
+                    // thread as soon as the socket has a pending
+                    // connection — eliminates the 50ms latency window
+                    // that raced curl's connection budget under heavy
+                    // parallel load (~1-in-3 flake on cargo test
+                    // --workspace).
+                    std::thread::yield_now();
                 }
                 Err(e) => {
                     eprintln!("spawn_mock: accept error: {e}");
