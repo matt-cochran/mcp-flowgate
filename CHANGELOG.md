@@ -10,7 +10,14 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
-(none currently — see 0.3.0 below)
+### Added — Runtime CoR over the binding list
+
+- **`interpreter::spawn_with_cor`** — walks a `ResolvedBindingList` in order, attempting each binding via the existing `SubAgentSpawner::spawn_and_wait`. Infrastructure-class failures (401/403/429/404/network) advance to the next binding; content-class failures surface immediately (FMECA R1). All-bindings-fail returns a structured `AgentResolutionExhausted` carrying the full attempt trail. `walk_workflow` now uses this path instead of single-binding spawn.
+- **`interpreter::classify_spawn_error`** — maps `InterpreterError::Mcp { source }` strings to `FailureClass`. Aether currently emits LLM errors as in-stream `AgentMessage::Error` events rather than typed `CliError` returns, so this is a substring matcher (`"401"` → `Auth401`, etc.); when aether grows a typed error pass-through, the matcher gets a structured signal instead. `SubAgentTimeout` deliberately classifies as `ContentOther` so the existing retry-budget path keeps owning soft timeouts.
+- **`AgentRegistry::resolve_bindings`** — new trait method returning a `ResolvedBindingList` (label + level + full bindings vector). Default impl wraps `resolve` in a 1-element list, so legacy `--agent`-flag callers keep working unchanged; `YamlAgentRegistry` overrides to return the full override list.
+- **Tests** — `crates/mcp-flowgate-tui/tests/agent_resolver_runtime_cor.rs` pins the contract: primary succeeds → index 0, primary 401 → advance + secondary OK, primary content-other → surface, all-401 → exhaustion, timeout → propagate.
+- **Defense in depth in `Resolver::try_next`** — any content-class entry in `prior_failures` surfaces immediately instead of advancing. Previously the docstring asked callers to short-circuit content failures; the resolver now enforces it itself.
+- **Test infrastructure** — `preflight::classify_outcome` extracted as a pure dispatch helper so the warn-vs-fail-vs-error wiring is testable without HTTP plumbing.
 
 ## [0.3.0] — 2026-05-27
 

@@ -26,7 +26,8 @@ use serde_json::{json, Value};
 
 use crate::agent_config::AgentConfig;
 use crate::agent_resolver::{
-    AgentResolutionExhausted, Delegate, DelegateParseError, ProviderFeatures, Resolver,
+    AgentResolutionExhausted, Binding, Delegate, DelegateParseError, FailureClass, Provider,
+    ProviderFeatures, Resolver,
 };
 
 /// Maximum sub-agent retries on `SubAgentTimeout` before the interpreter
@@ -133,6 +134,38 @@ pub struct ResolvedAgent {
     pub features: ProviderFeatures,
 }
 
+/// A delegate's full binding list — the candidate set the v0.3.1 runtime
+/// CoR walks when the primary binding fails with an infrastructure-class
+/// error. The legacy `--agent` flag path yields a 1-element list (no
+/// CoR alternative); YAML-backed registries return the full override
+/// list for the resolved level (`<affinity>-<tier>`, `<affinity>`,
+/// `<tier>`, or `default`).
+#[derive(Debug, Clone)]
+pub struct ResolvedBindingList {
+    /// The operator-facing delegate name (`coding-frontier` etc.).
+    pub label: String,
+    /// The list level the resolver chose (`coding-frontier`, `coding`,
+    /// `default`, ...). Logged in the audit trail.
+    pub level: String,
+    /// Bindings in attempt order. Index 0 is the primary.
+    pub bindings: Vec<Binding>,
+}
+
+impl ResolvedBindingList {
+    /// Convert binding at `idx` to the `ResolvedAgent` shape the
+    /// spawner expects. Panics if `idx` is out of range — callers
+    /// should be operating on indices returned by `Resolver::try_next`.
+    pub fn agent_at(&self, idx: usize) -> ResolvedAgent {
+        let b = &self.bindings[idx];
+        ResolvedAgent {
+            label: self.label.clone(),
+            provider: b.provider.display_name().to_string(),
+            model: b.model.clone(),
+            features: b.features.clone(),
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ResolutionError {
     #[error(
@@ -153,8 +186,42 @@ pub enum ResolutionError {
 }
 
 /// Source-agnostic resolution of `delegate:` strings to a `ResolvedAgent`.
+///
+/// `resolve` returns the PRIMARY binding only — the legacy contract.
+/// `resolve_bindings` returns the full candidate list for v0.3.1+ CoR.
+/// The default `resolve_bindings` impl wraps `resolve` in a single-entry
+/// list, so registries that only know about one binding per delegate
+/// (legacy CLI mode) work without change.
 pub trait AgentRegistry: Send + Sync {
     fn resolve(&self, delegate: &str) -> Result<ResolvedAgent, ResolutionError>;
+
+    fn resolve_bindings(&self, delegate: &str) -> Result<ResolvedBindingList, ResolutionError> {
+        let agent = self.resolve(delegate)?;
+        // Reconstruct a Binding from the ResolvedAgent. Legacy registries
+        // only carry provider/model strings; the closed-enum Provider has
+        // a Custom variant we use as a fallback when the string doesn't
+        // map to a known shorthand (Anthropic/Openai/Google/Ollama/Lmstudio).
+        let provider = match agent.provider.as_str() {
+            "anthropic" => Provider::Anthropic,
+            "openai" => Provider::Openai,
+            "google" => Provider::Google,
+            "ollama" => Provider::Ollama,
+            "lmstudio" => Provider::Lmstudio,
+            other => Provider::Custom {
+                endpoint: format!("legacy://{other}"),
+            },
+        };
+        let binding = Binding {
+            provider,
+            model: agent.model.clone(),
+            features: agent.features.clone(),
+        };
+        Ok(ResolvedBindingList {
+            label: agent.label.clone(),
+            level: "(legacy single binding)".to_string(),
+            bindings: vec![binding],
+        })
+    }
 }
 
 /// v0.2-compatible registry: a HashMap of `--agent` flag values keyed by
@@ -202,25 +269,31 @@ impl YamlAgentRegistry {
 
 impl AgentRegistry for YamlAgentRegistry {
     fn resolve(&self, delegate: &str) -> Result<ResolvedAgent, ResolutionError> {
+        let list = self.resolve_bindings(delegate)?;
+        // resolve_bindings guarantees a non-empty list — the walker
+        // returns AgentResolutionExhausted if the chosen level is empty.
+        Ok(list.agent_at(0))
+    }
+
+    fn resolve_bindings(&self, delegate: &str) -> Result<ResolvedBindingList, ResolutionError> {
         let d = Delegate::parse(delegate).map_err(|source| {
             ResolutionError::InvalidDelegate {
                 delegate: delegate.to_string(),
                 source,
             }
         })?;
-        let (bindings, _level) = self.resolver.walk(&d)?;
-        let first = bindings.first().ok_or_else(|| {
-            ResolutionError::Exhausted(AgentResolutionExhausted {
+        let (bindings, level) = self.resolver.walk(&d)?;
+        if bindings.is_empty() {
+            return Err(ResolutionError::Exhausted(AgentResolutionExhausted {
                 delegate: delegate.to_string(),
                 walked_levels: vec!["(empty list at chosen level)".to_string()],
                 attempts: Vec::new(),
-            })
-        })?;
-        Ok(ResolvedAgent {
+            }));
+        }
+        Ok(ResolvedBindingList {
             label: delegate.to_string(),
-            provider: first.provider.display_name().to_string(),
-            model: first.model.clone(),
-            features: first.features.clone(),
+            level,
+            bindings: bindings.into_owned(),
         })
     }
 }
@@ -249,20 +322,26 @@ pub async fn walk_workflow(
         let version_before = current_version(&resp);
 
         if let Some(agent_name) = resp.get("delegate").and_then(Value::as_str) {
-            let agent = registry.resolve(agent_name).map_err(|source| {
+            let list = registry.resolve_bindings(agent_name).map_err(|source| {
                 InterpreterError::AgentResolution {
                     state: state_before.clone(),
                     source,
                 }
             })?;
             let prompt = build_sub_agent_prompt(&resp);
-            match spawner.spawn_and_wait(&agent, &prompt, &resp).await {
-                Ok(()) => {
+            match spawn_with_cor(spawner, &list, &prompt, &resp).await {
+                Ok(used_idx) => {
                     // Sub-agent claims success; verify the workflow
                     // actually advanced. Aether headless can return
                     // cleanly even when the model declined to submit —
                     // in that case we treat it as an implicit timeout
                     // and let the retry budget cover it.
+                    tracing::info!(
+                        delegate = %list.label,
+                        level = %list.level,
+                        used_binding_index = used_idx,
+                        "sub-agent CoR succeeded"
+                    );
                     let resp_after = mcp_get(mcp, workflow_id).await?;
                     if current_version(&resp_after) > version_before {
                         retries = 0;
@@ -294,7 +373,7 @@ pub async fn walk_workflow(
                             mcp,
                             workflow_id,
                             &resp_now,
-                            &agent.label,
+                            &list.label,
                         )
                         .await?;
                         retries = 0;
@@ -313,6 +392,124 @@ pub async fn walk_workflow(
         submit_link(mcp, &pick).await?;
         retries = 0;
     }
+}
+
+// ── runtime CoR over the binding list ──────────────────────────────────────
+
+/// Classify an `InterpreterError` returned by a spawn into a
+/// `FailureClass`. Used by `spawn_with_cor` to decide whether to advance
+/// to the next binding (infrastructure-class) or surface to the caller
+/// (content-class).
+///
+/// Today aether's `run_headless` only returns `CliError` for setup-time
+/// failures (model parse, build, channel send). Runtime LLM API errors
+/// are streamed as `AgentMessage::Error` events INSIDE the run and
+/// surface as "natural completion that didn't advance the workflow"
+/// (the retry-budget path handles those, not CoR). When aether grows a
+/// typed error pass-through, this matcher gets a structured signal
+/// instead of the string heuristics it uses today.
+///
+/// Mapping (string substrings on `InterpreterError::Mcp.source`):
+/// - "401" / "InvalidApiKey" / "MissingApiKey" → `Auth401`
+/// - "403" → `Auth403`
+/// - "429" / "RateLimited" → `RateLimit429`
+/// - "404" → `NotFound404`
+/// - "Network" / "Timeout" / "Stream interrupted" → `NetworkTimeout`
+/// - anything else → `ContentOther` (surfaces; no CoR fall-through)
+///
+/// `SubAgentTimeout` is NOT classified as infrastructure — the
+/// existing retry-budget path covers "the LLM ran past the wall clock"
+/// without involving CoR. Classifying it here would double-handle.
+pub fn classify_spawn_error(err: &InterpreterError) -> FailureClass {
+    let InterpreterError::Mcp { source, .. } = err else {
+        return FailureClass::ContentOther;
+    };
+    let s = source.to_string();
+    if s.contains("401") || s.contains("InvalidApiKey") || s.contains("MissingApiKey") {
+        FailureClass::Auth401
+    } else if s.contains("403") {
+        FailureClass::Auth403
+    } else if s.contains("429") || s.contains("Rate limited") || s.contains("RateLimited") {
+        FailureClass::RateLimit429
+    } else if s.contains("404") {
+        FailureClass::NotFound404
+    } else if s.contains("Network error")
+        || s.contains("Request timed out")
+        || s.contains("Stream interrupted")
+    {
+        FailureClass::NetworkTimeout
+    } else {
+        FailureClass::ContentOther
+    }
+}
+
+/// Walk the binding list, spawning each in order until one succeeds
+/// or all infrastructure-class failures exhaust. On content-class
+/// failure (e.g. a 400 BadRequest from the provider), surface
+/// immediately — no silent fallback. Returns the index of the binding
+/// that ran on success.
+///
+/// CoR is intentionally narrow: it routes around *infrastructure*
+/// trouble (auth, rate limit, model-not-found, network). It does NOT
+/// route around behavior-level disagreements (the model returning a
+/// shape the prompt didn't ask for, refusing on policy, etc.) — those
+/// surface so the operator sees the real issue.
+pub async fn spawn_with_cor(
+    spawner: &dyn SubAgentSpawner,
+    list: &ResolvedBindingList,
+    prompt: &str,
+    workflow_response: &Value,
+) -> Result<usize, InterpreterError> {
+    let mut prior: Vec<(usize, FailureClass, String)> = Vec::new();
+    for (idx, _) in list.bindings.iter().enumerate() {
+        let agent = list.agent_at(idx);
+        match spawner.spawn_and_wait(&agent, prompt, workflow_response).await {
+            Ok(()) => return Ok(idx),
+            Err(InterpreterError::SubAgentTimeout { agent, state }) => {
+                // Timeout is the existing retry-budget's domain; bubble
+                // up unchanged so walk_workflow handles it.
+                return Err(InterpreterError::SubAgentTimeout { agent, state });
+            }
+            Err(other) => {
+                let class = classify_spawn_error(&other);
+                if !class.is_infrastructure() {
+                    // Content-class → surface. The remaining bindings
+                    // are NOT tried — same model behavior would likely
+                    // recur and the operator needs the real signal.
+                    return Err(other);
+                }
+                prior.push((idx, class, other.to_string()));
+                tracing::warn!(
+                    delegate = %list.label,
+                    level = %list.level,
+                    binding_index = idx,
+                    provider = %agent.provider,
+                    model = %agent.model,
+                    ?class,
+                    "binding failed (infrastructure-class); advancing to next in list"
+                );
+            }
+        }
+    }
+    Err(InterpreterError::AgentResolution {
+        state: workflow_response
+            .pointer("/workflow/state")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string(),
+        source: ResolutionError::Exhausted(AgentResolutionExhausted {
+            delegate: list.label.clone(),
+            walked_levels: vec![format!("CoR over {} (level: {})", list.label, list.level)],
+            attempts: prior
+                .into_iter()
+                .map(|(i, c, d)| crate::agent_resolver::AttemptRecord {
+                    binding: list.bindings[i].clone(),
+                    class: c,
+                    detail: d,
+                })
+                .collect(),
+        }),
+    })
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
