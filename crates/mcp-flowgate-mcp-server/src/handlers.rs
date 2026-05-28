@@ -875,6 +875,29 @@ fn ambiguous_intent_query() -> Value {
     })
 }
 
+/// Structured `RUN_ID_ALREADY_RUNNING` response body for `flowgate.command`
+/// start. Per SPEC §32, this is a 4xx-class structured response — NOT an MCP
+/// protocol error — so HATEOAS links remain machine-parseable by clients.
+///
+/// The `get` link points directly to the existing workflow instance so the
+/// caller can resume or introspect without a second lookup.
+pub(crate) fn run_id_already_running(run_id: &str, existing_workflow_id: &str) -> Value {
+    json!({
+        "error": {
+            "code": "RUN_ID_ALREADY_RUNNING",
+            "message": format!("An instance already exists with run_id '{run_id}'."),
+            "hint": "Each run_id is single-use. Fetch the existing instance with the linked get, or retry with a fresh run_id."
+        },
+        "links": [
+            {
+                "rel": "get",
+                "method": "flowgate.query",
+                "args": { "workflowId": existing_workflow_id }
+            }
+        ]
+    })
+}
+
 /// Structured AMBIGUOUS_INTENT response body for `flowgate.command` dispatch.
 /// Per SPEC §32, this is a 4xx-class structured response — NOT an MCP
 /// protocol error — so HATEOAS links remain machine-parseable by clients.

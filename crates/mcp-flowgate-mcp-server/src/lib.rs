@@ -20,6 +20,8 @@ pub mod args;
 mod handlers;
 mod tools;
 
+use handlers::run_id_already_running;
+
 use std::sync::Arc;
 
 use mcp_flowgate_core::audit::AuditEvent;
@@ -323,7 +325,23 @@ impl FlowgateServer {
             }
         };
 
-        result.map_err(|e| McpError::internal_error(e.to_string(), None))
+        match result {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                // SPEC §32 — RUN_ID_ALREADY_RUNNING is a structured response
+                // at the MCP boundary (per the AMBIGUOUS_INTENT /
+                // LEXICON_WRITES_DISABLED pattern). Downcast before falling
+                // through to the generic internal_error mapper.
+                if let Some(mcp_flowgate_core::RuntimeError::RunIdAlreadyRunning {
+                    run_id,
+                    existing_workflow_id,
+                }) = e.downcast_ref::<mcp_flowgate_core::RuntimeError>()
+                {
+                    return Ok(run_id_already_running(run_id, existing_workflow_id));
+                }
+                Err(McpError::internal_error(e.to_string(), None))
+            }
+        }
     }
 }
 

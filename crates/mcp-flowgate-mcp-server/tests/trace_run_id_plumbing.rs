@@ -278,6 +278,68 @@ async fn audit_event_for_anonymous_workflow_omits_trace_and_run_in_json() {
     assert!(serialized.get("run_id").is_none());
 }
 
+// ── SPEC §32 run_id uniqueness ───────────────────────────────────────────────
+
+/// SPEC §32 — starting a second workflow with the same run_id returns a
+/// structured RUN_ID_ALREADY_RUNNING response (not an MCP protocol error)
+/// with a HATEOAS `get` link pointing at the existing instance.
+#[tokio::test]
+async fn start_with_duplicate_run_id_returns_structured_error() {
+    let (server, _audit) = build();
+
+    // First start with run_id "r-abc" — must succeed and return a workflow id.
+    let first = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({
+                "definitionId": "demo",
+                "input": {},
+                "runId": "r-abc"
+            }),
+        ))
+        .await
+        .expect("first start succeeds");
+    let existing_wf_id = first["workflow"]["id"]
+        .as_str()
+        .expect("first response must carry workflow.id");
+
+    // Second start with the same run_id — should return structured error body.
+    let second = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({
+                "definitionId": "demo",
+                "input": {},
+                "runId": "r-abc"
+            }),
+        ))
+        .await
+        .expect("dispatch returns Ok with structured error body");
+
+    assert_eq!(
+        second["error"]["code"], "RUN_ID_ALREADY_RUNNING",
+        "expected RUN_ID_ALREADY_RUNNING code; got: {second}"
+    );
+
+    let links = second["links"]
+        .as_array()
+        .expect("structured error must carry a links array");
+    let get_link = links
+        .iter()
+        .find(|l| l["rel"] == "get")
+        .expect("links must contain a get link");
+
+    assert_eq!(
+        get_link["method"], "flowgate.query",
+        "get link must use flowgate.query"
+    );
+    assert_eq!(
+        get_link["args"]["workflowId"].as_str().expect("workflowId must be a string"),
+        existing_wf_id,
+        "get link must reference the existing workflow id"
+    );
+}
+
 // ── flowgate.query → get (used in authoring tests) ──────────────────────────
 
 /// Smoke test: flowgate.query with workflowId routes to get.

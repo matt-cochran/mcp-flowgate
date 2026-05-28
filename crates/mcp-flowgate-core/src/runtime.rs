@@ -246,6 +246,23 @@ impl WorkflowRuntime {
         if self.is_draining() {
             bail!("gateway is shutting down; please retry shortly");
         }
+
+        // SPEC §32 — run_id uniqueness assertion. If the store indexes
+        // run_id, reject duplicates with a structured error. Stores that
+        // return Ok(None) by trait default opt out of the check; their
+        // runtime sees no constraint (best-effort safety net).
+        if let Some(run_id) = &request.run_id {
+            if let Some(existing_workflow_id) =
+                self.store.find_by_run_id(run_id).await?
+            {
+                return Err(RuntimeError::RunIdAlreadyRunning {
+                    run_id: run_id.clone(),
+                    existing_workflow_id,
+                }
+                .into());
+            }
+        }
+
         let definition = self.definitions.load(&request.definition_id).await?;
         let mut input = request.input;
         apply_schema_defaults(definition.pointer("/inputSchema"), &mut input);

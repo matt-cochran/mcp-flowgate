@@ -20,6 +20,18 @@ pub enum RuntimeError {
         #[source]
         source: anyhow::Error,
     },
+
+    /// SPEC §32 — `run_id` uniqueness assertion on `workflow.start`. When the
+    /// caller supplies a `runId` and the store already has a live instance
+    /// indexed under that id, `start` is rejected here rather than creating a
+    /// duplicate. The MCP layer surfaces this as a structured
+    /// `RUN_ID_ALREADY_RUNNING` response with a HATEOAS `get` link to the
+    /// existing instance.
+    #[error("run_id '{run_id}' is already in flight (existing workflow id: {existing_workflow_id})")]
+    RunIdAlreadyRunning {
+        run_id: String,
+        existing_workflow_id: String,
+    },
 }
 
 impl RuntimeError {
@@ -28,6 +40,7 @@ impl RuntimeError {
     pub fn code(&self) -> &'static str {
         match self {
             RuntimeError::RecordWriteFailed { .. } => "RECORD_WRITE_FAILED",
+            RuntimeError::RunIdAlreadyRunning { .. } => "RUN_ID_ALREADY_RUNNING",
         }
     }
 }
