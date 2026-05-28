@@ -6,6 +6,9 @@
 //! - structural failures route back to `drafting`,
 //! - the publish guard fails without acknowledgment of the rubric,
 //! - hash-flip invalidates a prior ack.
+//!
+//! Updated from old TOOL_DESCRIBE / TOOL_START / TOOL_SUBMIT / inline
+//! "workflow.get" to the §32 two-tool surface (TOOL_QUERY / TOOL_COMMAND).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +29,7 @@ use mcp_flowgate_executors::{
     DryRunExecutor, HashMapExecutorRegistry, NoopExecutor, RegistryExecutor,
     StructuralAnalysisExecutor,
 };
-use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_DESCRIBE, TOOL_START, TOOL_SUBMIT};
+use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_COMMAND, TOOL_QUERY};
 use rmcp::model::{CallToolRequestParams, JsonObject};
 use serde_json::{json, Value};
 
@@ -57,7 +60,6 @@ fn build_server() -> (
     // (so it can refer to its own definition; meta-circularity per §17.5).
     let writable = Arc::new(InMemoryWritableDefinitionStore::with_seed(
         audit.clone() as Arc<dyn AuditSink>,
-        // Seed with the authoring workflow's resolved definition.
         {
             let mut seed = std::collections::HashMap::new();
             let snapshot = ConfigDefinitionStore::from_config(&resolved);
@@ -109,7 +111,10 @@ fn args(name: &'static str, args: Value) -> CallToolRequestParams {
 async fn authoring_workflow_starts_in_drafting_state() {
     let (server, _writable, _audit) = build_server();
     let resp = server
-        .dispatch_call(args(TOOL_START, json!({ "definitionId": "authoring", "input": {} })))
+        .dispatch_call(args(
+            TOOL_COMMAND,
+            json!({ "definitionId": "authoring", "input": {} }),
+        ))
         .await
         .expect("start succeeds");
     assert_eq!(resp["workflow"]["state"].as_str(), Some("drafting"));
@@ -121,7 +126,10 @@ async fn authoring_workflow_starts_in_drafting_state() {
 async fn malformed_candidate_routes_back_to_drafting() {
     let (server, _writable, _audit) = build_server();
     let start = server
-        .dispatch_call(args(TOOL_START, json!({ "definitionId": "authoring", "input": {} })))
+        .dispatch_call(args(
+            TOOL_COMMAND,
+            json!({ "definitionId": "authoring", "input": {} }),
+        ))
         .await
         .unwrap();
     let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
@@ -134,7 +142,7 @@ async fn malformed_candidate_routes_back_to_drafting() {
     });
     let resp = server
         .dispatch_call(args(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId":      workflow_id,
                 "expectedVersion": version,
@@ -160,7 +168,10 @@ async fn malformed_candidate_routes_back_to_drafting() {
 async fn well_formed_candidate_reaches_ready() {
     let (server, _writable, _audit) = build_server();
     let start = server
-        .dispatch_call(args(TOOL_START, json!({ "definitionId": "authoring", "input": {} })))
+        .dispatch_call(args(
+            TOOL_COMMAND,
+            json!({ "definitionId": "authoring", "input": {} }),
+        ))
         .await
         .unwrap();
     let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
@@ -175,7 +186,7 @@ async fn well_formed_candidate_reaches_ready() {
     });
     let resp = server
         .dispatch_call(args(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId":      workflow_id,
                 "expectedVersion": version,
@@ -194,7 +205,10 @@ async fn well_formed_candidate_reaches_ready() {
 async fn publish_blocked_until_rubric_acknowledged() {
     let (server, _writable, _audit) = build_server();
     let start = server
-        .dispatch_call(args(TOOL_START, json!({ "definitionId": "authoring", "input": {} })))
+        .dispatch_call(args(
+            TOOL_COMMAND,
+            json!({ "definitionId": "authoring", "input": {} }),
+        ))
         .await
         .unwrap();
     let workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
@@ -209,7 +223,7 @@ async fn publish_blocked_until_rubric_acknowledged() {
     });
     let resp = server
         .dispatch_call(args(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId":      workflow_id,
                 "expectedVersion": version,
@@ -226,7 +240,7 @@ async fn publish_blocked_until_rubric_acknowledged() {
     // guidance_acknowledged guard must reject.
     let publish_resp = server
         .dispatch_call(args(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId":      workflow_id,
                 "expectedVersion": version,
@@ -253,7 +267,10 @@ async fn publish_blocked_until_rubric_acknowledged() {
 async fn acknowledged_publish_via_human_principal_succeeds() {
     let (server, writable, _audit) = build_server();
     let start = server
-        .dispatch_call(args(TOOL_START, json!({ "definitionId": "authoring", "input": {} })))
+        .dispatch_call(args(
+            TOOL_COMMAND,
+            json!({ "definitionId": "authoring", "input": {} }),
+        ))
         .await
         .unwrap();
     let mut workflow_id = start["workflow"]["id"].as_str().unwrap().to_string();
@@ -268,7 +285,7 @@ async fn acknowledged_publish_via_human_principal_succeeds() {
     });
     let resp = server
         .dispatch_call(args(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId":      workflow_id,
                 "expectedVersion": version,
@@ -283,11 +300,12 @@ async fn acknowledged_publish_via_human_principal_succeeds() {
     assert_eq!(resp["workflow"]["state"].as_str(), Some("ready"));
 
     // Describe the rubric so the ack store records the fetch.
+    // §32: describe uses flowgate.query with subject.
     let _ = server
         .dispatch_call(args(
-            TOOL_DESCRIBE,
+            TOOL_QUERY,
             json!({
-                "id":         "authoring.rubric.workflow-shape",
+                "subject":    "authoring.rubric.workflow-shape",
                 "workflowId": workflow_id,
             }),
         ))
@@ -301,9 +319,10 @@ async fn acknowledged_publish_via_human_principal_succeeds() {
     let runtime_audit_count_before = writable.known_ids().len();
     // Re-fetch latest version after the ack-side describe — describe didn't
     // change workflow version, but read it fresh to be safe.
+    // §32: workflow.get is now flowgate.query with workflowId.
     let cur = server
         .dispatch_call(args(
-            "workflow.get",
+            TOOL_QUERY,
             json!({ "workflowId": &workflow_id }),
         ))
         .await

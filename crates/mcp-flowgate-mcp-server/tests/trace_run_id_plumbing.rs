@@ -1,10 +1,14 @@
 //! SPEC §20.2 — end-to-end propagation of `traceId` / `runId` from MCP
 //! tool arguments through to audit events. Asserts that:
-//!   - workflow.start with traceId/runId records them on workflow.started
-//!   - subsequent workflow.submit inherits the persisted trace/run on the
-//!     workflow.transitioned event
+//!   - flowgate.command start shape with traceId/runId records them on
+//!     workflow.started
+//!   - subsequent flowgate.command submit inherits the persisted trace/run
+//!     on the workflow.transitioned event
 //!   - omitting traceId/runId in start leaves the audit event's fields null
 //!   - submit can override the persisted trace_id for that one call
+//!
+//! Updated from the old TOOL_START / TOOL_SUBMIT constants to the §32
+//! two-tool surface (TOOL_COMMAND for both start and submit shapes).
 
 use std::sync::Arc;
 
@@ -13,7 +17,7 @@ use mcp_flowgate_core::guards::DefaultGuardEvaluator;
 use mcp_flowgate_core::ports::ExecutorRegistry;
 use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
 use mcp_flowgate_core::WorkflowRuntime;
-use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_START, TOOL_SUBMIT};
+use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_COMMAND, TOOL_QUERY};
 use rmcp::model::{CallToolRequestParams, JsonObject};
 use serde_json::{json, Value};
 
@@ -68,14 +72,14 @@ fn find_event<'a>(events: &'a [AuditEvent], kind: &str) -> Option<&'a AuditEvent
     events.iter().find(|e| e.event_type == kind)
 }
 
-// ── workflow.start propagation ──────────────────────────────────────────────
+// ── flowgate.command start propagation ──────────────────────────────────────
 
 #[tokio::test]
 async fn start_with_trace_and_run_records_them_on_workflow_started() {
     let (server, audit) = build();
     let _ = server
         .dispatch_call(call(
-            TOOL_START,
+            TOOL_COMMAND,
             json!({
                 "definitionId": "demo",
                 "input": {},
@@ -96,7 +100,7 @@ async fn start_without_trace_or_run_leaves_them_null_on_audit_event() {
     let (server, audit) = build();
     let _ = server
         .dispatch_call(call(
-            TOOL_START,
+            TOOL_COMMAND,
             json!({ "definitionId": "demo", "input": {} }),
         ))
         .await
@@ -112,7 +116,7 @@ async fn start_with_only_trace_id_records_just_that_field() {
     let (server, audit) = build();
     let _ = server
         .dispatch_call(call(
-            TOOL_START,
+            TOOL_COMMAND,
             json!({ "definitionId": "demo", "input": {}, "traceId": "trace_only" }),
         ))
         .await
@@ -130,7 +134,7 @@ async fn submit_inherits_persisted_trace_id_from_start() {
     let (server, audit) = build();
     let start_resp = server
         .dispatch_call(call(
-            TOOL_START,
+            TOOL_COMMAND,
             json!({
                 "definitionId": "demo",
                 "input": {},
@@ -147,7 +151,7 @@ async fn submit_inherits_persisted_trace_id_from_start() {
 
     let _ = server
         .dispatch_call(call(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId": workflow_id,
                 "expectedVersion": version,
@@ -159,9 +163,7 @@ async fn submit_inherits_persisted_trace_id_from_start() {
         .expect("submit");
 
     let events = audit.snapshot();
-    // Find a post-start event that should inherit trace/run. The terminal
-    // "go" transition produces transition.requested + workflow.completed +
-    // workflow.transition at minimum.
+    // Find a post-start event that should inherit trace/run.
     let event_types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
     let trace_inheriting = events.iter().find(|e| {
         matches!(
@@ -181,7 +183,7 @@ async fn submit_inherits_persisted_trace_on_transition_requested() {
     let (server, audit) = build();
     let start_resp = server
         .dispatch_call(call(
-            TOOL_START,
+            TOOL_COMMAND,
             json!({
                 "definitionId": "demo",
                 "input": {},
@@ -197,7 +199,7 @@ async fn submit_inherits_persisted_trace_on_transition_requested() {
 
     let _ = server
         .dispatch_call(call(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId": workflow_id,
                 "expectedVersion": version,
@@ -221,7 +223,7 @@ async fn workflow_without_trace_run_keeps_audit_fields_null_across_transitions()
     let (server, audit) = build();
     let start_resp = server
         .dispatch_call(call(
-            TOOL_START,
+            TOOL_COMMAND,
             json!({ "definitionId": "demo", "input": {} }),
         ))
         .await
@@ -232,7 +234,7 @@ async fn workflow_without_trace_run_keeps_audit_fields_null_across_transitions()
 
     let _ = server
         .dispatch_call(call(
-            TOOL_SUBMIT,
+            TOOL_COMMAND,
             json!({
                 "workflowId": workflow_id,
                 "expectedVersion": version,
@@ -261,7 +263,7 @@ async fn audit_event_for_anonymous_workflow_omits_trace_and_run_in_json() {
     let (server, audit) = build();
     let _ = server
         .dispatch_call(call(
-            TOOL_START,
+            TOOL_COMMAND,
             json!({ "definitionId": "demo", "input": {} }),
         ))
         .await
@@ -274,4 +276,33 @@ async fn audit_event_for_anonymous_workflow_omits_trace_and_run_in_json() {
         "absent trace_id must not appear in wire payload; got: {serialized}"
     );
     assert!(serialized.get("run_id").is_none());
+}
+
+// ── flowgate.query → get (used in authoring tests) ──────────────────────────
+
+/// Smoke test: flowgate.query with workflowId routes to get.
+/// The `workflow.get` inline string from old tests becomes TOOL_QUERY.
+#[tokio::test]
+async fn query_with_workflow_id_routes_to_get() {
+    let (server, _audit) = build();
+    let start_resp = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({ "definitionId": "demo", "input": {} }),
+        ))
+        .await
+        .expect("start");
+    let workflow_id = start_resp["workflow"]["id"].as_str().unwrap().to_string();
+
+    let get_resp = server
+        .dispatch_call(call(
+            TOOL_QUERY,
+            json!({ "workflowId": workflow_id }),
+        ))
+        .await
+        .expect("get succeeds");
+    assert!(
+        get_resp["workflow"]["id"].as_str().is_some(),
+        "get response must carry workflow.id: {get_resp}"
+    );
 }

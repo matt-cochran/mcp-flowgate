@@ -1,5 +1,9 @@
-//! SPEC §17.6 — `gateway.skills.search` MCP tool. Authoring-time only;
-//! advertised conditionally; returns refs only (progressive disclosure).
+//! SPEC §17.6 — skills search via `flowgate.query` with `kind: "skill"`.
+//! Authoring-time only; advertised conditionally; returns refs only
+//! (progressive disclosure).
+//!
+//! Updated from the old TOOL_SKILLS_SEARCH constant to the §32 surface:
+//! `flowgate.query` with `kind: "skill"` (requires `with_skills_search(true)`).
 
 use std::sync::Arc;
 
@@ -11,8 +15,8 @@ use mcp_flowgate_core::guards::DefaultGuardEvaluator;
 use mcp_flowgate_core::ports::ExecutorRegistry;
 use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
 use mcp_flowgate_core::WorkflowRuntime;
-use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_SKILLS_SEARCH};
-use rmcp::model::{CallToolRequestParams, JsonObject};
+use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_QUERY};
+use rmcp::model::CallToolRequestParams;
 use serde_json::{json, Value};
 
 struct NoopRegistry;
@@ -50,7 +54,7 @@ fn fixture_item_with_source(subject: &str, verb: &str, source: &str) -> Discover
             rel: "home".into(),
             title: None,
             description: None,
-            method: "gateway.home".into(),
+            method: "flowgate.query".into(),
             args: json!({}),
             input_schema: None,
         }],
@@ -79,9 +83,18 @@ fn disabled_server() -> FlowgateServer {
     FlowgateServer::new(build_runtime()).with_discovery(build_discovery())
 }
 
-fn call_search(args: Value) -> CallToolRequestParams {
-    let m: JsonObject = args.as_object().cloned().expect("object");
-    CallToolRequestParams::new(TOOL_SKILLS_SEARCH).with_arguments(m)
+/// Build a skills search call: flowgate.query with kind="skill" plus extra
+/// filter args. Under §32, skills search is `flowgate.query { kind: "skill",
+/// ... }` when `with_skills_search(true)` is enabled.
+fn call_search(extra_args: Value) -> CallToolRequestParams {
+    let mut map = extra_args.as_object().cloned().expect("object");
+    map.insert("kind".into(), json!("skill"));
+    // Also set query="" so the shape is clearly a search dispatch
+    // (query present → search, kind filters by skill).
+    if !map.contains_key("query") {
+        map.insert("query".into(), json!(""));
+    }
+    CallToolRequestParams::new(TOOL_QUERY).with_arguments(map)
 }
 
 // ── Flag-off: tool absent from list_tools AND call rejected ─────────────────
@@ -90,22 +103,33 @@ fn call_search(args: Value) -> CallToolRequestParams {
 async fn tool_not_advertised_when_flag_off() {
     use mcp_flowgate_mcp_server::tool_definitions;
     let _server = disabled_server();
-    // The default `tool_definitions()` does NOT include skills.search.
+    // The default `tool_definitions()` must NOT include any skills-search
+    // specific tool — with §32 the surface is always just two tools.
     let names: Vec<String> = tool_definitions().into_iter().map(|t| t.name.to_string()).collect();
+    // Verify the two-tool surface is present.
+    assert!(names.contains(&"flowgate.query".to_string()));
+    assert!(names.contains(&"flowgate.command".to_string()));
+    // No old-name skills tool should appear.
     assert!(
-        !names.contains(&TOOL_SKILLS_SEARCH.to_string()),
-        "skills.search must NOT appear in default tool list; got: {names:?}"
+        !names.iter().any(|n| n.contains("skills")),
+        "no skills-named tool should appear in default list; got: {names:?}"
     );
 }
 
 #[tokio::test]
 async fn call_rejected_when_flag_off() {
     let server = disabled_server();
+    // Under §32, skills search goes through flowgate.query with kind="skill".
+    // When skills_search is disabled, the dispatch should return an error or
+    // AMBIGUOUS_INTENT — NOT silently return empty or succeed.
     let err = server
         .dispatch_call(call_search(json!({})))
         .await
-        .expect_err("call must be rejected when flag off");
-    assert!(format!("{err:?}").contains("disabled"));
+        .expect_err("call must be rejected when skills flag off");
+    assert!(
+        format!("{err:?}").contains("disabled"),
+        "error should mention disabled: {err:?}"
+    );
 }
 
 // ── Flag-on: returns refs (NO body field present) ───────────────────────────

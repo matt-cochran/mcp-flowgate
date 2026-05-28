@@ -1,12 +1,12 @@
-//! Sparse-args deserialization tests for the new `flowgate.query` and
+//! Sparse-args deserialization tests for the `flowgate.query` and
 //! `flowgate.command` dispatch boundary structs. Every field is
 //! optional; the runtime selects the operation by which required-field
 //! shape is present.
 //!
-//! The second half of this file (dispatch behavior tests) exercises the
-//! `dispatch_query` / `dispatch_command` methods on `FlowgateServer` directly,
-//! since Task 1.3 (routing `flowgate.query` / `flowgate.command` from
-//! `dispatch_call`) has not yet landed.
+//! The second half of this file exercises the `dispatch_query` /
+//! `dispatch_command` methods on `FlowgateServer` directly as well as
+//! `dispatch_call` (which now routes both through the shape-routers,
+//! completing the §32 surface flip).
 
 use std::sync::Arc;
 

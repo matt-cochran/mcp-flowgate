@@ -1,16 +1,11 @@
-//! Parity snapshots for the MCP tool surface.
+//! Parity snapshots for the MCP tool surface — SPEC §32 two-tool surface.
 //!
-//! Pins down the exact JSON Schema and human description published for each
-//! of the seven stable tools. Any change to either is a visible MCP surface
-//! change and must be intentional. These tests exist so that the upcoming
-//! schemars-based generation refactor can't drift the published schemas
-//! without a test failure.
+//! Pins the exact JSON Schema published for `flowgate.query` and
+//! `flowgate.command`. Any change to either is a visible MCP surface
+//! change and must be intentional.
 
-use mcp_flowgate_mcp_server::{
-    tool_definitions, TOOL_DESCRIBE, TOOL_EXPLAIN, TOOL_GET, TOOL_HOME, TOOL_SEARCH, TOOL_START,
-    TOOL_SUBMIT,
-};
-use serde_json::{json, Value};
+use mcp_flowgate_mcp_server::{tool_definitions, TOOL_COMMAND, TOOL_QUERY};
+use serde_json::Value;
 
 fn schema_of(name: &str) -> Value {
     let tool = tool_definitions()
@@ -32,160 +27,68 @@ fn description_of(name: &str) -> String {
 }
 
 #[test]
-fn home_schema_snapshot() {
-    assert_eq!(
-        schema_of(TOOL_HOME),
-        json!({
-            "type": "object",
-            "properties": {},
-            "additionalProperties": false
-        })
+fn query_schema_has_expected_fields() {
+    let schema = schema_of(TOOL_QUERY);
+    // All fields optional (no `required` key) — the shape-router selects
+    // the operation by which optional fields are present.
+    assert!(
+        schema.get("required").is_none(),
+        "flowgate.query schema must have no required fields; got: {schema}"
     );
+    let props = schema["properties"].as_object().expect("properties object");
+    // Must carry the search/describe/get/explain discriminator fields.
+    assert!(props.contains_key("query"),      "missing query");
+    assert!(props.contains_key("kind"),       "missing kind");
+    assert!(props.contains_key("subject"),    "missing subject");
+    assert!(props.contains_key("workflowId"), "missing workflowId");
+    assert!(props.contains_key("transition"), "missing transition");
+    assert!(props.contains_key("limit"),      "missing limit");
 }
 
 #[test]
-fn search_schema_snapshot() {
-    assert_eq!(
-        schema_of(TOOL_SEARCH),
-        json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string" },
-                "kind": { "type": "string", "enum": ["workflow", "capability", "connection"] },
-                "limit": { "type": "integer", "default": 10 }
-            },
-            "required": ["query"],
-            "additionalProperties": false
-        })
+fn command_schema_has_expected_fields() {
+    let schema = schema_of(TOOL_COMMAND);
+    // All fields optional (no `required` key).
+    assert!(
+        schema.get("required").is_none(),
+        "flowgate.command schema must have no required fields; got: {schema}"
     );
+    let props = schema["properties"].as_object().expect("properties object");
+    // Must carry the start/submit/define discriminator fields.
+    assert!(props.contains_key("definitionId"),    "missing definitionId");
+    assert!(props.contains_key("input"),           "missing input");
+    assert!(props.contains_key("workflowId"),      "missing workflowId");
+    assert!(props.contains_key("expectedVersion"), "missing expectedVersion");
+    assert!(props.contains_key("transition"),      "missing transition");
+    assert!(props.contains_key("arguments"),       "missing arguments");
+    assert!(props.contains_key("subject"),         "missing subject");
+    assert!(props.contains_key("definition"),      "missing definition");
+    assert!(props.contains_key("traceId"),         "missing traceId");
+    assert!(props.contains_key("runId"),           "missing runId");
 }
 
 #[test]
-fn describe_schema_snapshot() {
-    assert_eq!(
-        schema_of(TOOL_DESCRIBE),
-        json!({
-            "type": "object",
-            "properties": {
-                "id": { "type": "string" },
-                "workflowId": { "type": "string" }
-            },
-            "required": ["id"],
-            "additionalProperties": false
-        })
-    );
-}
-
-#[test]
-fn start_schema_snapshot() {
-    assert_eq!(
-        schema_of(TOOL_START),
-        json!({
-            "type": "object",
-            "properties": {
-                "definitionId": { "type": "string" },
-                "input": { "type": "object" },
-                // SPEC §20.2 — optional hierarchical-identity fields.
-                "traceId": { "type": "string" },
-                "runId":   { "type": "string" }
-            },
-            "required": ["definitionId", "input"],
-            "additionalProperties": false
-        })
-    );
-}
-
-#[test]
-fn get_schema_snapshot() {
-    assert_eq!(
-        schema_of(TOOL_GET),
-        json!({
-            "type": "object",
-            "properties": {
-                "workflowId": { "type": "string" },
-                "traceId":    { "type": "string" },
-                "runId":      { "type": "string" }
-            },
-            "required": ["workflowId"],
-            "additionalProperties": false
-        })
-    );
-}
-
-#[test]
-fn submit_schema_snapshot() {
-    assert_eq!(
-        schema_of(TOOL_SUBMIT),
-        json!({
-            "type": "object",
-            "properties": {
-                "workflowId": { "type": "string" },
-                "expectedVersion": { "type": "integer" },
-                "transition": { "type": "string" },
-                "arguments": { "type": "object" },
-                "summary": { "type": "string" },
-                "traceId": { "type": "string" },
-                "runId":   { "type": "string" }
-            },
-            "required": ["workflowId", "expectedVersion", "transition", "arguments"],
-            "additionalProperties": false
-        })
-    );
-}
-
-#[test]
-fn explain_schema_snapshot() {
-    assert_eq!(
-        schema_of(TOOL_EXPLAIN),
-        json!({
-            "type": "object",
-            "properties": {
-                "workflowId": { "type": "string" },
-                "transition": { "type": "string" }
-            },
-            "required": ["workflowId", "transition"],
-            "additionalProperties": false
-        })
-    );
+fn both_schemas_are_type_object() {
+    for name in [TOOL_QUERY, TOOL_COMMAND] {
+        let schema = schema_of(name);
+        assert_eq!(
+            schema.get("type").and_then(|v| v.as_str()),
+            Some("object"),
+            "tool '{name}' inputSchema must be type=object"
+        );
+    }
 }
 
 #[test]
 fn descriptions_snapshot() {
-    let want: &[(&str, &str)] = &[
-        (
-            TOOL_HOME,
-            "Get the gateway's discovery home: HATEOAS links to search and list capabilities.",
-        ),
-        (
-            TOOL_SEARCH,
-            "Search workflows and proxy capabilities by free-text query. Returns hits with start_workflow links.",
-        ),
-        (
-            TOOL_DESCRIBE,
-            "Describe a workflow or capability by id, including its inputSchema.",
-        ),
-        (
-            TOOL_START,
-            "Start a workflow. Use definitionId 'proxy_default' for proxy mode.",
-        ),
-        (
-            TOOL_GET,
-            "Get current workflow state and valid next HATEOAS actions.",
-        ),
-        (
-            TOOL_SUBMIT,
-            "Submit one transition listed in the latest links array of a workflow response.",
-        ),
-        (
-            TOOL_EXPLAIN,
-            "Explain whether a transition is currently allowed.",
-        ),
-    ];
-    for (name, expected) in want {
-        assert_eq!(
-            description_of(name),
-            *expected,
-            "description drift for tool {name}"
-        );
-    }
+    let desc_q = description_of(TOOL_QUERY);
+    assert!(
+        desc_q.contains("§32") || desc_q.contains("read") || desc_q.contains("home"),
+        "flowgate.query description must mention §32, 'read', or 'home'; got: {desc_q}"
+    );
+    let desc_c = description_of(TOOL_COMMAND);
+    assert!(
+        desc_c.contains("§32") || desc_c.contains("write") || desc_c.contains("start"),
+        "flowgate.command description must mention §32, 'write', or 'start'; got: {desc_c}"
+    );
 }

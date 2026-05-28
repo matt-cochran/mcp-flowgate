@@ -198,6 +198,9 @@ pub(crate) fn schema_for_args<T: JsonSchema>(required: &[&'static str]) -> Arc<J
 /// `properties` map and no `required` key — same result, but a one-liner
 /// here is cleaner than spelling out a `struct HomeArgs;` derive just to
 /// produce `{}`.
+// §32: no longer used by tools.rs (home is dispatched via flowgate.query empty
+// shape). Kept for potential future use.
+#[allow(dead_code)]
 pub(crate) fn empty_object_schema() -> Arc<JsonObject> {
     let mut obj = serde_json::Map::new();
     obj.insert("type".into(), Value::String("object".into()));

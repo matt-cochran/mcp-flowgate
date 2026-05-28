@@ -4,30 +4,17 @@
 
 //! MCP server tool surface for mcp-flowgate.
 //!
-//! The tool list is stable across configs (invariant 9). It splits into two
-//! HATEOAS layers:
-//!
-//! - **Gateway layer** — `gateway.home`, `gateway.search`, `gateway.describe`
-//!   help a model find the right workflow or capability to start.
-//! - **Workflow layer** — `workflow.start`, `workflow.get`, `workflow.submit`,
-//!   `workflow.explain` drive a single workflow forward through links in
-//!   each response.
+//! SPEC §32 — the public MCP surface is exactly **two tools** (`flowgate.query`
+//! and `flowgate.command`), stable across configs by design (README invariant
+//! 9). All workflow and discovery operations are reached by varying the args,
+//! not the tool name.
 //!
 //! Module layout:
-//! - `args` — argument structs + JSON Schema helpers (typed `*Args` per tool).
-//! - `tools` — tool-list construction + free-form helpers (`parse_kind`,
-//!   `instructions`).
-//! - `handlers` — per-tool handler bodies (sibling `impl FlowgateServer`).
-//!
-//! Tool input schemas and per-handler argument parsing share one Rust source
-//! of truth: the typed `*Args` structs in `args`. `schemars` derives the
-//! published JSON Schema from those structs; `serde` deserializes incoming
-//! arguments into the same shape. Whatever divergence remains between "what
-//! the schema says is required" and "what the runtime tolerates as missing"
-//! is encoded explicitly: lenient fields stay `Option<T>` and are unwrapped
-//! with handler-side defaults, while strict fields stay `Option<T>` with an
-//! explicit `is required` check so the error message matches what callers
-//! (and audit consumers) already see today.
+//! - `args` — sparse argument structs (`QueryArgs`, `CommandArgs`) + JSON
+//!   Schema helpers.
+//! - `tools` — two-tool-list construction + `parse_kind` + `instructions`.
+//! - `handlers` — per-operation handler bodies (sibling `impl FlowgateServer`)
+//!   plus shape-routers `dispatch_query` / `dispatch_command`.
 
 pub mod args;
 mod handlers;
@@ -51,46 +38,19 @@ use serde_json::{json, Value};
 
 pub use tools::{scripts_search_tool_definition, skills_search_tool_definition, tool_definitions};
 
-pub const TOOL_HOME: &str = "gateway.home";
-pub const TOOL_SEARCH: &str = "gateway.search";
-pub const TOOL_DESCRIBE: &str = "gateway.describe";
-pub const TOOL_START: &str = "workflow.start";
-pub const TOOL_GET: &str = "workflow.get";
-pub const TOOL_SUBMIT: &str = "workflow.submit";
-pub const TOOL_EXPLAIN: &str = "workflow.explain";
-/// SPEC §17.6 — authoring-time skills discovery. Tool is only advertised when
-/// `FlowgateServer::with_skills_search(true)` is set; default off so runtime
-/// workflows use the push-not-pull guidance surface (§5.4).
-pub const TOOL_SKILLS_SEARCH: &str = "gateway.skills.search";
-/// SPEC §22 — authoring-time scripts discovery. Mirror of
-/// `gateway.skills.search` for the scripts library. Advertised only when
-/// `FlowgateServer::with_scripts_search(true)` is set; default off (same
-/// reasoning as skills).
-pub const TOOL_SCRIPTS_SEARCH: &str = "gateway.scripts.search";
-/// SPEC §30 — lexicon search (always advertised; lexicon is a runtime
-/// concept used INSIDE workflows, not authoring-time-only).
-pub const TOOL_LEXICON_SEARCH: &str = "gateway.lexicon.search";
-/// SPEC §30 — lexicon lookup.
-pub const TOOL_LEXICON_LOOKUP: &str = "gateway.lexicon.lookup";
-/// SPEC §30 — lexicon define. Governance-gated; agents calling against
-/// a `human-only` term get `LEXICON_DEFINE_REQUIRES_HUMAN`.
-pub const TOOL_LEXICON_DEFINE: &str = "gateway.lexicon.define";
+/// SPEC §32 — read tool. Args dispatched by present-field shape via
+/// `handlers::dispatch_query`. See SPEC §32 for the full dispatch table.
+pub const TOOL_QUERY: &str = "flowgate.query";
 
-/// The complete set of MCP tool names this server exposes by default
-/// (without authoring-time flags). Stable across configs by design — see
-/// invariant 9 in the README.
-pub const STABLE_TOOL_NAMES: &[&str] = &[
-    TOOL_HOME,
-    TOOL_SEARCH,
-    TOOL_DESCRIBE,
-    TOOL_START,
-    TOOL_GET,
-    TOOL_SUBMIT,
-    TOOL_EXPLAIN,
-    TOOL_LEXICON_SEARCH,
-    TOOL_LEXICON_LOOKUP,
-    TOOL_LEXICON_DEFINE,
-];
+/// SPEC §32 — write tool. Args dispatched by present-field shape via
+/// `handlers::dispatch_command`. See SPEC §32 for the full dispatch table.
+pub const TOOL_COMMAND: &str = "flowgate.command";
+
+/// SPEC §32 — the public MCP surface is exactly two tools, stable
+/// across configs by design (README invariant 9). All workflow and
+/// discovery operations are reached by varying the args, not the tool
+/// name.
+pub const STABLE_TOOL_NAMES: &[&str] = &[TOOL_QUERY, TOOL_COMMAND];
 
 #[derive(Clone)]
 pub struct FlowgateServer {
@@ -106,10 +66,15 @@ pub struct FlowgateServer {
     /// SPEC §17.6 — when true, the `gateway.skills.search` tool is
     /// advertised in `list_tools`. Default false; authoring-time only.
     skills_search_enabled: bool,
-    /// SPEC §22 — when true, `gateway.scripts.search` is advertised in
-    /// `list_tools`. Default false; authoring-time only. Same rationale
+    /// SPEC §22 — when true, `flowgate.query` with `kind: "script"` is
+    /// enabled. Default false; authoring-time only. Same rationale
     /// as skills_search_enabled.
     scripts_search_enabled: bool,
+    /// SPEC §32 — when true, the `flowgate.command` dispatch accepts
+    /// `subject: "lexicon:<term>"` + `definition` shape (lexicon writes
+    /// via MCP). Default OFF: production runtimes typically curate lexicon
+    /// via the CLI or out-of-band processes. Authoring builds opt in.
+    lexicon_writes_enabled: bool,
     /// SPEC §22 — optional store that records `gateway.describe` calls
     /// for SCRIPT subjects per workflow, consumed by the
     /// `script_acknowledged` guard. When `None`, describes still emit
@@ -142,6 +107,7 @@ impl FlowgateServer {
             ack_store: None,
             skills_search_enabled: false,
             scripts_search_enabled: false,
+            lexicon_writes_enabled: false,
             script_ack_store: None,
             lexicon_overlay: Arc::new(std::sync::RwLock::new(
                 std::collections::HashMap::new(),
@@ -190,10 +156,18 @@ impl FlowgateServer {
         self
     }
 
-    /// SPEC §22 — enable the `gateway.scripts.search` tool. Default off,
-    /// same authoring-time-only rationale as `with_skills_search`.
+    /// SPEC §22 — enable scripts search via `flowgate.query` with
+    /// `kind: "script"`. Default off, same authoring-time-only rationale
+    /// as `with_skills_search`.
     pub fn with_scripts_search(mut self, enabled: bool) -> Self {
         self.scripts_search_enabled = enabled;
+        self
+    }
+
+    /// SPEC §32 — enable lexicon-define commands via MCP. Default OFF.
+    /// Mirror of the `with_skills_search` / `with_scripts_search` opt-ins.
+    pub fn with_lexicon_writes(mut self, enabled: bool) -> Self {
+        self.lexicon_writes_enabled = enabled;
         self
     }
 
@@ -227,41 +201,123 @@ impl FlowgateServer {
             .unwrap_or_else(|| json!({}));
 
         let result = match request.name.as_ref() {
-            TOOL_HOME => self.handle_home().await,
-            TOOL_SEARCH => self.handle_search(args).await,
-            TOOL_DESCRIBE => self.handle_describe(args, principal.clone()).await,
-            TOOL_START => self.handle_start(args, principal).await,
-            TOOL_GET => self.handle_get(args, principal).await,
-            TOOL_SUBMIT => self.handle_submit(args, principal).await,
-            TOOL_EXPLAIN => self.handle_explain(args).await,
-            TOOL_SKILLS_SEARCH => {
-                if !self.skills_search_enabled {
-                    return Err(McpError::invalid_params(
-                        "gateway.skills.search is disabled. Enable with \
-                         FlowgateServer::with_skills_search(true) — authoring-time only."
-                            .to_string(),
-                        None,
-                    ));
+            TOOL_QUERY => {
+                // §32: Some `kind` values and `subject: "lexicon:..."` need
+                // specialized routing before the generic shape-router:
+                //
+                //  kind="skill"    → handle_skills_search (flag-gated)
+                //  kind="script"   → handle_scripts_search (flag-gated)
+                //  kind="lexicon"  → handle_lexicon_search
+                //  subject="lexicon:<term>" (no query/wid/tr) → handle_lexicon_lookup
+                //
+                // All other args fall through to dispatch_query.
+                let kind = args
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                let subject_is_lexicon = args
+                    .get("subject")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s.starts_with("lexicon:"));
+                let has_query = args.get("query").is_some();
+                let has_wid = args.get("workflowId").is_some();
+                let has_tr = args.get("transition").is_some();
+
+                match kind.as_deref() {
+                    Some("skill") => {
+                        if !self.skills_search_enabled {
+                            return Err(McpError::invalid_params(
+                                "flowgate.query with kind='skill' is disabled. \
+                                 Enable with FlowgateServer::with_skills_search(true) \
+                                 — authoring-time only."
+                                    .to_string(),
+                                None,
+                            ));
+                        }
+                        self.handle_skills_search(args).await
+                    }
+                    Some("script") => {
+                        if !self.scripts_search_enabled {
+                            return Err(McpError::invalid_params(
+                                "flowgate.query with kind='script' is disabled. \
+                                 Enable with FlowgateServer::with_scripts_search(true) \
+                                 — authoring-time only."
+                                    .to_string(),
+                                None,
+                            ));
+                        }
+                        self.handle_scripts_search(args).await
+                    }
+                    Some("lexicon") => {
+                        // Lexicon search: pass query + limit through.
+                        self.handle_lexicon_search(args).await
+                    }
+                    _ if subject_is_lexicon && !has_query && !has_wid && !has_tr => {
+                        // Lexicon lookup: subject = "lexicon:<term>". Reshape
+                        // to the expected { term } arg shape.
+                        let term = args["subject"]
+                            .as_str()
+                            .and_then(|s| s.strip_prefix("lexicon:"))
+                            .unwrap_or("")
+                            .to_string();
+                        self.handle_lexicon_lookup(json!({ "term": term })).await
+                    }
+                    _ => self.dispatch_query(args, principal).await,
                 }
-                self.handle_skills_search(args).await
             }
-            TOOL_SCRIPTS_SEARCH => {
-                if !self.scripts_search_enabled {
-                    return Err(McpError::invalid_params(
-                        "gateway.scripts.search is disabled. Enable with \
-                         FlowgateServer::with_scripts_search(true) — authoring-time only."
-                            .to_string(),
-                        None,
-                    ));
+            TOOL_COMMAND => {
+                // §32: `define` shape (subject namespaced + definition) is gated
+                // by with_lexicon_writes(true). Default-off in production (safe
+                // by construction); authoring builds opt in via the builder.
+                let parsed: crate::args::CommandArgs =
+                    serde_json::from_value(args.clone()).unwrap_or(crate::args::CommandArgs {
+                        definition_id: None,
+                        input: None,
+                        workflow_id: None,
+                        expected_version: None,
+                        transition: None,
+                        arguments: None,
+                        subject: None,
+                        definition: None,
+                        summary: None,
+                        trace_id: None,
+                        run_id: None,
+                    });
+                let is_lexicon_define = parsed
+                    .subject
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("lexicon:"))
+                    && parsed.definition.is_some();
+                if is_lexicon_define && !self.lexicon_writes_enabled {
+                    Ok(json!({
+                        "error": {
+                            "code": "LEXICON_WRITES_DISABLED",
+                            "message": "This runtime does not accept lexicon define commands.",
+                            "hint": "Operators add lexicon terms via the `flowgate lexicon define` CLI subcommand."
+                        },
+                        "links": [
+                            {
+                                "rel": "operator_path",
+                                "method": "cli",
+                                "args": { "command": "flowgate lexicon define <term> <definition>" }
+                            },
+                            {
+                                "rel": "lookup",
+                                "method": "flowgate.query",
+                                "args": { "subject": parsed.subject.unwrap_or_default() }
+                            }
+                        ]
+                    }))
+                } else {
+                    self.dispatch_command(args, principal).await
                 }
-                self.handle_scripts_search(args).await
             }
-            TOOL_LEXICON_SEARCH => self.handle_lexicon_search(args).await,
-            TOOL_LEXICON_LOOKUP => self.handle_lexicon_lookup(args).await,
-            TOOL_LEXICON_DEFINE => self.handle_lexicon_define(args, principal).await,
             other => {
                 return Err(McpError::invalid_params(
-                    format!("Unknown tool '{other}'. Use list_tools to discover."),
+                    format!(
+                        "Unknown tool '{other}'. Available: {} (see SPEC §32).",
+                        STABLE_TOOL_NAMES.join(", ")
+                    ),
                     None,
                 ));
             }
@@ -311,14 +367,11 @@ impl ServerHandler for FlowgateServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let mut tools = tool_definitions();
-        if self.skills_search_enabled {
-            tools.push(skills_search_tool_definition());
-        }
-        if self.scripts_search_enabled {
-            tools.push(scripts_search_tool_definition());
-        }
-        Ok(ListToolsResult::with_all_items(tools))
+        // §32 — always exactly two tools. Skills / scripts search are gated
+        // paths within flowgate.query (kind="skill" / kind="script"), not
+        // separate tool entries. The skills_search_enabled /
+        // scripts_search_enabled flags govern dispatch, not tool advertising.
+        Ok(ListToolsResult::with_all_items(tool_definitions()))
     }
 
     async fn call_tool(

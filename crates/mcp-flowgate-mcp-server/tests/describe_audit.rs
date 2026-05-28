@@ -1,9 +1,13 @@
-//! SPEC §5.8 — `gateway.describe` calls emit a `guidance.describe_requested`
-//! audit record. Non-critical-path: sink failures do not abort the describe
-//! (the body is already fetched and returned), but they emit an
-//! `audit.write_failed` self-event so loss is observable.
+//! SPEC §5.8 — `flowgate.query` with `subject` (describe shape) emits a
+//! `guidance.describe_requested` audit record. Non-critical-path: sink
+//! failures do not abort the describe (the body is already fetched and
+//! returned), but they emit an `audit.write_failed` self-event so loss is
+//! observable.
 //!
 //! Each assertion targets one observable property of the audit shape.
+//!
+//! Updated from the old TOOL_DESCRIBE constant to the §32 surface
+//! (TOOL_QUERY with subject arg → describe shape).
 
 use std::sync::Arc;
 
@@ -15,7 +19,7 @@ use mcp_flowgate_core::guards::DefaultGuardEvaluator;
 use mcp_flowgate_core::ports::ExecutorRegistry;
 use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
 use mcp_flowgate_core::WorkflowRuntime;
-use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_DESCRIBE};
+use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_QUERY};
 use rmcp::model::{CallToolRequestParams, JsonObject};
 use serde_json::{json, Value};
 
@@ -52,7 +56,7 @@ fn build_discovery_with_one_skill() -> Arc<InMemoryDiscoveryIndex> {
             rel: "home".to_string(),
             title: None,
             description: None,
-            method: "gateway.home".to_string(),
+            method: "flowgate.query".to_string(),
             args: json!({}),
             input_schema: None,
         }],
@@ -68,12 +72,13 @@ fn build_server() -> (FlowgateServer, Arc<MemoryAuditSink>) {
     (server, audit)
 }
 
-fn describe_call(id: &str) -> CallToolRequestParams {
-    let map: JsonObject = json!({ "id": id })
+/// Build a describe call using flowgate.query with subject arg (§32).
+fn describe_call(subject: &str) -> CallToolRequestParams {
+    let map: JsonObject = json!({ "subject": subject })
         .as_object()
         .cloned()
         .expect("object");
-    CallToolRequestParams::new(TOOL_DESCRIBE).with_arguments(map)
+    CallToolRequestParams::new(TOOL_QUERY).with_arguments(map)
 }
 
 fn find_event(audit: &MemoryAuditSink, event_type: &str) -> Option<AuditEvent> {
