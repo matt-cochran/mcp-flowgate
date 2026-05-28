@@ -36,6 +36,21 @@ pub trait WorkflowStore: Send + Sync {
         instance: WorkflowInstance,
         expected_version: u64,
     ) -> anyhow::Result<WorkflowInstance>;
+
+    /// SPEC §32 — find an in-flight workflow instance by `run_id`.
+    ///
+    /// Returns `Ok(Some(workflow_id))` if an instance with that `run_id`
+    /// exists, `Ok(None)` otherwise. The default impl returns `Ok(None)`
+    /// — backends that don't index `run_id` opt out of the uniqueness
+    /// assertion. Runtime callers treat `Ok(None)` as "no constraint":
+    /// the uniqueness check is a best-effort safety net, not a contract.
+    ///
+    /// The in-memory store overrides this to provide the assertion.
+    /// File / SQLite / Postgres backends can add it later by introducing
+    /// a secondary index without breaking trait compatibility.
+    async fn find_by_run_id(&self, _run_id: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]
@@ -133,4 +148,36 @@ pub trait ScriptAcknowledgmentStore: Send + Sync {
         workflow_id: &str,
         subject: &str,
     ) -> anyhow::Result<Option<String>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct StubStore;
+
+    #[async_trait]
+    impl WorkflowStore for StubStore {
+        async fn create(&self, _instance: WorkflowInstance) -> anyhow::Result<WorkflowInstance> {
+            unimplemented!()
+        }
+        async fn load(&self, _workflow_id: &str) -> anyhow::Result<WorkflowInstance> {
+            unimplemented!()
+        }
+        async fn save_if_version(
+            &self,
+            _instance: WorkflowInstance,
+            _expected_version: u64,
+        ) -> anyhow::Result<WorkflowInstance> {
+            unimplemented!()
+        }
+        // find_by_run_id is NOT implemented — exercises the default.
+    }
+
+    #[tokio::test]
+    async fn find_by_run_id_default_returns_none() {
+        let s = StubStore;
+        let result = s.find_by_run_id("r-test").await.unwrap();
+        assert_eq!(result, None);
+    }
 }
