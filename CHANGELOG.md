@@ -49,6 +49,17 @@ Adds the FMECA-vetted agent-resolver design: `agents.yaml` with closed-enum affi
 
 - **`site/src/content/docs/guides/agent-config.mdx`** — migration story, closed-enum reference, strict-mode discipline, `flow.configure-models` walkthrough.
 
+### Production hardening (post-audit 2026-05-27)
+
+The 2026-05-27 four-agent production-readiness audit flagged eleven items; ten landed in this release and one is documented as honestly deferred.
+
+- **HTTP `connect_timeout(10s)`** added to both `reqwest::Client::builder()` sites in the workspace (`crates/mcp-flowgate-executors/src/rest.rs` and `crates/mcp-flowgate-core/src/config.rs`). The pre-existing total timeouts (120s + 30s) stand; the new connect_timeout guards against hung DNS / TCP handshakes that the total timeout couldn't catch.
+- **Lock-poisoning signal preserved.** 33 `RwLock`/`Mutex` `.unwrap()` sites in `crates/mcp-flowgate-core/src/` converted to `.expect("LOCK_POISONED: <holder>")` so a poisoned-panic message names the originating subsystem (`workflow store`, `audit event buffer`, `sqlite connection`, etc.). The no-I/O-under-lock invariant is documented at the top of `crates/mcp-flowgate-core/src/lib.rs`. The workspace `clippy::unwrap_used` lint was deferred — too many pre-existing `Option`/`Result` unwraps to enable cleanly in this commit; targeted for v0.4.
+- **Workflow failure-path tests.** New `crates/mcp-flowgate-executors/tests/workflow_failure_paths.rs`: 2 active tests confirm permanent executor failures don't silently report `status="completed"` and guard rejection blocks advance via `submit()`. 2 `#[ignore]`'d honest stubs name v0.4 gaps — the runtime timeout is lazy-poll not watchdog, and there's no cancellation API yet. Each stub body shows the test shape for when the API lands.
+- **ScriptExecutor integration tests for the three meta scripts.** The orchestrator e2e bypasses scripts via the `CapShortCircuit` fixture; new `meta_scripts_integration.rs` exercises `fetch.provider-model-inventory`, `install.agents-config`, and `verify.auth-only-smoke-test` against `std::net::TcpListener`-backed mock providers. The atomic-rollback contract on the write script is now test-pinned. Companion `*_BASE_URL` env-var overrides shipped in flowgate-meta — also useful as a corporate-proxy escape hatch.
+- **Doctor reference page.** New `/reference/doctor/` site page documenting all 9 checks the binary runs, their failure codes, and the operator action for each. Until now only 3 of 9 were documented.
+- **Nightly CI workflow.** New `.github/workflows/nightly.yml` runs `cargo test --workspace -- --include-ignored` + `examples/smoke-ete/walk-live.sh` against real provider credentials at 04:00 UTC daily. Auto-files a labeled GitHub issue on failure so live-path regressions surface within 24h. Required secrets (`ANTHROPIC_API_KEY_CI`, `OPENAI_API_KEY_CI`, `GOOGLE_API_KEY_CI`) documented in `CONTRIBUTING.md`. Fork-gated so PRs from forks don't accidentally trigger live API calls.
+
 ### Honest deferrals (v0.3.1 / v0.4 roadmap)
 
 - Per-list runtime CoR over actual provider failures (v0.3.1) — the classifier and structured exhaustion error are already in place.
