@@ -37,6 +37,14 @@ workflows:
       target_path:
         type: string
         default: ".flowgate/agents.yaml"
+      # Optional capability verification after the auth-only smoke
+      # passes. Set to a contract path (e.g. contracts/reasoning-
+      # arithmetic-v1.yaml) to run that contract against the matching
+      # bindings; empty string skips. Verification incurs real token
+      # spend per matching binding.
+      capability_contract:
+        type: string
+        default: ""
     initialState: inventorying
     states:
       inventorying:
@@ -143,7 +151,7 @@ workflows:
       smoking:
         transitions:
           smoke:
-            target: done
+            target: smoked
             actor: deterministic
             executor:
               kind: workflow
@@ -154,6 +162,38 @@ workflows:
                 outputs:
                   "$.context.smoke_results":    results
                   "$.context.smoke_disclaimer": disclaimer
+
+      smoked:
+        transitions:
+          run_capability_harness:
+            target: capability_verifying
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.workflow.input.capability_contract != ''"
+          skip_capability_harness:
+            target: done
+            actor: deterministic
+            guards:
+              - kind: expr
+                expr: "$.workflow.input.capability_contract == ''"
+
+      capability_verifying:
+        transitions:
+          verify:
+            target: done
+            actor: deterministic
+            executor:
+              kind: workflow
+              definitionId: cap.verify.capability-harness
+              use:
+                inputs:
+                  agents_config_path: "$.context.written_path"
+                  contract_path:      "$.workflow.input.capability_contract"
+                outputs:
+                  "$.context.capability_contract_id": contract_id
+                  "$.context.capability_affinity":    affinity
+                  "$.context.capability_results":     results
 
       done:
         terminal: true

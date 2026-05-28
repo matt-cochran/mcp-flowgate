@@ -10,6 +10,10 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — Sibling: flowgate-meta capability-harness scaffolding
+
+- The sibling [`flowgate-meta`](https://github.com/matt-cochran/flowgate-meta) repo now ships `cap.verify.capability-harness` + a starter `contracts/` directory (reasoning / coding / prose). `flow.configure-models` gained an optional `capability_contract` input that, when set, runs the named contract against the just-written `agents.yaml`. Empty default keeps the flow's existing auto-mode path unchanged. See `flowgate-meta/CHANGELOG.md` for the full diff; fixture copies under `crates/mcp-flowgate-core/tests/fixtures/flowgate-meta/` are synced so the meta-orchestrator e2e covers the new transitions.
+
 ### Added — `flowgate migrate-agents-from-cli` subcommand
 
 - **One-shot migration** from v0.2 `--agent NAME=PROVIDER/MODEL` flags to v0.3 `agents.yaml`. Each name must parse as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` or the literal `default`; unmappable names list every offender so the operator can rename in one pass. Unknown providers are rejected by name. Schema-required `default:` is auto-filled from the first CLI flag when not given explicitly; promoted bindings stay in their named override slot too so operator intent stays visible. Atomic write (tempfile + fsync + rename); refuses to overwrite an existing file. `--dry-run` prints YAML to stdout without touching disk.
