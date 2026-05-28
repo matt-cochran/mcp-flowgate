@@ -2,9 +2,67 @@
 //! `flowgate.command` dispatch boundary structs. Every field is
 //! optional; the runtime selects the operation by which required-field
 //! shape is present.
+//!
+//! The second half of this file (dispatch behavior tests) exercises the
+//! `dispatch_query` / `dispatch_command` methods on `FlowgateServer` directly,
+//! since Task 1.3 (routing `flowgate.query` / `flowgate.command` from
+//! `dispatch_call`) has not yet landed.
 
+use std::sync::Arc;
+
+use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
+use mcp_flowgate_core::guards::DefaultGuardEvaluator;
+use mcp_flowgate_core::model::Principal;
+use mcp_flowgate_core::ports::ExecutorRegistry;
+use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
+use mcp_flowgate_core::WorkflowRuntime;
 use mcp_flowgate_mcp_server::args::{CommandArgs, QueryArgs};
+use mcp_flowgate_mcp_server::FlowgateServer;
 use serde_json::json;
+
+// ── Test server helper ────────────────────────────────────────────────────────
+
+struct NoopRegistry;
+impl ExecutorRegistry for NoopRegistry {
+    fn get(&self, _kind: &str) -> Option<Arc<dyn mcp_flowgate_core::Executor>> {
+        None
+    }
+}
+
+/// Build a minimal `FlowgateServer` with a single workflow `test_wf` and a
+/// `demo` workflow (for submit/explain). Uses a noop executor registry so
+/// start/get work, but transitions with executors fail gracefully.
+async fn test_server() -> FlowgateServer {
+    let cfg = json!({
+        "version": "1.0.0",
+        "workflows": {
+            "test_wf": {
+                "initialState": "open",
+                "states": {
+                    "open": {
+                        "transitions": {
+                            "close": { "target": "done" }
+                        }
+                    },
+                    "done": { "terminal": true }
+                }
+            }
+        }
+    });
+    let resolved = mcp_flowgate_core::config::resolve(cfg).expect("resolve");
+    let defs = Arc::new(ConfigDefinitionStore::from_config(&resolved));
+    let store = Arc::new(InMemoryWorkflowStore::new());
+    let audit = Arc::new(MemoryAuditSink::new());
+    let guards = Arc::new(DefaultGuardEvaluator::new());
+    let runtime = WorkflowRuntime::new(
+        defs,
+        store,
+        Arc::new(NoopRegistry),
+        guards,
+        audit as Arc<dyn AuditSink>,
+    );
+    FlowgateServer::new(runtime)
+}
 
 #[test]
 fn query_args_admits_empty() {
@@ -81,4 +139,347 @@ fn command_args_admits_define_shape() {
     assert!(a.definition.is_some());
     assert!(a.definition_id.is_none());
     assert!(a.workflow_id.is_none());
+}
+
+// ── dispatch_query behavior tests ─────────────────────────────────────────────
+
+/// Empty args → home. Home response has HATEOAS links.
+#[tokio::test]
+async fn query_empty_dispatches_to_home() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_query(json!({}), Principal::anonymous())
+        .await
+        .expect("home returns Ok");
+    // Home response contains links (HATEOAS invariant).
+    assert!(
+        resp.get("links").is_some() || resp.get("sections").is_some(),
+        "home response must contain links or sections; got: {resp}"
+    );
+}
+
+/// `query` present → search.
+#[tokio::test]
+async fn query_with_query_field_dispatches_to_search() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_query(json!({ "query": "test" }), Principal::anonymous())
+        .await
+        .expect("search returns Ok");
+    // Search response has `query` echo and `items` list.
+    assert!(
+        resp.get("items").is_some(),
+        "search response must contain items; got: {resp}"
+    );
+    assert_eq!(resp["query"].as_str(), Some("test"));
+}
+
+/// `subject` only → describe (browse-time).
+#[tokio::test]
+async fn query_subject_only_dispatches_to_describe() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_query(
+            json!({ "subject": "test_wf" }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("describe returns Ok");
+    // Describe response has `id` or `kind` field.
+    assert!(
+        resp.get("id").is_some() || resp.get("kind").is_some(),
+        "describe response must contain id or kind; got: {resp}"
+    );
+}
+
+/// `subject + workflowId` → describe-in-workflow. The subject is not a
+/// guidance fragment in our minimal config, so it falls through to the live
+/// discovery index path and returns the standard `{ id, item, links }` shape.
+#[tokio::test]
+async fn query_subject_plus_workflow_id_dispatches_to_describe_in_workflow() {
+    let server = test_server().await;
+    // Start a workflow so the workflowId is valid.
+    let start_resp = server
+        .dispatch_query(
+            // use dispatch_command-like call here via handle_start directly
+            json!({}),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("home");
+    // We need a valid workflow_id. Start one via dispatch_command.
+    let start = server
+        .dispatch_command(
+            json!({ "definitionId": "test_wf", "input": {} }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("start ok");
+    let workflow_id = start["workflow"]["id"]
+        .as_str()
+        .expect("workflow.id present")
+        .to_string();
+    let _ = start_resp; // suppress warning
+
+    let resp = server
+        .dispatch_query(
+            json!({ "subject": "test_wf", "workflowId": workflow_id }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("describe-in-workflow returns Ok");
+    // Should have describe-shaped output: id or kind present.
+    assert!(
+        resp.get("id").is_some() || resp.get("kind").is_some(),
+        "describe-in-workflow response must have id or kind; got: {resp}"
+    );
+}
+
+/// `workflowId + transition` → explain.
+#[tokio::test]
+async fn query_workflow_id_plus_transition_dispatches_to_explain() {
+    let server = test_server().await;
+    // Start a workflow to get a valid workflowId.
+    let start = server
+        .dispatch_command(
+            json!({ "definitionId": "test_wf", "input": {} }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("start ok");
+    let workflow_id = start["workflow"]["id"]
+        .as_str()
+        .expect("workflow.id present")
+        .to_string();
+
+    let resp = server
+        .dispatch_query(
+            json!({ "workflowId": workflow_id, "transition": "close" }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("explain returns Ok");
+    // Explain response has workflowId and transition fields.
+    assert!(
+        resp.get("workflowId").is_some() || resp.get("transition").is_some(),
+        "explain response must have workflowId or transition; got: {resp}"
+    );
+}
+
+/// `workflowId` alone → get.
+#[tokio::test]
+async fn query_workflow_id_alone_dispatches_to_get() {
+    let server = test_server().await;
+    let start = server
+        .dispatch_command(
+            json!({ "definitionId": "test_wf", "input": {} }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("start ok");
+    let workflow_id = start["workflow"]["id"]
+        .as_str()
+        .expect("workflow.id present")
+        .to_string();
+
+    let resp = server
+        .dispatch_query(
+            json!({ "workflowId": workflow_id }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("get returns Ok");
+    // Get response has workflow.id.
+    assert!(
+        resp["workflow"]["id"].as_str().is_some(),
+        "get response must have workflow.id; got: {resp}"
+    );
+}
+
+/// Ambiguous args (too many dispatch-relevant fields) → AMBIGUOUS_INTENT structured response.
+#[tokio::test]
+async fn query_ambiguous_args_returns_ambiguous_intent_error() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_query(
+            // subject + query + workflowId + transition is ambiguous
+            json!({
+                "subject": "test_wf",
+                "query": "something",
+                "workflowId": "wf_X",
+                "transition": "close"
+            }),
+            Principal::anonymous(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp["error"]["code"].as_str(),
+        Some("AMBIGUOUS_INTENT"),
+        "response must have AMBIGUOUS_INTENT error code; got: {resp}"
+    );
+    assert!(
+        resp["links"].as_array().is_some(),
+        "AMBIGUOUS_INTENT response must include HATEOAS links; got: {resp}"
+    );
+}
+
+// ── dispatch_command behavior tests ───────────────────────────────────────────
+
+/// `definitionId` (no workflowId, no subject) → start.
+#[tokio::test]
+async fn command_definition_id_dispatches_to_start() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_command(
+            json!({ "definitionId": "test_wf", "input": {} }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("start returns Ok");
+    // Start response has workflow.id.
+    assert!(
+        resp["workflow"]["id"].as_str().is_some(),
+        "start response must have workflow.id; got: {resp}"
+    );
+}
+
+/// `workflowId + transition + expectedVersion` → submit.
+#[tokio::test]
+async fn command_submit_shape_dispatches_to_submit() {
+    let server = test_server().await;
+    let start = server
+        .dispatch_command(
+            json!({ "definitionId": "test_wf", "input": {} }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("start");
+    let workflow_id = start["workflow"]["id"]
+        .as_str()
+        .expect("workflow.id")
+        .to_string();
+    let version = start["workflow"]["version"].as_u64().expect("version");
+
+    let resp = server
+        .dispatch_command(
+            json!({
+                "workflowId": workflow_id,
+                "expectedVersion": version,
+                "transition": "close",
+                "arguments": {}
+            }),
+            Principal::anonymous(),
+        )
+        .await
+        .expect("submit returns Ok");
+    // Submit response has workflow.state.
+    assert!(
+        resp["workflow"]["state"].as_str().is_some(),
+        "submit response must have workflow.state; got: {resp}"
+    );
+}
+
+/// `subject` with `:` + `definition` → lexicon define.
+#[tokio::test]
+async fn command_lexicon_define_shape_dispatches_to_define() {
+    let server = test_server().await;
+    // Lexicon define is governance-gated: agents are rejected for new terms
+    // which default to human-only governance. Use a human principal.
+    let human = Principal {
+        subject: "tester".to_string(),
+        roles: vec![Principal::HUMAN_ROLE.to_string()],
+        permissions: vec![],
+    };
+    let resp = server
+        .dispatch_command(
+            json!({
+                "subject": "lexicon:churn",
+                "definition": {
+                    "definition": "Loss of a paying customer in a billing period.",
+                    "boundedContext": "billing"
+                }
+            }),
+            human,
+        )
+        .await
+        .expect("lexicon define returns Ok");
+    // define response has term and entry fields.
+    assert_eq!(
+        resp["term"].as_str(),
+        Some("churn"),
+        "define response must echo term; got: {resp}"
+    );
+    assert!(
+        resp.get("entry").is_some(),
+        "define response must have entry; got: {resp}"
+    );
+    assert_eq!(
+        resp.pointer("/entry/bounded_context").and_then(|v| v.as_str()),
+        Some("billing"),
+        "bounded_context should round-trip through dispatch_lexicon_define reshape; got: {resp}"
+    );
+}
+
+/// `definitionId + workflowId` together → AMBIGUOUS_INTENT structured response.
+#[tokio::test]
+async fn command_definition_id_plus_workflow_id_returns_ambiguous_intent() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_command(
+            json!({ "definitionId": "test_wf", "workflowId": "wf_X" }),
+            Principal::anonymous(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp["error"]["code"].as_str(),
+        Some("AMBIGUOUS_INTENT"),
+        "response must have AMBIGUOUS_INTENT error code; got: {resp}"
+    );
+    assert!(
+        resp["links"].as_array().is_some(),
+        "AMBIGUOUS_INTENT response must include HATEOAS links; got: {resp}"
+    );
+}
+
+/// `subject + workflowId` on flowgate.command → AMBIGUOUS_INTENT (no command shape matches).
+#[tokio::test]
+async fn command_subject_plus_workflow_id_is_ambiguous() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_command(
+            json!({
+                "subject": "lexicon:churn",
+                "workflowId": "wf_01",
+                "definition": { "definition": "x" }
+            }),
+            Principal::anonymous(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp["error"]["code"].as_str(),
+        Some("AMBIGUOUS_INTENT"),
+        "subject+workflowId on command must return AMBIGUOUS_INTENT; got: {resp}"
+    );
+}
+
+/// Empty command args → AMBIGUOUS_INTENT structured response (no shape matches).
+#[tokio::test]
+async fn command_empty_args_returns_ambiguous_intent() {
+    let server = test_server().await;
+    let resp = server
+        .dispatch_command(json!({}), Principal::anonymous())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp["error"]["code"].as_str(),
+        Some("AMBIGUOUS_INTENT"),
+        "response must have AMBIGUOUS_INTENT error code; got: {resp}"
+    );
+    assert!(
+        resp["links"].as_array().is_some(),
+        "AMBIGUOUS_INTENT response must include HATEOAS links; got: {resp}"
+    );
 }

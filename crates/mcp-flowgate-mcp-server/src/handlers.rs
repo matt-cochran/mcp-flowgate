@@ -8,7 +8,7 @@ use mcp_flowgate_core::model::{GetWorkflow, Principal, StartWorkflow, SubmitTran
 use serde_json::{json, Value};
 
 use crate::args::{
-    DescribeArgs, ExplainArgs, GetArgs, SearchArgs, StartArgs, SubmitArgs,
+    CommandArgs, DescribeArgs, ExplainArgs, GetArgs, QueryArgs, SearchArgs, StartArgs, SubmitArgs,
 };
 use crate::tools::parse_kind;
 use crate::FlowgateServer;
@@ -634,6 +634,192 @@ impl FlowgateServer {
         Ok(json!({ "term": term, "entry": entry, "persisted_to": "overlay" }))
     }
 
+    // ── SPEC §32 — shape-routing dispatchers ─────────────────────────────────
+
+    /// Shape-route a `flowgate.query` call to the appropriate handler.
+    /// See SPEC §32 for the dispatch table.
+    ///
+    /// Dispatch table (first match wins):
+    /// - `(none)`               → home
+    /// - `query` present        → search
+    /// - `subject` only         → describe (browse-time, no audit)
+    /// - `subject + workflowId` → describe-in-workflow (audit fires)
+    /// - `workflowId + transition` → explain
+    /// - `workflowId` alone     → get
+    /// - anything else          → AMBIGUOUS_INTENT error
+    pub async fn dispatch_query(
+        &self,
+        args: Value,
+        principal: Principal,
+    ) -> anyhow::Result<Value> {
+        let parsed: QueryArgs = serde_json::from_value(args.clone())?;
+        let q   = parsed.query.is_some();
+        let s   = parsed.subject.is_some();
+        let wid = parsed.workflow_id.is_some();
+        let tr  = parsed.transition.is_some();
+
+        // Detect ambiguity: `query` (search intent) alongside subject/workflow
+        // fields (describe/get/explain intent) is unresolvable.
+        if q && (s || wid || tr) {
+            return Ok(ambiguous_intent_query());
+        }
+
+        match (q, s, wid, tr) {
+            (false, false, false, false) => self.handle_home().await,
+            (true, false, false, false) => {
+                // Search: pass through only the search-relevant fields.
+                // Omit null optionals so SearchArgs default kicks in for
+                // `limit` (which has a `#[serde(default)]` but not Option).
+                let mut search_args = serde_json::Map::new();
+                if let Some(qv) = parsed.query {
+                    search_args.insert("query".into(), Value::String(qv));
+                }
+                if let Some(k) = parsed.kind {
+                    search_args.insert("kind".into(), Value::String(k));
+                }
+                if let Some(l) = parsed.limit {
+                    search_args.insert("limit".into(), json!(l));
+                }
+                self.handle_search(Value::Object(search_args)).await
+            }
+            (false, true, false, false) => {
+                // Browse-time describe: reshape subject → id.
+                let describe_args = json!({
+                    "id": parsed.subject,
+                });
+                self.handle_describe(describe_args, principal).await
+            }
+            (false, true, true, false) => {
+                // Describe-in-workflow: subject + workflowId → audit fires.
+                let describe_args = json!({
+                    "id":         parsed.subject,
+                    "workflowId": parsed.workflow_id,
+                });
+                self.handle_describe(describe_args, principal).await
+            }
+            (false, false, true, true) => {
+                // Explain: workflowId + transition.
+                let explain_args = json!({
+                    "workflowId": parsed.workflow_id,
+                    "transition": parsed.transition,
+                });
+                self.handle_explain(explain_args).await
+            }
+            (false, false, true, false) => {
+                // Get: workflowId alone.
+                let get_args = json!({
+                    "workflowId": parsed.workflow_id,
+                });
+                self.handle_get(get_args, principal).await
+            }
+            _ => Ok(ambiguous_intent_query()),
+        }
+    }
+
+    /// Shape-route a `flowgate.command` call to the appropriate handler.
+    /// See SPEC §32 for the dispatch table.
+    ///
+    /// Dispatch table (exclusive shapes):
+    /// - `definitionId` only (no workflowId, no subject)           → start
+    /// - `workflowId + transition + expectedVersion` (no subject)   → submit
+    /// - `subject` with `:` namespace + `definition` (no workflowId, no definitionId) → define
+    /// - anything else                                               → AMBIGUOUS_INTENT
+    pub async fn dispatch_command(
+        &self,
+        args: Value,
+        principal: Principal,
+    ) -> anyhow::Result<Value> {
+        let parsed: CommandArgs = serde_json::from_value(args.clone())?;
+
+        let is_start = parsed.definition_id.is_some()
+            && parsed.workflow_id.is_none()
+            && parsed.subject.is_none();
+        let is_submit = parsed.workflow_id.is_some()
+            && parsed.transition.is_some()
+            && parsed.expected_version.is_some()
+            && parsed.subject.is_none();
+        let is_define = parsed.subject.as_deref().is_some_and(|s| s.contains(':'))
+            && parsed.definition.is_some()
+            && parsed.workflow_id.is_none()
+            && parsed.definition_id.is_none();
+
+        match (is_start, is_submit, is_define) {
+            (true, false, false) => {
+                // Start: reshape CommandArgs → StartArgs wire shape.
+                let start_args = json!({
+                    "definitionId": parsed.definition_id,
+                    "input":        parsed.input,
+                    "traceId":      parsed.trace_id,
+                    "runId":        parsed.run_id,
+                });
+                self.handle_start(start_args, principal).await
+            }
+            (false, true, false) => {
+                // Submit: reshape CommandArgs → SubmitArgs wire shape.
+                let submit_args = json!({
+                    "workflowId":      parsed.workflow_id,
+                    "expectedVersion": parsed.expected_version,
+                    "transition":      parsed.transition,
+                    "arguments":       parsed.arguments,
+                    "summary":         parsed.summary,
+                    "traceId":         parsed.trace_id,
+                    "runId":           parsed.run_id,
+                });
+                self.handle_submit(submit_args, principal).await
+            }
+            (false, false, true) => self.dispatch_lexicon_define(args, principal).await,
+            _ => Ok(ambiguous_intent_command()),
+        }
+    }
+
+    /// Shim: extract `<term>` from `subject: "lexicon:<term>"` and delegate
+    /// to the existing `handle_lexicon_define`. Other subject namespaces
+    /// (`script:`, `workflow:`, `skill:`) are reserved but have no writable
+    /// primitive today — they return AMBIGUOUS_INTENT.
+    async fn dispatch_lexicon_define(
+        &self,
+        args: Value,
+        principal: Principal,
+    ) -> anyhow::Result<Value> {
+        let parsed: CommandArgs = serde_json::from_value(args)?;
+        let subject = parsed.subject.as_deref().unwrap_or("");
+        match parse_subject_namespace(subject) {
+            (Some("lexicon"), term) => {
+                // Reshape into the existing lexicon-define argument format.
+                // handle_lexicon_define expects: { term, definition (string),
+                // bounded_context?, refs?, governance? }.
+                // CommandArgs.definition is an object:
+                //   { definition: "...", boundedContext: "...", refs: [...], governance: "..." }
+                let def_obj = parsed.definition.as_ref();
+                let definition_str = def_obj
+                    .and_then(|d| d.get("definition"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let bounded_context = def_obj
+                    .and_then(|d| d.get("boundedContext"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let refs = def_obj
+                    .and_then(|d| d.get("refs"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let governance = def_obj
+                    .and_then(|d| d.get("governance"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let reshape = json!({
+                    "term":            term,
+                    "definition":      definition_str,
+                    "bounded_context": bounded_context,
+                    "refs":            refs,
+                    "governance":      governance,
+                });
+                self.handle_lexicon_define(reshape, principal).await
+            }
+            _ => Ok(ambiguous_intent_command()),
+        }
+    }
+
     /// Build a synthetic "workflow definition" carrying the merged
     /// `_lexiconLibrary` so the core `lookup_term` / `search_terms`
     /// helpers (which expect a workflow-definition shape) can be
@@ -657,4 +843,52 @@ impl FlowgateServer {
         }
         json!({ "_lexiconLibrary": merged })
     }
+}
+
+// ── §32 dispatch helpers ──────────────────────────────────────────────────────
+
+/// Parse a cross-primitive subject namespace per §32.
+///
+/// `"lexicon:churn"` → `(Some("lexicon"), "churn")`
+/// `"swe_agent"` → `(None, "swe_agent")`
+pub(crate) fn parse_subject_namespace(s: &str) -> (Option<&str>, &str) {
+    match s.split_once(':') {
+        Some((ns, term)) => (Some(ns), term),
+        None => (None, s),
+    }
+}
+
+/// Structured AMBIGUOUS_INTENT response body for `flowgate.query` dispatch.
+/// Per SPEC §32, this is a 4xx-class structured response — NOT an MCP
+/// protocol error — so HATEOAS links remain machine-parseable by clients.
+fn ambiguous_intent_query() -> Value {
+    json!({
+        "error": {
+            "code": "AMBIGUOUS_INTENT",
+            "message": "flowgate.query args do not match a known dispatch shape",
+            "hint": "see §32 dispatch table: home (no args), search (query), describe (subject), get (workflowId), explain (workflowId+transition), describe-in-workflow (subject+workflowId)"
+        },
+        "links": [
+            { "rel": "home",   "method": "flowgate.query", "args": {} },
+            { "rel": "search", "method": "flowgate.query", "args": { "query": "" } }
+        ]
+    })
+}
+
+/// Structured AMBIGUOUS_INTENT response body for `flowgate.command` dispatch.
+/// Per SPEC §32, this is a 4xx-class structured response — NOT an MCP
+/// protocol error — so HATEOAS links remain machine-parseable by clients.
+fn ambiguous_intent_command() -> Value {
+    json!({
+        "error": {
+            "code": "AMBIGUOUS_INTENT",
+            "message": "flowgate.command args do not match a known dispatch shape",
+            "hint": "see §32 dispatch table: start (definitionId only), submit (workflowId+expectedVersion+transition), define (subject namespaced + definition)"
+        },
+        "links": [
+            { "rel": "start_example",  "method": "flowgate.command", "args": { "definitionId": "<your-workflow>" } },
+            { "rel": "submit_example", "method": "flowgate.command", "args": { "workflowId": "<id>", "expectedVersion": 0, "transition": "<name>" } },
+            { "rel": "define_example", "method": "flowgate.command", "args": { "subject": "lexicon:<term>", "definition": { "definition": "..." } } }
+        ]
+    })
 }
