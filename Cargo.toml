@@ -48,13 +48,12 @@ prettyplease = "0.2"
 syn = { version = "2", features = ["full"] }
 schemars = "0.8"
 
-# clippy::unwrap_used deferred to v0.4 — too many pre-existing Option/Result
-# unwraps across production code AND integration test files (83 sites total,
-# 15+ test files) to enable cleanly in this commit. The .expect("LOCK_POISONED: …")
-# convention + reviewer attention covers the regression risk for lock sites.
-# Re-evaluate enabling this lint once the test-file sites are cleaned up
-# (unwrap in tests is intentional; the lint has no cfg(not(test)) scope knob
-# in workspace [lints] — it would need per-file #[allow] in every test file).
+# T26 — clippy::unwrap_used is enabled per-crate via
+# `#![cfg_attr(not(test), warn(clippy::unwrap_used))]` in each lib.rs.
+# Workspace-wide enablement would catch integration-test files too
+# (where unwrap() is the deliberate panic pattern); the cfg-not-test
+# trick keeps the lint on production code only. See each crate's
+# lib.rs for the directive.
 [workspace.lints.clippy]
 
 [profile.release]

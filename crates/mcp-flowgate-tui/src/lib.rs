@@ -1,3 +1,7 @@
+// T26 — restriction-category lint on production code only. See
+// mcp-flowgate-core/src/lib.rs for the rationale.
+#![cfg_attr(not(test), warn(clippy::unwrap_used))]
+
 //! Library surface for the Flowgate TUI crate. Modules that have public
 //! contracts (`interpreter`, `agent_config`, `tui_config`, `sub_agent`,
 //! `flowgate_mcp`) live here so integration tests and the sub-agent

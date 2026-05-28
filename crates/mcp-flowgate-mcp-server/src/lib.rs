@@ -1,3 +1,7 @@
+// T26 — restriction-category lint on production code only. See
+// mcp-flowgate-core/src/lib.rs for the rationale.
+#![cfg_attr(not(test), warn(clippy::unwrap_used))]
+
 //! MCP server tool surface for mcp-flowgate.
 //!
 //! The tool list is stable across configs (invariant 9). It splits into two

@@ -10,6 +10,12 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — `clippy::unwrap_used` enforced on production code
+
+- **Per-crate lint** via `#![cfg_attr(not(test), warn(clippy::unwrap_used))]` in `mcp-flowgate-core`, `mcp-flowgate-mcp-server`, `mcp-flowgate-executors`, and `mcp-flowgate-tui` lib roots. `cfg(not(test))` keeps the lint off when `cargo test` builds (test modules use `.unwrap()` as the deliberate panic pattern); production builds enforce.
+- **Audit + fix of pre-existing production unwraps**: `mapping.rs:43` (context-is-object invariant), `mapping.rs:76` (single-key map invariant), `runtime_chain.rs:716` (match-arm-1 invariant), `tools.rs` ×3 (json!()-literal-is-object invariant), `doctor.rs:320` (user_present-checked invariant). Each became `.expect("invariant: ...")` naming the proof.
+- **`mcp-flowgate-schema`** skipped — typify-generated `include!()` blocks contain unwraps we can't refactor; the existing `#![allow(clippy::all)]` covers them. The deferred-comment in workspace `[workspace.lints.clippy]` is replaced with a pointer to the per-crate directive.
+
 ### Added — Active timeout watchdog + activated timeout test
 
 - **`WorkflowRuntime::spawn_timeout_watchdog`** — when a workflow definition declares `timeoutMs`, `start()` now spawns a tokio task that sleeps the timeout, then calls `get()` once. The internal call triggers the existing lazy timeout check; the workflow transitions to `onTimeout.target` and emits `workflow.timed_out` without needing any external caller to poke it. Fire-and-forget: handle detached, self-cleans when the task returns. Lost watchdogs across process restarts are still covered by the existing lazy check on next get/submit.

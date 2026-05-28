@@ -98,7 +98,7 @@ pub fn lexicon_search_tool_definition() -> Tool {
             "Search the lexicon (ubiquitous language store) for terms matching a query. \
              Returns hits with definitions, refs, and governance level.",
         ),
-        Arc::new(schema.as_object().cloned().unwrap()),
+        Arc::new(schema.as_object().cloned().expect("invariant: json!({ ... }) literal is an object")),
     )
 }
 
@@ -118,7 +118,7 @@ pub fn lexicon_lookup_tool_definition() -> Tool {
             "Exact lexicon lookup by term name. Returns the term's entry \
              (definition, examples, refs, governance) or null when absent.",
         ),
-        Arc::new(schema.as_object().cloned().unwrap()),
+        Arc::new(schema.as_object().cloned().expect("invariant: json!({ ... }) literal is an object")),
     )
 }
 
@@ -144,7 +144,7 @@ pub fn lexicon_define_tool_definition() -> Tool {
              LEXICON_DEFINE_REQUIRES_HUMAN. Writes land in the runtime overlay; \
              operators persist by editing flowgate.yaml.",
         ),
-        Arc::new(schema.as_object().cloned().unwrap()),
+        Arc::new(schema.as_object().cloned().expect("invariant: json!({ ... }) literal is an object")),
     )
 }
 

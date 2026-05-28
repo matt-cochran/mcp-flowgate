@@ -40,7 +40,11 @@ pub fn merge_output(
         })
         .collect();
 
-    let obj = context.as_object_mut().unwrap();
+    // Invariant: the `is_object()` guard above already proved this is
+    // an object — the `as_object_mut()` cannot return None here.
+    let obj = context
+        .as_object_mut()
+        .expect("invariant: context.is_object() checked above");
     for (k, v) in pending {
         obj.insert(k, v);
     }
@@ -73,7 +77,12 @@ pub fn resolve_value(
         }
 
         Value::Object(obj) if obj.len() == 1 => {
-            let (op, args) = obj.iter().next().unwrap();
+            // Invariant: the `len() == 1` match guard above guarantees
+            // iter().next() yields Some.
+            let (op, args) = obj
+                .iter()
+                .next()
+                .expect("invariant: obj.len() == 1 checked in match guard");
             match op.as_str() {
                 "set" => args.clone(),
 

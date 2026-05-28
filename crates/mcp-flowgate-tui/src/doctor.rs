@@ -317,7 +317,12 @@ fn check_agents_yaml(results: &mut Vec<CheckResult>) -> Option<Resolver> {
             shadow,
         )
     } else {
-        let p = user_path.clone().unwrap();
+        // Invariant: the early `!project_present && !user_present` branch
+        // returned above, so reaching the else here implies user_present
+        // is true, which in turn implies user_path is Some.
+        let p = user_path
+            .clone()
+            .expect("invariant: user_present checked at function head");
         (p.clone(), ConfigSource::User(p), None)
     };
 

@@ -1,3 +1,11 @@
+// T26 — restriction-category lint on production code only.
+// `#[cfg(test)]` modules inside production sources DO see this when
+// invoked via `cargo build`, but `cargo test` evaluates `not(test)`
+// as false (test cfg is on) and silences the warning everywhere —
+// which is what we want: tests panic deliberately via unwrap, prod
+// code should `.expect("invariant: ...")` or propagate.
+#![cfg_attr(not(test), warn(clippy::unwrap_used))]
+
 //! mcp-flowgate-core: workflow runtime, ports, audit, reliability.
 //!
 //! Every exposed proxy tool is internally represented as a workflow transition.

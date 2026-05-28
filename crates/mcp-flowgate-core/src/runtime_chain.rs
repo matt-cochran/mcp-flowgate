@@ -713,7 +713,10 @@ impl WorkflowRuntime {
                 instance.state,
                 candidates.len()
             ),
-            1 => Ok(viable.into_iter().next().unwrap()),
+            1 => Ok(viable
+                .into_iter()
+                .next()
+                .expect("invariant: match arm `1 =>` guarantees one viable candidate")),
             n => bail!(
                 "ambiguous deterministic transition in state '{}': \
                  {} of {} candidates had passing guards; \
