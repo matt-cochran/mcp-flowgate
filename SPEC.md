@@ -2343,3 +2343,426 @@ workflows:
 Tracked: this section will be promoted to a full SPEC chapter when v0.5
 implementation begins. Until then, the `include:` + copy-edit workflow
 is canonical.
+
+## 32. Tool-surface consolidation: `flowgate.query` + `flowgate.command` (DRAFT — queued for v0.5)
+
+**Status:** Design draft. Replaces the current 10-tool surface
+(`gateway.home / .search / .describe`, `workflow.start / .get / .submit /
+.explain`, `gateway.lexicon.search / .lookup / .define`) with **two**
+tools split by CQRS: `flowgate.query` for reads, `flowgate.command` for
+state-changing writes. Lexicon stays on the surface as a `subject`-
+namespaced primitive (`subject: "lexicon:<term>"` on both query and
+command) and additionally rides along as an embedded `lexicon` field in
+describe/get/explain responses to reduce follow-up lookup chatter.
+Greenfield clean cut — no deprecation aliases.
+
+### Why
+
+Two motivations land at the same answer:
+
+1. **Project invariant 9** says the tool count is stable regardless of
+   how many capabilities you wire in. Ten tools is more than needed —
+   the model never *picks* a tool by semantics; it picks by reading the
+   response's `links[].method + args` and copying. The tool name carries
+   nearly no decision weight.
+2. **MCP hosts gate permissions per tool name.** The honest axis for
+   that gate is read vs. write — operators want to auto-approve
+   read-only browsing and require confirmation for state-changing
+   moves. Three or seven tools over-segment that axis; one tool
+   collapses it. Two tools split exactly on it.
+
+### The two tools
+
+#### `flowgate.query`
+
+Side-effect-free reads. Audit fires on **describe-in-workflow** only —
+calls whose args contain BOTH `subject` AND `workflowId`. Browse-time
+describe (`subject` alone, no `workflowId`) does NOT audit; it's
+operator/model exploration of the catalog, not a "guidance fetched
+for use" event per §5.8. This matches today's `handlers.rs:74-114`
+behavior, which gates the audit emission on `workflow_id` being
+present. Audit does not fire on home, search, get, or explain in any
+form.
+
+Operations covered: `home`, `search`, `describe`, `get`, `explain`.
+Lexicon search (`query` + `kind: "lexicon"`) and lexicon lookup
+(`subject: "lexicon:<term>"`) ride on top of `search` and `describe`
+respectively — no separate dispatch rows. Lexicon lookup audits only
+when invoked with a `workflowId` (consistent with the rule above).
+
+Schema (sparse args; required-field shape determines which operation
+runs; all fields optional in JSON Schema):
+
+```json
+{
+  "query":      "string",   // search
+  "kind":       "string",   // search filter (workflow | skill | script | capability | …)
+  "subject":    "string",   // describe
+  "workflowId": "string",   // get + explain
+  "transition": "string",   // explain (alongside workflowId)
+  "limit":      "integer"   // search
+}
+```
+
+Dispatch:
+
+| Args present | Operation |
+|---|---|
+| (none) | `home` |
+| `query` | `search` |
+| `subject` only | `describe` (live config) |
+| `subject` + `workflowId` | `describe` (against the workflow instance's pinned snapshot, per §8.2) |
+| `workflowId` + `transition` | `explain` |
+| `workflowId` alone | `get` |
+
+**Modifiers vs. dispatch keys:** the rows above list the *required*
+fields that select an operation. Other schema fields are optional
+modifiers on the matched operation — `kind` filters the search,
+`limit` bounds it, `trace_id` / `run_id` (when present at the query
+schema in the future) thread through to audit. Adding a modifier does
+not change which row matches.
+
+Any combination of required fields not in the table returns a
+structured error response with a HATEOAS link suggesting the corrected
+call.
+
+#### Subject namespace (cross-primitive discriminator)
+
+The `subject` field admits a colon-prefixed namespace to disambiguate
+which primitive the lookup targets:
+
+| Prefix | Resolves to |
+|---|---|
+| (none) | guidance fragment, workflow definition, capability, or script — the discovery index decides by collision-free naming |
+| `lexicon:<term>` | a single lexicon entry |
+| `workflow:<id>` | a workflow definition (explicit form when an unprefixed name would collide) |
+| `script:<subject>` | a curated script body (explicit form) |
+| `skill:<subject>` | a guidance fragment (explicit form) |
+
+Unprefixed subjects keep working — the prefix is only required when an
+explicit namespace is needed to defeat a collision or to target the
+lexicon (which has no naming overlap with the other primitives but
+benefits from the explicit prefix for clarity in HATEOAS links). The
+same prefix scheme applies to `flowgate.command`'s `subject` field for
+writes (today: lexicon-define only; future writable primitives slot in
+without surface change).
+
+#### `flowgate.command`
+
+State-changing writes.
+
+Operations covered: `start` (workflow), `submit` (workflow transition),
+`define` (lexicon entry — and any future writable primitive that fits
+the subject-namespace pattern).
+
+Schema (sparse args; the present-fields shape selects the operation):
+
+```json
+{
+  "definitionId":    "string",   // start
+  "input":           "object",   // start
+  "workflowId":      "string",   // submit
+  "expectedVersion": "integer",  // submit (optimistic concurrency)
+  "transition":      "string",   // submit
+  "arguments":       "object",   // submit
+  "subject":         "string",   // define — e.g. "lexicon:<term>"
+  "definition":      "object",   // define — body shape per §30.5: { definition, bounded_context?, refs?, governance? }
+  "summary":         "string",   // submit
+  "trace_id":        "string",   // any
+  "run_id":          "string"    // any (also uniqueness assertion on start, see below)
+}
+```
+
+Dispatch:
+
+| Args present | Operation |
+|---|---|
+| `definitionId`, no `workflowId`, no `subject` | `start` |
+| `workflowId` + `transition` + `expectedVersion` | `submit` |
+| `subject` (namespaced, e.g. `lexicon:<term>`) + `definition` | `define` |
+
+**Modifiers vs. dispatch keys:** the rows list the *required* fields
+that select an operation. Other schema fields are optional modifiers on
+the matched operation — `input` on `start`, `arguments` / `summary` on
+`submit`, `trace_id` / `run_id` on any (with `run_id` additionally
+serving as the idempotency token on `start`). Adding a modifier does
+not change which row matches.
+
+Mutually-exclusive combinations of required fields (e.g., both
+`definitionId` and `workflowId`, or `subject` set alongside workflow
+fields) return a structured error with a HATEOAS link.
+
+### Uniqueness on `run_id`
+
+The existing `run_id` field — already threaded through `StartArgs` and
+`SubmitArgs` per §20.2 — becomes a **uniqueness assertion** for `start`
+commands, not a PUT-style idempotency token. Behavior:
+
+- `command({ definitionId: X, run_id: R })` called when no instance
+  exists with that `run_id`: creates and returns the new instance.
+- `command({ definitionId: X, run_id: R })` called when an instance
+  with `run_id == R` already exists (regardless of `definitionId`,
+  state, or input): **returns a structured error** —
+  `RUN_ID_ALREADY_RUNNING` — with a HATEOAS link to `get` so the
+  caller can inspect what's already there:
+
+  ```json
+  {
+    "error": {
+      "code": "RUN_ID_ALREADY_RUNNING",
+      "message": "An instance already exists with run_id 'r-abc123'.",
+      "hint": "Each run_id is single-use. Fetch the existing instance with the linked get, or retry with a fresh run_id."
+    },
+    "links": [
+      { "rel": "get", "method": "flowgate.query", "args": { "workflowId": "<existing>" } }
+    ]
+  }
+  ```
+
+- `run_id` omitted: server mints one. No uniqueness guarantee — the
+  caller opted out of the assertion.
+- `submit` already has optimistic concurrency via `expectedVersion`;
+  `run_id` on submit threads through to audit per §20.2 but does not
+  add an additional uniqueness constraint there (submits within the
+  same workflow legitimately reuse a session-level `run_id`).
+
+Why explicit-fail over silent-return: an operator debugging a retry
+storm wants to *see* the collision, not have it papered over. Same
+posture as `EXPECTED_VERSION_MISMATCH` on submit — both are
+optimistic-concurrency primitives that surface conflict to the caller.
+
+Implementation: in `WorkflowRuntime::start`, look up the store by
+`run_id` before issuing a new ID. If found, return
+`RUN_ID_ALREADY_RUNNING`. Otherwise create and proceed.
+
+### Lexicon — embedded reads; writes through `flowgate.command`
+
+Lexicon is a first-class primitive under the query/command split,
+identical in shape to workflow start/get/submit. No special carve-out:
+
+- **Reads** ride on top of the existing query dispatch via the
+  `subject` namespace. Lexicon search is `flowgate.query({ query,
+  kind: "lexicon" })`; lexicon lookup is `flowgate.query({ subject:
+  "lexicon:<term>" })`. Both go through the same handler code paths
+  the rest of describe/search use.
+- **Writes** are `flowgate.command({ subject: "lexicon:<term>",
+  definition: {...} })`. The inner `definition` shape is the canonical
+  lexicon entry per §30.5: `{ definition: string, bounded_context?:
+  string, refs?: string[], governance?: "human-only" | "agent-may-propose" }`.
+  The `term` is parsed from `subject` (the part after `lexicon:`), so
+  it doesn't repeat inside `definition`. Audit fires as today (the
+  existing `lexicon.defined` event), keyed off the subject prefix
+  rather than a tool name.
+
+#### Embedded definitions in describe/get/explain responses
+
+Beyond the explicit lookup path, definitions for terms **in scope at
+the call site** are embedded directly in `describe`, `get`, and
+`explain` response bodies as a `lexicon` field — so the model rarely
+needs to make a follow-up lookup call:
+
+```json
+{
+  "kind": "guidance",
+  "subject": "plan.specify.change-request",
+  "body": "...",
+  "lexicon": {
+    "acceptance-criteria": "Pass/fail conditions a change must meet…",
+    "blackboard":          { "hash": "sha256:…", "lookup_link": { "rel": "lexicon", "method": "flowgate.query", "args": { "subject": "lexicon:blackboard" } } }
+  },
+  "links": [ … ]
+}
+```
+
+The runtime extracts referenced terms by scanning guidance bodies at
+load time and resolves them against the workflow's pinned snapshot
+(SPEC §8.2). Inline definitions are included up to a configurable
+size budget; oversized definitions become a `lookup_link` the model
+can follow via a `subject: "lexicon:<term>"` query call.
+
+#### Governance (when to forbid LLM-driven lexicon writes)
+
+Whether the LLM should be allowed to extend the lexicon is a **policy
+question, not an architecture question** — it belongs in the same
+mechanism that governs `workflow.submit`: the guard system. Two layers
+of control:
+
+1. **Per-workflow guards.** A workflow author who wants a
+   knowledge-curation step can declare the transition that emits a
+   lexicon-define command; one that doesn't, can't. The same guard
+   primitives (`{ kind: expr, expr: "$.principal.role == 'author'" }`
+   etc.) gate the move.
+2. **Runtime feature flag.** `FlowgateServer::with_lexicon_writes(bool)`
+   gates whether the runtime accepts `define` commands at all,
+   mirroring the existing `with_skills_search` / `with_scripts_search`
+   pattern. Default-on for authoring builds, default-off for
+   production deployments where lexicon is curated content owned by
+   operators.
+
+**Reads are not gated.** Lexicon search and lookup are always
+available — same posture as the other discovery surfaces (workflow
+catalog, capability index). Operators who want to restrict which
+*subjects* the LLM can fetch use guards on the workflow that issues
+the query (the same lever that gates any other describe-shaped call).
+
+**Define-when-disabled error shape.** When `with_lexicon_writes(false)`,
+a `define` command returns a structured error with a HATEOAS link
+pointing at the operator-facing alternative:
+
+```json
+{
+  "error": {
+    "code": "LEXICON_WRITES_DISABLED",
+    "message": "This runtime does not accept lexicon define commands.",
+    "hint": "Operators add lexicon terms via the `flowgate lexicon define` CLI subcommand."
+  },
+  "links": [
+    { "rel": "operator_path", "method": "cli",            "args": { "command": "flowgate lexicon define <term> <definition>" } },
+    { "rel": "lookup",        "method": "flowgate.query", "args": { "subject": "lexicon:<term>" } }
+  ]
+}
+```
+
+The `cli` rel is informational (not a tool the model can call); the
+`lookup` rel keeps the read path discoverable so the model can confirm
+whether the term already exists before escalating.
+
+A `flowgate lexicon define <term> <definition>` CLI subcommand exists
+as a **convenience for operators** who prefer not to drive lexicon
+authoring through MCP — it's an alternative path, not the only one.
+Both paths emit the same `lexicon.defined` audit event.
+
+### HATEOAS contract (preserved + extended)
+
+Every response — success or error — carries a `links[]` array of
+`{ rel, method: "flowgate.query" | "flowgate.command", args: {...} }`
+entries. The args object is pre-filled with the exact shape the next
+legal operation needs. **Models chain by copying `link.args`
+verbatim**; they never derive the next call from the schema.
+
+The schema's job is to declare the universe of valid argument
+combinations; the runtime's job (via responses) is to tell the model
+exactly which subset is valid right now. Static schemas + dynamic
+responses = no `tools/list_changed` plumbing required.
+
+### Error response shape
+
+Ambiguous / invalid arg combinations return a structured 4xx-class
+response, not an MCP protocol error:
+
+```json
+{
+  "error": {
+    "code": "AMBIGUOUS_INTENT",
+    "message": "both definitionId and workflowId set; pick one",
+    "hint": "use definitionId to start a new instance, or workflowId+expectedVersion+transition to submit a transition on an existing instance"
+  },
+  "links": [
+    { "rel": "start",  "method": "flowgate.command", "args": { "definitionId": "swe_agent" } },
+    { "rel": "submit", "method": "flowgate.command", "args": { "workflowId": "...", "expectedVersion": 3 } }
+  ]
+}
+```
+
+The links point at exactly the two corrected calls. The model
+recovers by following one.
+
+### Authoring opt-ins (skills.search, scripts.search)
+
+The current flag-gated tools `gateway.skills.search` and
+`gateway.scripts.search` (SPEC §17.6, §22) collapse into the `search`
+mode of `flowgate.query` with a `kind` filter:
+
+```json
+{ "kind": "skill",  "query": "review.code" }
+{ "kind": "script", "query": "build.cargo" }
+```
+
+The opt-in machinery (`with_skills_search(true)`,
+`with_scripts_search(true)`) gates whether the runtime accepts these
+`kind` values; default-off behavior preserved. A search with a
+disabled `kind` returns an empty result + a `links[]` hint explaining
+how to enable it.
+
+### Migration: clean cut
+
+mcp-flowgate is greenfield; the old surface is removed in the same
+release the new one ships. No deprecation aliases, no compatibility
+shims, no parallel surfaces. The dispatch table maps each old tool to
+the corresponding unified call as a one-time refactor:
+
+| Old (removed) | New |
+|---|---|
+| `gateway.home` | `flowgate.query({})` |
+| `gateway.search` | `flowgate.query({ query, kind, limit })` |
+| `gateway.describe` | `flowgate.query({ subject })` (audit fires on `subject` presence) |
+| `workflow.start` | `flowgate.command({ definitionId, input })` |
+| `workflow.get` | `flowgate.query({ workflowId })` |
+| `workflow.submit` | `flowgate.command({ workflowId, expectedVersion, transition, arguments })` |
+| `workflow.explain` | `flowgate.query({ workflowId, transition })` |
+| `gateway.lexicon.search` | `flowgate.query({ kind: "lexicon", query })` |
+| `gateway.lexicon.lookup` | `flowgate.query({ subject: "lexicon:<term>" })` |
+| `gateway.lexicon.define` | `flowgate.command({ subject: "lexicon:<term>", definition })` (gated by `with_lexicon_writes(true)`) |
+
+Internal call sites (`crates/mcp-flowgate-tui/src/interpreter.rs:518/612`,
+the HATEOAS link emission in `handlers.rs`, `runtime.rs`,
+`runtime_links.rs`, `runtime_submit.rs`, `discovery.rs`,
+`discovery_indexer.rs`) get updated in lockstep with the surface
+change. The `TOOL_*` constants in `lib.rs:54-77` collapse to
+`TOOL_QUERY` + `TOOL_COMMAND`. Tests update their string literals
+in the same PR.
+
+### Open questions
+
+1. **Lexicon size budget.** What's the right default for inline-vs-link
+   threshold per term in embedded `lexicon` fields? Suggest 200 bytes
+   inline, `lookup_link` otherwise.
+2. **`summary` field on start.** Today `StartArgs` accepts `summary`
+   but the field is unused by the runtime. Drop it from `command`'s
+   schema, or keep it as a no-op for forward compat?
+3. **Lexicon term extraction performance.** Scanning every guidance
+   body at workflow.start time for referenced terms adds load. Is the
+   cost bounded? Suggest a regex-based first pass (cheap), cache per
+   pinned snapshot.
+4. **`with_lexicon_writes` default.** Default-on for authoring builds
+   (matches `with_skills_search` precedent) or default-off everywhere
+   so production deployments are safe by construction?
+
+### Implementation order
+
+One landing PR, sequenced internally so each step compiles green:
+
+1. Replace `TOOL_*` constants in `lib.rs:54-77` with `TOOL_QUERY` +
+   `TOOL_COMMAND`. Add `flowgate.query` / `flowgate.command` to the
+   `dispatch_call` match; delete the old arms (gateway/workflow/lexicon
+   handlers stay — they're called from the new dispatch).
+2. Add `subject` + `definition` to `CommandArgs`; add subject-namespace
+   prefix routing (`lexicon:` first; `script:`/`workflow:`/`skill:`
+   reserved). Wire `with_lexicon_writes(bool)` flag through
+   `FlowgateServer`.
+3. Update every HATEOAS link emission site to use the new tool names:
+   `handlers.rs` (multiple), `runtime.rs:406`, `runtime_links.rs:74`,
+   `runtime_submit.rs:648`, `discovery.rs:404/420/426`,
+   `discovery_indexer.rs:216/265`.
+4. Update the TUI interpreter (`crates/mcp-flowgate-tui/src/interpreter.rs:518/612`)
+   to call the new tool names. Update sub-agent comments
+   (`sub_agent.rs:15/18/25`).
+5. `run_id` idempotency in `WorkflowRuntime::start` (check for existing
+   instance by `(definitionId, run_id)` before creating).
+6. Embedded `lexicon` field in describe/get/explain response bodies.
+   Term extraction at workflow.start time (regex first-pass + cache
+   per pinned snapshot).
+7. `flowgate lexicon define <term> <definition>` CLI subcommand as
+   operator-friendly convenience wrapper for the same handler.
+8. Documentation: README + SPEC §5/§8.2/§12/§17/§22/§30 references
+   updated. Site refresh: 10 → 2 tools, no deprecation note required.
+   Operator-facing note: audit dashboards keyed on `tool_name =
+   "gateway.describe"` rebuild to filter by `tool_name = "flowgate.query"
+   AND args.subject IS NOT NULL AND args.workflowId IS NOT NULL` — the
+   audit *payload* schema is unchanged, only the discriminator the
+   dashboard reads. Same shape for the other consolidated tools.
+9. Test updates: every integration test that calls a tool by name
+   updates its string literal in the same PR.
+
+Tracked: this section is queued for v0.5. The current 10-tool surface
+remains canonical until v0.5 ships.
