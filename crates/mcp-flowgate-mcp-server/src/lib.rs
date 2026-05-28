@@ -29,7 +29,7 @@
 //! explicit `is required` check so the error message matches what callers
 //! (and audit consumers) already see today.
 
-mod args;
+pub mod args;
 mod handlers;
 mod tools;
 

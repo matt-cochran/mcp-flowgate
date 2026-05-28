@@ -205,3 +205,73 @@ pub(crate) fn empty_object_schema() -> Arc<JsonObject> {
     obj.insert("additionalProperties".into(), Value::Bool(false));
     Arc::new(obj)
 }
+
+/// Sparse args for `flowgate.query` (§32). Every field optional; the
+/// dispatch table (handlers.rs::dispatch_query) selects the operation
+/// — home / search / describe / get / explain — by which required
+/// fields are present.
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryArgs {
+    /// Search query string. Present → dispatch to `search`.
+    pub query: Option<String>,
+    /// Search filter (e.g. `workflow`, `skill`, `script`, `capability`,
+    /// `lexicon`). Modifier on `search`.
+    pub kind: Option<String>,
+    /// Describe subject. Present alone → browse-time describe. Present
+    /// with `workflow_id` → describe against the workflow's pinned
+    /// snapshot (audit fires; SPEC §5.8 + §8.2). Supports the
+    /// `lexicon:<term>` namespace prefix per §32.
+    pub subject: Option<String>,
+    /// Workflow instance id. Alone → `get`. With `transition` →
+    /// `explain`. With `subject` → describe-in-workflow.
+    pub workflow_id: Option<String>,
+    /// Transition name. Required for `explain`; present alongside
+    /// `workflow_id`.
+    pub transition: Option<String>,
+    /// Search result cap. Modifier on `search`.
+    #[schemars(schema_with = "integer_schema")]
+    pub limit: Option<u64>,
+}
+
+/// Sparse args for `flowgate.command` (§32). Every field optional; the
+/// dispatch table (handlers.rs::dispatch_command) selects the operation
+/// — start / submit / define — by which required fields are present.
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandArgs {
+    /// Workflow definition id to start. Present (with no `workflow_id`
+    /// and no `subject`) → `start`.
+    pub definition_id: Option<String>,
+    /// Initial input for `start`.
+    #[schemars(schema_with = "object_schema")]
+    pub input: Option<Value>,
+    /// Workflow instance id. Required for `submit` (alongside
+    /// `expected_version` and `transition`).
+    pub workflow_id: Option<String>,
+    /// Optimistic-concurrency version for `submit`. Required for the
+    /// submit shape.
+    #[schemars(schema_with = "integer_schema")]
+    pub expected_version: Option<u64>,
+    /// Transition name for `submit`.
+    pub transition: Option<String>,
+    /// Transition arguments for `submit`.
+    #[schemars(schema_with = "object_schema")]
+    pub arguments: Option<Value>,
+    /// Define subject — namespaced, e.g. `lexicon:<term>`. Present with
+    /// `definition` → `define` (SPEC §32, §30).
+    pub subject: Option<String>,
+    /// Definition body for `define`. Inner shape per SPEC §30.5:
+    /// `{ definition, boundedContext?, refs?, governance? }`.
+    #[schemars(schema_with = "object_schema")]
+    pub definition: Option<Value>,
+    /// SPEC §6.3 — model-authored submit summary. Stored to
+    /// `context.summary` on commit. Modifier on `submit`.
+    pub summary: Option<String>,
+    /// SPEC §20.2 — optional per-call trace id override.
+    pub trace_id: Option<String>,
+    /// SPEC §20.2 — optional per-call run id. On `start`, also doubles
+    /// as a uniqueness assertion per §32 (collisions return
+    /// `RUN_ID_ALREADY_RUNNING`).
+    pub run_id: Option<String>,
+}
