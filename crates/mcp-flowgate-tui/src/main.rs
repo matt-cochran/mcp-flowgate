@@ -27,35 +27,51 @@ use mcp_flowgate_tui::agent_resolver::{
 use mcp_flowgate_tui::interpreter::{
     AgentRegistry, LegacyAgentRegistry, McpToolCaller, YamlAgentRegistry,
 };
-use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, mcp_init, tui_config};
+use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, mcp_init, provider_keys, tui_config};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use wisp::runtime_state::RuntimeState;
 
 #[derive(Parser)]
+// MAINTENANCE: keep this grouped listing in sync with the `Command` enum
+// below. clap does not support per-group headings for subcommand
+// listings, so this prose is the only grouped view in `--help`. Adding
+// a variant without updating here will silently drop it from the
+// curated section.
 #[command(
     name = "flowgate-agent",
     version,
     about = "Flowgate governed agent runtime",
     long_about = "AI coding agent with workflow governance.\n\
 \n\
-Aagent framework with mcp-flowgate as its\n\
-sole MCP server. Every model action goes through governed\n\
-workflows — no ungoverned tool access.\n\
+Agent framework with mcp-flowgate as its sole MCP server. Every model action\n\
+goes through governed workflows — no ungoverned tool access.\n\
 \n\
-Modes:\n\
+Agent runtime:\n\
   (default)   Interactive TUI\n\
   headless    Run a single prompt non-interactively\n\
   acp         Start ACP server for editor integration\n\
-  agent       Manage agent configurations\n\
   walk        Drive a workflow via the deterministic interpreter\n\
+\n\
+Agent configuration:\n\
+  agent       Manage agent configurations\n\
+  validate-agents-config\n\
+              Validate an agents.yaml at any path; JSON envelope on stdout\n\
+  migrate-agents-from-cli\n\
+              Migrate v0.2 --agent flags to a v0.3 agents.yaml\n\
+  set-provider-keys\n\
+              Write provider API keys to ~/.config/flowgate/providers.env\n\
+\n\
+Diagnostics & generators:\n\
   doctor      Pre-flight checks before walk\n\
   mcp init    Generate .mcp.json (and optional editor configs)\n\
-  validate-agents-config\n              Validate an agents.yaml at any path; JSON envelope on stdout"
+  completions Print a shell completion script to stdout\n\
+  man         Render the man page to stdout (roff format)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -65,23 +81,61 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run a single prompt non-interactively
+    #[command(
+        next_help_heading = "Agent runtime",
+        long_about = "Run a single prompt non-interactively. Flowgate is wired as the sole MCP \
+                      server, so every model action goes through governed workflows."
+    )]
     Headless(aether_cli::headless::HeadlessArgs),
     /// Start the ACP server (for editor integration)
+    #[command(
+        next_help_heading = "Agent runtime",
+        long_about = "Start the ACP (Agent Client Protocol) server for editor integration. \
+                      The TUI spawns this mode as a subprocess; editors connect via ACP."
+    )]
     Acp(aether_cli::acp::AcpArgs),
     /// Manage agent configurations
-    #[command(subcommand)]
+    #[command(
+        subcommand,
+        next_help_heading = "Agent configuration",
+        long_about = "Manage agent configurations: create, list, remove. Settings live under \
+                      .aether/settings.json per the upstream aether convention."
+    )]
     Agent(aether_cli::agent::AgentCommand),
     /// Walk a Flowgate workflow to completion using the deterministic
     /// interpreter (SPEC §21). Spawns isolated sub-agents per delegate
     /// state; auto-advances states with no delegate.
+    #[command(
+        next_help_heading = "Agent runtime",
+        long_about = "Walk a Flowgate workflow end-to-end through the deterministic interpreter \
+                      (SPEC §21). Spawns isolated sub-agents per `delegate:` state; \
+                      auto-advances states with no delegate. Returns the final blackboard JSON \
+                      on stdout.\n\n\
+                      Example:\n  \
+                      flowgate walk --workflow swe_agent \\\n    \
+                      --input '{\"issue\":\"add timeout to RegistryExecutor\"}' \\\n    \
+                      --agent planning=anthropic/claude-sonnet-4 \\\n    \
+                      --agent editing=anthropic/claude-haiku-4-5-20251001"
+    )]
     Walk(WalkArgs),
     /// Pre-flight checks for `flowgate walk` — binary discovery, config
     /// resolution, workflow declared, agent API keys, script file URIs.
     /// Exits 0 if all pass; 1 if any fail. Run before `walk` to catch
     /// env / config issues before the workflow starts.
+    #[command(
+        next_help_heading = "Diagnostics & generators",
+        long_about = "Pre-flight checks before `flowgate walk` — binary discovery, config \
+                      resolution, workflow declared, agent API keys reachable, script file URIs \
+                      hash-verified. Exits 0 if all pass; 1 if any fail."
+    )]
     Doctor(DoctorCliArgs),
     /// MCP client config generators.
-    #[command(subcommand)]
+    #[command(
+        subcommand,
+        next_help_heading = "Diagnostics & generators",
+        long_about = "MCP client config generators. `mcp init` writes .mcp.json (and optional \
+                      editor-specific outputs) so MCP hosts see flowgate as the sole MCP server."
+    )]
     Mcp(McpCommand),
     /// Validate an `agents.yaml` file at an arbitrary path. Emits a
     /// JSON envelope `{ok, summary, error}` on stdout; exits 0 on
@@ -90,13 +144,56 @@ enum Command {
     /// validation (FMECA U3) when the operator's target path is
     /// outside the resolver's standard `.flowgate/agents.yaml` /
     /// `~/.config/flowgate/agents.yaml` lookup.
+    #[command(
+        next_help_heading = "Agent configuration",
+        long_about = "Validate an `agents.yaml` file at an arbitrary path. Emits a JSON \
+                      envelope {ok, summary, error} on stdout; exits 0 on pass, 1 on fail."
+    )]
     ValidateAgentsConfig(ValidateAgentsConfigArgs),
     /// Migrate v0.2 `--agent NAME=PROVIDER/MODEL` flags to a v0.3
     /// `agents.yaml`. Operators with many workflows still on the legacy
     /// CLI path can run this once + commit the file. Names must parse
     /// as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` or the
     /// literal `default`.
+    #[command(
+        next_help_heading = "Agent configuration",
+        long_about = "Migrate v0.2 --agent NAME=PROVIDER/MODEL flags to a v0.3 agents.yaml. \
+                      Operators with many workflows still on the legacy CLI path can run this \
+                      once + commit the file."
+    )]
     MigrateAgentsFromCli(MigrateAgentsArgs),
+    /// Write provider API keys to ~/.config/flowgate/providers.env
+    /// (override via $FLOWGATE_PROVIDER_KEYS_FILE). Loaded into env at
+    /// flowgate-agent startup; existing env vars take precedence.
+    /// Supported providers: anthropic, openai, openrouter, bedrock,
+    /// gemini.
+    #[command(
+        next_help_heading = "Agent configuration",
+        long_about = "Write provider API keys to ~/.config/flowgate/providers.env (override via \
+                      $FLOWGATE_PROVIDER_KEYS_FILE). Loaded into env at flowgate-agent startup; \
+                      existing env vars take precedence. Without flags, interactively walks all \
+                      supported providers (anthropic, openai, openrouter, bedrock, gemini)."
+    )]
+    SetProviderKeys(provider_keys::SetProviderKeysArgs),
+    /// Print a shell completion script to stdout. Source it from your
+    /// shell rc to get tab-completion for every flowgate subcommand
+    /// and flag. Example:
+    ///   flowgate completions bash > ~/.local/share/bash-completion/completions/flowgate
+    #[command(
+        next_help_heading = "Diagnostics & generators",
+        long_about = "Print a shell completion script to stdout. Source it from your shell rc \
+                      to tab-complete subcommands and flags."
+    )]
+    Completions(CompletionsArgs),
+    /// Render the man page to stdout (roff format). Install to a
+    /// MANPATH directory to enable `man flowgate`. Example:
+    ///   flowgate man | sudo tee /usr/local/share/man/man1/flowgate.1
+    #[command(
+        next_help_heading = "Diagnostics & generators",
+        long_about = "Render the man page to stdout (roff format). Install to a MANPATH \
+                      directory to enable `man flowgate`."
+    )]
+    Man,
 }
 
 #[derive(clap::Args, Debug)]
@@ -129,6 +226,12 @@ enum McpCommand {
     /// Generate MCP client config files for the project (`.mcp.json` plus
     /// optional editor-specific outputs via `--cursor` / `--claude-desktop`).
     Init(mcp_init::McpInitArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for (bash, zsh, fish, powershell, elvish).
+    pub shell: Shell,
 }
 
 #[derive(clap::Args, Debug)]
@@ -213,6 +316,21 @@ pub struct WalkArgs {
     pub config: Option<String>,
 }
 
+fn run_completions(args: CompletionsArgs) -> ExitCode {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    clap_complete::generate(args.shell, &mut cmd, name, &mut std::io::stdout());
+    ExitCode::SUCCESS
+}
+
+fn run_man() -> anyhow::Result<ExitCode> {
+    let cmd = Cli::command();
+    let man = clap_mangen::Man::new(cmd);
+    man.render(&mut std::io::stdout())
+        .map_err(|e| anyhow::anyhow!("man render failed: {e}"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
@@ -223,6 +341,7 @@ async fn main() -> Result<ExitCode> {
     // running. See crates/mcp-flowgate-tui/src/keyring.rs. No-op on
     // macOS and Windows.
     keyring::ensure_keyring_available();
+    provider_keys::load_into_env_if_present();
 
     match cli.command {
         None => run_tui().await,
@@ -236,6 +355,9 @@ async fn main() -> Result<ExitCode> {
         }
         Some(Command::ValidateAgentsConfig(args)) => Ok(run_validate_agents_config(&args.path)),
         Some(Command::MigrateAgentsFromCli(args)) => run_migrate_agents_from_cli(args),
+        Some(Command::SetProviderKeys(args)) => provider_keys::run(args),
+        Some(Command::Completions(args)) => Ok(run_completions(args)),
+        Some(Command::Man) => run_man(),
     }
 }
 

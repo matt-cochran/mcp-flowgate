@@ -25,6 +25,8 @@ llm = { version = "0.7", package = "aether-llm" }
 
 # Shared
 clap.workspace = true
+clap_complete.workspace = true
+clap_mangen.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
 serde.workspace = true
@@ -36,6 +38,7 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 # resolution for the TUI's log output. See B.4 in the audit-resolution
 # plan; replaces the previously hardcoded /tmp path.
 dirs = "5"
+tempfile.workspace = true
 # SPEC §21 — `async fn` in traits for the interpreter's `McpToolCaller`
 # and `SubAgentSpawner` abstractions. Required so tests can substitute
 # mocks without spinning up real MCP/LLM processes.
@@ -59,7 +62,7 @@ serde_yaml = { workspace = true }
 # flag re-probes; default doctor runs read the cache + warn on stale.
 chrono = { workspace = true }
 reqwest = { workspace = true }
-rpassword = { workspace = true }
+rpassword.workspace = true
 
 # Library surface: `interpreter`, `agent_config`, `tui_config`, `sub_agent`
 # (see src/lib.rs). Integration tests import via `mcp_flowgate_tui::…`.
@@ -83,4 +86,3 @@ name = "flowgate-tui"
 path = "src/main.rs"
 
 [dev-dependencies]
-tempfile = "3"
