@@ -91,6 +91,26 @@ enum Command {
     /// outside the resolver's standard `.flowgate/agents.yaml` /
     /// `~/.config/flowgate/agents.yaml` lookup.
     ValidateAgentsConfig(ValidateAgentsConfigArgs),
+    /// Migrate v0.2 `--agent NAME=PROVIDER/MODEL` flags to a v0.3
+    /// `agents.yaml`. Operators with many workflows still on the legacy
+    /// CLI path can run this once + commit the file. Names must parse
+    /// as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` or the
+    /// literal `default`.
+    MigrateAgentsFromCli(MigrateAgentsArgs),
+}
+
+#[derive(clap::Args, Debug)]
+pub struct MigrateAgentsArgs {
+    /// Agent specs (same shape as `walk --agent`). Pass one or more.
+    #[arg(long = "agent", required = true)]
+    pub agents: Vec<String>,
+    /// Output path. Default writes to `.flowgate/agents.yaml`.
+    #[arg(long, default_value = ".flowgate/agents.yaml")]
+    pub out: PathBuf,
+    /// Print the generated YAML to stdout instead of writing to disk.
+    /// Useful for diffing / piping through other tools before commit.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -208,7 +228,29 @@ async fn main() -> Result<ExitCode> {
             mcp_init::run_init(&args).map(|_| ExitCode::SUCCESS)
         }
         Some(Command::ValidateAgentsConfig(args)) => Ok(run_validate_agents_config(&args.path)),
+        Some(Command::MigrateAgentsFromCli(args)) => run_migrate_agents_from_cli(args),
     }
+}
+
+fn run_migrate_agents_from_cli(args: MigrateAgentsArgs) -> Result<ExitCode> {
+    let yaml = mcp_flowgate_tui::migrate::cli_args_to_yaml(&args.agents).map_err(|e| {
+        anyhow::anyhow!("migration failed: {e}")
+    })?;
+    if args.dry_run {
+        print!("{yaml}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    if args.out.exists() {
+        anyhow::bail!(
+            "{} already exists. Move it aside or pass --dry-run to inspect the proposed output \
+             before overwriting.",
+            args.out.display()
+        );
+    }
+    mcp_flowgate_tui::migrate::write_atomic(&yaml, &args.out)
+        .map_err(|e| anyhow::anyhow!("write {} failed: {e}", args.out.display()))?;
+    println!("wrote {} ({} bytes)", args.out.display(), yaml.len());
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Walk a workflow to completion via the deterministic interpreter

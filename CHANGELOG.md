@@ -10,6 +10,12 @@ covered by a stability commitment.
 
 ## [Unreleased]
 
+### Added — `flowgate migrate-agents-from-cli` subcommand
+
+- **One-shot migration** from v0.2 `--agent NAME=PROVIDER/MODEL` flags to v0.3 `agents.yaml`. Each name must parse as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` or the literal `default`; unmappable names list every offender so the operator can rename in one pass. Unknown providers are rejected by name. Schema-required `default:` is auto-filled from the first CLI flag when not given explicitly; promoted bindings stay in their named override slot too so operator intent stays visible. Atomic write (tempfile + fsync + rename); refuses to overwrite an existing file. `--dry-run` prints YAML to stdout without touching disk.
+- **`mcp_flowgate_tui::migrate`** — pure `cli_args_to_yaml(specs) -> Result<String, MigrationError>` + `write_atomic(yaml, path)`. 12 tests cover positive cases (single binding, multi-binding round-trip), error cases (no args, unmappable names, unknown provider, malformed arg), and the atomic-write helper (creates parent dirs, overwrites cleanly, no tmp leftover).
+- **Docs** — `agent-config.mdx` "Migrating from `--agent` flags" section with example invocation and constraint summary.
+
 ### Added — Per-provider feature toggles applied at spawn time
 
 - **`sub_agent::features_to_reasoning_effort`** — translates `agents.yaml` per-provider feature structs (`AnthropicFeatures`, `OpenAIFeatures`, `GoogleFeatures`) into aether-llm's effective `ReasoningEffort`. Anthropic `extended_thinking: true` with no budget defaults to High; explicit `thinking_budget_tokens` snaps to the nearest effort level (Low ≤2048 / Medium ≤6144 / High ≤16384 / Xhigh) using the same thresholds aether-llm's anthropic provider uses internally. OpenAI's `reasoning_effort` string passes through `low|medium|high|xhigh`; unknown values drop with a warning. Google's `thinking_budget_tokens` reuses the same budget-to-effort mapping.

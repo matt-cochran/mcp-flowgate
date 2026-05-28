@@ -163,6 +163,28 @@ Toggles are translated at spawn time into aether's effective `ReasoningEffort` a
 
 Aether-llm normalizes every "think harder" provider knob through the same `ReasoningEffort` enum internally, so the same effort level produces the right shape on each provider's API.
 
+## Migrating from `--agent` flags
+
+Operators upgrading from v0.2 with many `--agent NAME=PROVIDER/MODEL` invocations can convert them in one shot:
+
+```bash
+flowgate migrate-agents-from-cli \
+  --agent default=anthropic/claude-sonnet-4-6 \
+  --agent coding-frontier=openai/gpt-5 \
+  --agent reasoning=anthropic/claude-opus-4-7 \
+  --out .flowgate/agents.yaml
+```
+
+The command writes to `.flowgate/agents.yaml` (override the path with `--out`), atomically via tempfile + rename. Pass `--dry-run` to print the generated YAML to stdout without touching disk — useful for diffing or piping through other tools before commit.
+
+Constraints the migration enforces:
+
+- Each `--agent` name must parse as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` OR the literal `default`. Names like `planner` or `critic` from older v0.2 workflows fail with the offender list so you can rename them first.
+- Provider names must be one of the closed-enum values (`anthropic`, `openai`, `google`, `ollama`, `lmstudio`). Custom endpoints aren't expressible via the CLI form and need a hand-authored YAML.
+- If no `--agent default=...` is given, the first CLI flag is promoted to `default:` too (the schema requires `default:` to exist).
+- Duplicate names are silently last-wins, matching `walk --agent` semantics.
+- The command refuses to overwrite an existing file at `--out`; move it aside first or use `--dry-run`.
+
 ## Validating an agents.yaml by hand
 
 `flowgate validate-agents-config <path>` loads the file through the SAME `AgentsFile::from_path` the resolver uses at workflow start and prints a stable JSON envelope:

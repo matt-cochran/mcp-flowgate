@@ -15,5 +15,6 @@ pub mod interpreter;
 pub mod keyring;
 pub mod mcp_caller;
 pub mod mcp_init;
+pub mod migrate;
 pub mod sub_agent;
 pub mod tui_config;
