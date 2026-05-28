@@ -27,7 +27,7 @@ use mcp_flowgate_tui::agent_resolver::{
 use mcp_flowgate_tui::interpreter::{
     AgentRegistry, LegacyAgentRegistry, McpToolCaller, YamlAgentRegistry,
 };
-use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, mcp_init, tui_config};
+use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, mcp_init, provider_keys, tui_config};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -97,6 +97,12 @@ enum Command {
     /// as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` or the
     /// literal `default`.
     MigrateAgentsFromCli(MigrateAgentsArgs),
+    /// Write provider API keys to ~/.config/flowgate/providers.env
+    /// (override via $FLOWGATE_PROVIDER_KEYS_FILE). Loaded into env at
+    /// flowgate-agent startup; existing env vars take precedence.
+    /// Supported providers: anthropic, openai, openrouter, bedrock,
+    /// gemini.
+    SetProviderKeys(provider_keys::SetProviderKeysArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -223,6 +229,7 @@ async fn main() -> Result<ExitCode> {
     // running. See crates/mcp-flowgate-tui/src/keyring.rs. No-op on
     // macOS and Windows.
     keyring::ensure_keyring_available();
+    provider_keys::load_into_env_if_present();
 
     match cli.command {
         None => run_tui().await,
@@ -236,6 +243,7 @@ async fn main() -> Result<ExitCode> {
         }
         Some(Command::ValidateAgentsConfig(args)) => Ok(run_validate_agents_config(&args.path)),
         Some(Command::MigrateAgentsFromCli(args)) => run_migrate_agents_from_cli(args),
+        Some(Command::SetProviderKeys(args)) => provider_keys::run(args),
     }
 }
 
