@@ -19,7 +19,7 @@ If you just want governed tool calls from an LLM that already has an MCP host, y
 
 `flowgate` ships separately from `mcp-flowgate` so the gateway stays light. See [Installation](/installation/#optional-install-the-tui) for the cargo command and binary discovery rules.
 
-After install, the TUI auto-discovers the `mcp-flowgate` binary. Override with `MCP_FLOWGATE_PATH` if you've put it somewhere unusual.
+After install, the TUI auto-discovers the `mcp-flowgate` binary. Override with `MCP_FLOWGATE_PATH` if you've put it somewhere unusual. Provider API keys can come from shell-rc exports or from [`flowgate set-provider-keys`](/reference/set-provider-keys/), which writes them to a mode-0600 file the agent loads at startup.
 
 ## The four modes
 

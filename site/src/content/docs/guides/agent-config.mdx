@@ -96,6 +96,8 @@ This means you find out about an expired Anthropic key when you start the walk �
 
 Bypass with `FLOWGATE_SKIP_PREFLIGHT=1` (useful for CI / disconnected dev).
 
+If you'd rather not maintain shell-rc exports for the provider env vars, [`flowgate set-provider-keys`](/reference/set-provider-keys/) writes them to a mode-0600 file the agent loads at startup (existing env still wins).
+
 ## Strict mode
 
 If you want the specificity walk to be EXACT only — no fall-through from `coding-frontier` to `coding` — set:

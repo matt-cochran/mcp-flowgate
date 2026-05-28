@@ -1,0 +1,81 @@
+---
+title: "flowgate set-provider-keys"
+description: "Write provider API keys to disk for flowgate-agent to load at startup. Reference for flags, file format, and supported providers."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`flowgate set-provider-keys` writes provider API keys to a flat dotenv file at `~/.config/flowgate/providers.env` (mode 0600). The file is loaded into env at flowgate-agent startup — existing environment variables always win, so CI exports and shell rc still take precedence. Use it when you don't want to maintain shell-rc exports for every provider, or when you're working outside a CI context that already injects secrets.
+
+## Usage
+
+```bash
+# Interactive walk through every supported provider (press Enter to skip any)
+flowgate set-provider-keys
+
+# Prompt for one provider's key, no shell history
+flowgate set-provider-keys --provider anthropic
+
+# Read from stdin (useful in scripts; requires --provider; one env var per line)
+flowgate set-provider-keys --provider bedrock --stdin
+
+# List configured providers with masked values
+flowgate set-provider-keys --list
+
+# Remove a provider's key(s) from the file
+flowgate set-provider-keys --remove openrouter
+
+# Print the resolved path to the keys file and exit
+flowgate set-provider-keys --path
+```
+
+## File location
+
+The keys file defaults to `~/.config/flowgate/providers.env`. Override the path with the `$FLOWGATE_PROVIDER_KEYS_FILE` environment variable.
+
+The file is written with mode **0600** (owner read/write only). The parent directory is created with mode **0700** if it does not exist.
+
+<Aside type="caution">
+If the file mode is wider than 0600 — for example, if another tool wrote it world-readable — the loader refuses to read it and logs a `PermissionsTooOpen` error. Fix it with:
+
+```bash
+chmod 0600 ~/.config/flowgate/providers.env
+```
+</Aside>
+
+A missing file is silently OK — startup proceeds without any file-sourced keys. A permission error is logged as a warning and startup continues (existing env vars are unaffected).
+
+## Supported providers
+
+| Provider | Slug | Env vars written |
+|----------|------|-----------------|
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | `OPENAI_API_KEY` |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
+| AWS Bedrock | `bedrock` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` |
+
+Bedrock is the only provider that writes multiple vars. When using `--stdin` with `bedrock`, supply one var per line in the order `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`.
+
+## Precedence
+
+Existing environment variables always win over values read from the file. This means:
+
+- If `ANTHROPIC_API_KEY` is set in your shell (or injected by CI), the file value for `anthropic` is ignored.
+- Rotating a key in your shell rc takes effect immediately without touching the file.
+- The file is purely additive — it fills in vars that aren't already set.
+
+## Composition with keyring preflight
+
+On Linux and WSL2, flowgate-agent runs a `gnome-keyring-daemon` preflight (`keyring::ensure_keyring_available`) before starting. This preflight is unchanged by `set-provider-keys` — the two operate independently.
+
+Provider API keys written by `set-provider-keys` use a file-based path entirely separate from the OS keychain. Aether's OAuth flows (for editor integrations that use `aether-auth::OsKeyringStore`) still go through the OS keychain. Neither path affects the other.
+
+## Discoverability
+
+```bash
+flowgate set-provider-keys --help        # flag reference inline
+flowgate help set-provider-keys          # long-form description
+```
+
+See also [Discovering commands](/installation/#discovering-commands) for the full CLI discoverability surface — tab completions, man page, and long `--help` descriptions.

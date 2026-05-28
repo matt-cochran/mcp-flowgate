@@ -62,6 +62,18 @@ mcp-flowgate --help
 
 You should see the CLI help with the `serve` subcommand listed. Head to the [quick start](/docs/quick-start) to wire up your first capability.
 
+### Discovering commands
+
+`flowgate` ships with a full clap-driven CLI. Beyond `--help`, four extra discoverability surfaces:
+
+```bash
+flowgate help <subcommand>         # long-form description + example per command
+flowgate completions bash          # tab-completion script for your shell (bash/zsh/fish/powershell/elvish)
+flowgate man | less                # roff-formatted man page
+```
+
+Install the completion script to your shell-completion directory, or pipe `flowgate man` into a MANPATH directory to enable `man flowgate`.
+
 ## Optional: install the TUI
 
 The `mcp-flowgate-tui` crate ships a terminal client that drives the gateway interactively. Useful for trying workflows without a real MCP host attached, and for the per-state sub-agent routing (`delegate:`) pattern.
@@ -73,6 +85,18 @@ cargo install mcp-flowgate-tui
 You get two binaries with the same behavior — `flowgate` (the short, recommended invocation) and `flowgate-tui` (the long form for environments where `flowgate` collides with something else). The TUI auto-discovers the `mcp-flowgate` binary; if you've put it somewhere unusual, point at it with `MCP_FLOWGATE_PATH=/path/to/mcp-flowgate`.
 
 See [The TUI](/guides/tui/) for the rundown — picking a workflow, driving transitions, routing cognitive states to different agent configs, and reading the logs the TUI drops in `~/.cache/flowgate/logs/`.
+
+## Setting provider API keys
+
+`flowgate set-provider-keys` writes a flat dotenv file at `~/.config/flowgate/providers.env` (mode 0600). The file is loaded into env at flowgate-agent startup, but existing environment variables always win — so CI exports and shell rc still take precedence.
+
+```bash
+flowgate set-provider-keys                      # interactive walk through all 5 providers
+flowgate set-provider-keys --provider anthropic # one provider, no-echo prompt
+flowgate set-provider-keys --list               # show configured providers (masked)
+```
+
+Supported providers: anthropic, openai, openrouter, bedrock, gemini. Full reference: [`flowgate set-provider-keys`](/reference/set-provider-keys/).
 
 ## Wire flowgate into your editor
 
