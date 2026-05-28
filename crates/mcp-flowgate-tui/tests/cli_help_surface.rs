@@ -65,3 +65,18 @@ fn set_provider_keys_path_prints_resolved_path() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(stdout.trim(), want.to_string_lossy());
 }
+
+#[test]
+fn man_emits_roff_document() {
+    let out = Command::new(binary())
+        .arg("man")
+        .output()
+        .expect("run man");
+    assert!(out.status.success(), "man failed: {:?}", out);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with(".TH") || stdout.contains("\n.TH"),
+        "expected roff `.TH` header; got first 200 chars:\n{}",
+        &stdout.chars().take(200).collect::<String>()
+    );
+}

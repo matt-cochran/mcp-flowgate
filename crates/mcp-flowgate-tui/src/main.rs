@@ -109,6 +109,10 @@ enum Command {
     /// and flag. Example:
     ///   flowgate completions bash > ~/.local/share/bash-completion/completions/flowgate
     Completions(CompletionsArgs),
+    /// Render the man page to stdout (roff format). Install to a
+    /// MANPATH directory to enable `man flowgate`. Example:
+    ///   flowgate man | sudo tee /usr/local/share/man/man1/flowgate.1
+    Man,
 }
 
 #[derive(clap::Args, Debug)]
@@ -238,6 +242,14 @@ fn run_completions(args: CompletionsArgs) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_man() -> anyhow::Result<ExitCode> {
+    let cmd = Cli::command();
+    let man = clap_mangen::Man::new(cmd);
+    man.render(&mut std::io::stdout())
+        .map_err(|e| anyhow::anyhow!("man render failed: {e}"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
@@ -264,6 +276,7 @@ async fn main() -> Result<ExitCode> {
         Some(Command::MigrateAgentsFromCli(args)) => run_migrate_agents_from_cli(args),
         Some(Command::SetProviderKeys(args)) => provider_keys::run(args),
         Some(Command::Completions(args)) => Ok(run_completions(args)),
+        Some(Command::Man) => run_man(),
     }
 }
 
