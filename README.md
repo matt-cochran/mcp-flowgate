@@ -133,6 +133,40 @@ fifty — and the model's tool list stays at ten.
 
 ---
 
+## Discovering commands
+
+`flowgate` ships with a full clap-driven CLI. Four ways to find what's available:
+
+```bash
+flowgate --help                    # grouped list of every subcommand
+flowgate help <subcommand>         # long-form description + example
+flowgate completions bash          # emit a tab-completion script for your shell
+flowgate man | less                # roff-formatted man page (install with: sudo tee /usr/local/share/man/man1/flowgate.1)
+```
+
+Commands are grouped under three headings:
+
+- **Agent runtime** — `headless`, `acp`, `walk` (interactive TUI is the default with no subcommand).
+- **Agent configuration** — `agent`, `set-provider-keys`, `migrate-agents-from-cli`, `validate-agents-config`.
+- **Diagnostics & generators** — `doctor`, `mcp init`, `completions`, `man`.
+
+### Setting provider API keys
+
+`flowgate set-provider-keys` writes a flat dotenv file at `~/.config/flowgate/providers.env` (mode 0600, parent dir 0700) which is loaded into env at startup. Existing environment variables take precedence, so CI / shell exports always win over the file.
+
+```bash
+flowgate set-provider-keys                          # interactive walk through all 5 providers
+flowgate set-provider-keys --provider anthropic     # one provider, no-echo prompt
+echo "$KEY" | flowgate set-provider-keys --provider openrouter --stdin
+flowgate set-provider-keys --list                   # show configured providers (masked)
+flowgate set-provider-keys --remove gemini          # clear one provider's vars
+flowgate set-provider-keys --path                   # print the resolved file path
+```
+
+Override the file location with `$FLOWGATE_PROVIDER_KEYS_FILE`. Supported providers: `anthropic`, `openai`, `openrouter`, `bedrock`, `gemini`.
+
+---
+
 ## v0.2 — two-tier composition
 
 The biggest addition in v0.2 is **capabilities + orchestrators**:
