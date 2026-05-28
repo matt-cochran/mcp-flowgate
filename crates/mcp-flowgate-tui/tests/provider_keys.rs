@@ -211,3 +211,51 @@ fn load_into_env_with_missing_file_is_silent_ok() {
     provider_keys::load_into_env_with(&p, read_env, set_env).unwrap();
     assert!(written.borrow().is_empty());
 }
+
+#[test]
+fn provider_id_slug_round_trip_covers_all_variants() {
+    use provider_keys::ProviderId;
+    for p in ProviderId::ALL {
+        let slug = p.slug();
+        assert_eq!(
+            ProviderId::from_slug(slug),
+            Some(*p),
+            "round trip failed for {slug}"
+        );
+    }
+}
+
+#[test]
+fn provider_id_env_vars_match_aether_llm() {
+    use provider_keys::ProviderId;
+    // Verified against upstream aether-llm 0.7
+    // (packages/llm/src/providers/{anthropic,openai,openrouter,gemini,bedrock}).
+    // Single-key providers read one env var; bedrock uses the AWS SDK
+    // which honors the standard AWS_* trio.
+    assert_eq!(ProviderId::Anthropic.env_vars(),  &["ANTHROPIC_API_KEY"]);
+    assert_eq!(ProviderId::Openai.env_vars(),     &["OPENAI_API_KEY"]);
+    assert_eq!(ProviderId::Openrouter.env_vars(), &["OPENROUTER_API_KEY"]);
+    assert_eq!(ProviderId::Gemini.env_vars(),     &["GEMINI_API_KEY"]);
+    assert_eq!(
+        ProviderId::Bedrock.env_vars(),
+        &["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]
+    );
+}
+
+#[test]
+fn provider_id_unknown_slug_returns_none() {
+    assert_eq!(provider_keys::ProviderId::from_slug("claude"), None);
+    assert_eq!(provider_keys::ProviderId::from_slug(""), None);
+}
+
+#[test]
+fn provider_id_slugs_are_stable() {
+    use provider_keys::ProviderId;
+    // Slug strings are documented as stable; this test catches accidental
+    // renames that would silently break operator CLI scripts and file lines.
+    assert_eq!(ProviderId::Anthropic.slug(),  "anthropic");
+    assert_eq!(ProviderId::Openai.slug(),     "openai");
+    assert_eq!(ProviderId::Openrouter.slug(), "openrouter");
+    assert_eq!(ProviderId::Bedrock.slug(),    "bedrock");
+    assert_eq!(ProviderId::Gemini.slug(),     "gemini");
+}

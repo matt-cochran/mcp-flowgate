@@ -154,6 +154,63 @@ pub fn load_into_env_with(
     Ok(())
 }
 
+/// Provider aliases for the CLI `--provider <name>` flag. Each maps to
+/// one or more env vars that the underlying provider in `aether-llm`
+/// reads at request time. Slugs are stable (used in the file, on the
+/// CLI, and in log lines).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderId {
+    Anthropic,
+    Openai,
+    Openrouter,
+    Bedrock,
+    Gemini,
+}
+
+impl ProviderId {
+    pub const ALL: &'static [ProviderId] = &[
+        ProviderId::Anthropic,
+        ProviderId::Openai,
+        ProviderId::Openrouter,
+        ProviderId::Bedrock,
+        ProviderId::Gemini,
+    ];
+
+    pub fn slug(&self) -> &'static str {
+        match self {
+            ProviderId::Anthropic  => "anthropic",
+            ProviderId::Openai     => "openai",
+            ProviderId::Openrouter => "openrouter",
+            ProviderId::Bedrock    => "bedrock",
+            ProviderId::Gemini     => "gemini",
+        }
+    }
+
+    pub fn from_slug(s: &str) -> Option<Self> {
+        Self::ALL.iter().find(|p| p.slug() == s).copied()
+    }
+
+    pub fn env_vars(&self) -> &'static [&'static str] {
+        match self {
+            ProviderId::Anthropic  => &["ANTHROPIC_API_KEY"],
+            ProviderId::Openai     => &["OPENAI_API_KEY"],
+            ProviderId::Openrouter => &["OPENROUTER_API_KEY"],
+            ProviderId::Bedrock    => &["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
+            ProviderId::Gemini     => &["GEMINI_API_KEY"],
+        }
+    }
+
+    pub fn display(&self) -> &'static str {
+        match self {
+            ProviderId::Anthropic  => "Anthropic",
+            ProviderId::Openai     => "OpenAI",
+            ProviderId::Openrouter => "OpenRouter",
+            ProviderId::Bedrock    => "AWS Bedrock",
+            ProviderId::Gemini     => "Google Gemini",
+        }
+    }
+}
+
 /// Production wrapper. Calls [`load_into_env_with`] against the real
 /// process env, swallows missing-file (silent ok), logs other errors
 /// as a single warning and continues. Called once from `main()`
