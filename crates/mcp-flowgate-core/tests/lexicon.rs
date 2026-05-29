@@ -347,3 +347,143 @@ fn same_bounded_context_alias_collides_with_another_alias() {
     let msg = format!("{err:?}");
     assert!(msg.contains("LEXICON_ALIAS_COLLISION"), "got: {msg}");
 }
+
+// ── SPEC §30.10.3 — PENDING_DEFINITION placeholders ───────────────────────
+
+/// Helper: build a config where the scripts block references a subject
+/// whose name, after stripping the first verb segment, is `subject_name`.
+fn config_with_script_subject(script_key: &str, subject_lexicon_key: Option<&str>) -> serde_json::Value {
+    let mut lexicon = serde_json::Map::new();
+    if let Some(key) = subject_lexicon_key {
+        lexicon.insert(
+            key.to_string(),
+            json!({ "definition_short": "A real entry." }),
+        );
+    }
+    json!({
+        "version": "1.0.0",
+        "flowgate": { "strict_namespacing": false },
+        "lexicon": lexicon,
+        "scripts": {
+            script_key: {
+                "verb": "build",
+                "lifecycle": "experimental",
+                "body": "#!/usr/bin/env bash\necho hi\n"
+            }
+        },
+        "workflows": {
+            "demo": {
+                "initialState": "idle",
+                "states": { "idle": { "terminal": true } }
+            }
+        }
+    })
+}
+
+#[test]
+fn unregistered_script_subject_creates_pending_placeholder() {
+    // scripts: { "build.evidence-foo": {...} } — "evidence-foo" not in lexicon.
+    // After resolve, _lexiconLibrary on "demo" has a pending_definition entry for "evidence-foo".
+    let cfg = config_with_script_subject("build.evidence-foo", None);
+    let resolved = resolve(cfg).expect("resolve must succeed");
+    let lib = resolved
+        .pointer("/workflows/demo/_lexiconLibrary")
+        .expect("_lexiconLibrary must be stamped");
+    let entry = lib.get("evidence-foo").expect("pending placeholder must exist for evidence-foo");
+    assert_eq!(
+        entry.get("state").and_then(|v| v.as_str()),
+        Some("PENDING_DEFINITION"),
+        "entry must have state=PENDING_DEFINITION; got: {entry}"
+    );
+}
+
+#[test]
+fn registered_subject_does_not_get_placeholder() {
+    // lexicon has "evidence-foo" AND scripts references it.
+    // No placeholder created — real entry should be there.
+    let cfg = config_with_script_subject("build.evidence-foo", Some("evidence-foo"));
+    let resolved = resolve(cfg).expect("resolve must succeed");
+    let lib = resolved
+        .pointer("/workflows/demo/_lexiconLibrary")
+        .expect("_lexiconLibrary must be stamped");
+    let entry = lib.get("evidence-foo").expect("entry must exist");
+    // Real entry has definition_short, not state=pending_definition.
+    assert_ne!(
+        entry.get("state").and_then(|v| v.as_str()),
+        Some("PENDING_DEFINITION"),
+        "real entry must not have state=PENDING_DEFINITION"
+    );
+    assert!(
+        entry.get("definition_short").is_some(),
+        "real entry must carry definition_short"
+    );
+}
+
+#[test]
+fn multiple_unresolved_subjects_each_get_placeholder() {
+    // Two script entries with different subjects, neither in lexicon.
+    let cfg = json!({
+        "version": "1.0.0",
+        "flowgate": { "strict_namespacing": false },
+        "lexicon": {},
+        "scripts": {
+            "build.alpha-thing": {
+                "verb": "build",
+                "lifecycle": "experimental",
+                "body": "#!/usr/bin/env bash\necho alpha\n"
+            },
+            "build.beta-thing": {
+                "verb": "build",
+                "lifecycle": "experimental",
+                "body": "#!/usr/bin/env bash\necho beta\n"
+            }
+        },
+        "workflows": {
+            "demo": {
+                "initialState": "idle",
+                "states": { "idle": { "terminal": true } }
+            }
+        }
+    });
+    let resolved = resolve(cfg).expect("resolve must succeed");
+    let lib = resolved
+        .pointer("/workflows/demo/_lexiconLibrary")
+        .expect("_lexiconLibrary must be stamped");
+    let alpha = lib.get("alpha-thing").expect("placeholder for alpha-thing must exist");
+    let beta = lib.get("beta-thing").expect("placeholder for beta-thing must exist");
+    assert_eq!(alpha.get("state").and_then(|v| v.as_str()), Some("PENDING_DEFINITION"));
+    assert_eq!(beta.get("state").and_then(|v| v.as_str()), Some("PENDING_DEFINITION"));
+}
+
+#[test]
+fn unregistered_skill_subject_creates_pending_placeholder() {
+    // skills: { "plan.my-feature": {...} } — "my-feature" not in lexicon.
+    let cfg = json!({
+        "version": "1.0.0",
+        "flowgate": { "strict_namespacing": false },
+        "lexicon": {},
+        "skills": {
+            "plan.my-feature": {
+                "verb": "plan",
+                "lifecycle": "experimental",
+                "body": "A skill body."
+            }
+        },
+        "workflows": {
+            "demo": {
+                "initialState": "idle",
+                "states": { "idle": { "terminal": true } }
+            }
+        }
+    });
+    let resolved = resolve(cfg).expect("resolve must succeed");
+    let lib = resolved
+        .pointer("/workflows/demo/_lexiconLibrary")
+        .expect("_lexiconLibrary must be stamped");
+    let entry = lib.get("my-feature").expect("pending placeholder must exist for my-feature");
+    assert_eq!(
+        entry.get("state").and_then(|v| v.as_str()),
+        Some("PENDING_DEFINITION"),
+        "skill subject 'my-feature' must have a PENDING_DEFINITION placeholder"
+    );
+}

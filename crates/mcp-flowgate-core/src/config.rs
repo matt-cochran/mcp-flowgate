@@ -252,6 +252,17 @@ pub fn resolve_with_diagnostics(mut config: Value) -> anyhow::Result<(Value, Vec
     crate::lexicon::validate_lexicon(&config)?;
     crate::lexicon::stamp_lexicon_library(&mut config);
 
+    // 7-sexties-bis. SPEC §30.10.3 — inject PENDING_DEFINITION placeholders
+    //               for any subject referenced in scripts/skills/executors that
+    //               lacks an authored lexicon entry. Placeholders accumulate in
+    //               the stamped _lexiconLibrary so doctor and (Task 3.3) the
+    //               runtime can surface unresolved subjects without hard-failing
+    //               the load.
+    // TODO(SPEC §30.10.3): inherit bounded_context from the referencing
+    // config. Currently defaults to global; sufficient for v0.5 since
+    // Tier-1 lexicons are typically single-context.
+    crate::lexicon::inject_pending_definitions(&mut config);
+
     // 7-sexies. SPEC §6 — for every transition whose executor is
     //           `kind: workflow` with a `use:` block, synthesize the
     //           transition-level `output:` mapping from `use.outputs`

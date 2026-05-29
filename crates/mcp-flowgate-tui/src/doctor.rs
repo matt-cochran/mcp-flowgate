@@ -35,6 +35,7 @@ pub struct CheckResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckStatus {
     Pass,
+    Warn(String), // non-blocking advisory; identifier like LEXICON_PENDING_DEFINITIONS
     Fail(String), // identifier like MCP_FLOWGATE_NOT_FOUND for assertions
     Skip(String), // not applicable (e.g. workflow not specified)
 }
@@ -44,6 +45,13 @@ impl CheckResult {
         Self {
             name: name.into(),
             status: CheckStatus::Pass,
+            detail: detail.into(),
+        }
+    }
+    fn warn(name: impl Into<String>, code: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            status: CheckStatus::Warn(code.into()),
             detail: detail.into(),
         }
     }
@@ -275,7 +283,81 @@ pub async fn run_doctor(args: &DoctorArgs) -> Vec<CheckResult> {
         }
     }
 
+    // 9. SPEC §30.10.3 — lexicon coverage: surface PENDING_DEFINITION subjects.
+    //    Informational: we warn (Warn) so operators can add definitions, but
+    //    we do NOT change exit behaviour here. Runtime blocking (Task 3.3) is
+    //    separate.
+    if let Some(cfg) = &resolved_config {
+        check_lexicon_coverage(&mut results, cfg);
+    }
+
     results
+}
+
+/// SPEC §30.10.3 — scan the resolved config's workflow lexicon snapshots for
+/// `PENDING_DEFINITION` placeholder entries. Each pending subject means the
+/// operator references it in scripts/skills but has not yet added a
+/// `lexicon: { <subject>: { definition_short: "..." } }` entry.
+///
+/// Reports a `LEXICON_PENDING_DEFINITIONS` warning (Warn) listing each pending
+/// subject. Exit behaviour is NOT affected — doctor uses this as a soft signal;
+/// Task 3.3 handles runtime blocking.
+///
+/// Identifies workflows whose reachable surface includes a pending subject by
+/// checking each workflow's `_lexiconLibrary`.
+fn check_lexicon_coverage(results: &mut Vec<CheckResult>, cfg: &Value) {
+    let pending = mcp_flowgate_core::lexicon::pending_subjects_from_resolved(cfg);
+    if pending.is_empty() {
+        // Count how many authored lexicon entries exist.
+        let n_authored = cfg
+            .pointer("/lexicon")
+            .and_then(Value::as_object)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        results.push(CheckResult::pass(
+            "lexicon coverage",
+            format!("{n_authored} authored lexicon entry/entries, 0 pending"),
+        ));
+        return;
+    }
+
+    // Identify which workflows are "blocked" (have at least one pending subject
+    // in their _lexiconLibrary snapshot). At this task we report them
+    // informally; Task 3.3 will enforce blocking.
+    let mut blocked_workflows: Vec<String> = Vec::new();
+    if let Some(workflows) = cfg.pointer("/workflows").and_then(Value::as_object) {
+        for (wf_id, def) in workflows {
+            if let Some(lib) = def.get("_lexiconLibrary").and_then(Value::as_object) {
+                let has_pending = lib.iter().any(|(_, entry)| {
+                    entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION")
+                });
+                if has_pending {
+                    blocked_workflows.push(wf_id.clone());
+                }
+            }
+        }
+    }
+    blocked_workflows.sort();
+
+    let detail = format!(
+        "{} pending subject(s): {}{}",
+        pending.len(),
+        pending.join(", "),
+        if blocked_workflows.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " — would block workflow(s): {}",
+                blocked_workflows.join(", ")
+            )
+        }
+    );
+
+    results.push(CheckResult::warn(
+        "lexicon coverage",
+        "LEXICON_PENDING_DEFINITIONS",
+        detail,
+    ));
 }
 
 fn resolve_config(path: &Path) -> Result<Value> {
@@ -604,9 +686,14 @@ pub fn render_results(results: &[CheckResult]) -> String {
     let use_color = atty_stdout();
     let mut out = String::new();
     let mut failed = 0;
+    let mut warned = 0;
     for r in results {
         let (mark, color) = match &r.status {
             CheckStatus::Pass => ("✓", "\x1b[32m"),
+            CheckStatus::Warn(_) => {
+                warned += 1;
+                ("⚠", "\x1b[33m")
+            }
             CheckStatus::Fail(_) => {
                 failed += 1;
                 ("✗", "\x1b[31m")
@@ -620,6 +707,12 @@ pub fn render_results(results: &[CheckResult]) -> String {
             CheckStatus::Pass => {
                 out.push_str(&format!(
                     "  {prefix} {:<35} {}\n",
+                    r.name, r.detail
+                ));
+            }
+            CheckStatus::Warn(code) => {
+                out.push_str(&format!(
+                    "  {prefix} {:<35} {code}: {}\n",
                     r.name, r.detail
                 ));
             }
@@ -638,8 +731,12 @@ pub fn render_results(results: &[CheckResult]) -> String {
         }
     }
     out.push('\n');
-    if failed == 0 {
+    if failed == 0 && warned == 0 {
         out.push_str("doctor: all checks passed.\n");
+    } else if failed == 0 {
+        out.push_str(&format!(
+            "doctor: {warned} advisory warning(s). Run `flowgate walk` at your own risk.\n"
+        ));
     } else {
         out.push_str(&format!(
             "doctor: {failed} check(s) failed. Resolve the above before running `flowgate walk`.\n"

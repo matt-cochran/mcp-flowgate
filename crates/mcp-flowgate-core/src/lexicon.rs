@@ -327,6 +327,235 @@ pub fn define_allowed(
     }
 }
 
+/// SPEC §30.10.3 — walk all subject reference sites in `config` and return
+/// the subject portion (everything after the first dot) for each site.
+///
+/// Reference sites covered:
+/// - `scripts:` block keys   (e.g. `build.cargo.release` → subject `cargo.release`)
+/// - `skills:`  block keys   (e.g. `plan.evidence-foo` → subject `evidence-foo`)
+/// - `executor: { kind: script, subject: <name> }` inside workflows (subject is already
+///   a full verb-subject key; extract the post-first-dot portion)
+/// - `executor: { kind: skill, subject: <name> }` likewise (skill executors)
+///
+/// The verb-subject split: take everything after the first `.` separator.
+/// For `build.cargo.release` that is `cargo.release`; for `plan.foo` that is `foo`.
+/// If there is no `.` (should not happen after `validate_skills` / `validate_scripts`,
+/// which require at least two dotted segments), the whole key is returned as-is.
+///
+/// Returns a `Vec<String>` of subject portions (may contain duplicates across sites).
+pub fn walk_all_subject_references(config: &Value) -> Vec<String> {
+    let mut subjects = Vec::new();
+
+    // 1. scripts: block keys.
+    if let Some(scripts) = config.pointer("/scripts").and_then(Value::as_object) {
+        for key in scripts.keys() {
+            subjects.push(subject_portion(key));
+        }
+    }
+
+    // 2. skills: block keys.
+    if let Some(skills) = config.pointer("/skills").and_then(Value::as_object) {
+        for key in skills.keys() {
+            subjects.push(subject_portion(key));
+        }
+    }
+
+    // 3. capabilities: block keys (SPEC §30.10.2).
+    if let Some(caps) = config.pointer("/capabilities").and_then(Value::as_object) {
+        for key in caps.keys() {
+            subjects.push(subject_portion(key));
+        }
+    }
+
+    // 4. Workflow executors: kind=script or kind=skill with a `subject:` field,
+    //    and `system:` keys inside executor `map:` objects.
+    if let Some(workflows) = config.pointer("/workflows").and_then(Value::as_object) {
+        for wf_def in workflows.values() {
+            walk_executor_subjects_in_value(wf_def, &mut subjects);
+        }
+    }
+
+    subjects
+}
+
+/// Extract the subject portion from a verb-subject key by dropping everything
+/// up to and including the first `.`. If there is no `.`, returns the whole key.
+fn subject_portion(key: &str) -> String {
+    match key.split_once('.') {
+        Some((_, rest)) => rest.to_string(),
+        None => key.to_string(),
+    }
+}
+
+/// Recursively walk a JSON value looking for executor objects with
+/// `kind: "script"` or `kind: "skill"` and a `subject:` field, plus
+/// any `system:` key in executor `map:` objects whose value is a
+/// `<verb>.<subject>` string (SPEC §30.10.3).
+/// Pushes the subject-portion (post-first-dot) into `out`.
+fn walk_executor_subjects_in_value(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            let kind = map.get("kind").and_then(Value::as_str);
+            if matches!(kind, Some("script") | Some("skill")) {
+                // Direct executor object: extract subject and stop recursing
+                // into *this* object to avoid double-counting via the child walk.
+                if let Some(subj) = map.get("subject").and_then(Value::as_str) {
+                    out.push(subject_portion(subj));
+                }
+                // Still recurse into children (e.g. nested structures within the
+                // executor body), but skip the fields we already consumed.
+                for (key, child) in map {
+                    if key == "subject" {
+                        continue; // already handled above
+                    }
+                    walk_executor_subjects_in_value(child, out);
+                }
+                return;
+            }
+
+            // Check for an `executor:` wrapper (onEnter shape). Extract from
+            // the wrapper directly so we don't double-count via the child walk.
+            if let Some(exec) = map.get("executor").filter(|v| v.is_object()) {
+                let exec_kind = exec.pointer("/kind").and_then(Value::as_str);
+                if matches!(exec_kind, Some("script") | Some("skill")) {
+                    if let Some(subj) = exec.pointer("/subject").and_then(Value::as_str) {
+                        out.push(subject_portion(subj));
+                    }
+                    // Recurse into the rest of the current map (skipping `executor`
+                    // which we've handled) to find nested subjects.
+                    for (key, child) in map {
+                        if key == "executor" {
+                            continue;
+                        }
+                        walk_executor_subjects_in_value(child, out);
+                    }
+                    return;
+                }
+            }
+
+            // Extract subjects from `system:` keys in executor map: objects.
+            // A `system: "<verb>.<subject>"` string is a skill subject reference.
+            if let Some(system_val) = map.get("system").and_then(Value::as_str) {
+                if system_val.contains('.') {
+                    out.push(subject_portion(system_val));
+                }
+            }
+
+            // General recursion for all other object shapes.
+            for child in map.values() {
+                walk_executor_subjects_in_value(child, out);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr {
+                walk_executor_subjects_in_value(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// SPEC §30.10.3 — inject `PENDING_DEFINITION` placeholder entries into the
+/// lexicon snapshot on each workflow definition.
+///
+/// For every subject referenced in `config` (via `walk_all_subject_references`)
+/// that is NOT already present in the authored `lexicon:` block, we add a
+/// placeholder entry to each workflow's `_lexiconLibrary` snapshot:
+///
+/// ```json
+/// {
+///   "state": "PENDING_DEFINITION",
+///   "governance": "human-only"
+/// }
+/// ```
+///
+/// Placeholders skip `validate_lexicon`'s `definition_short` requirement
+/// because they are runtime-created, not author-created.
+///
+/// The placeholder marks that the subject is referenced but undefined; Task 3.3
+/// will use this to block workflow execution at runtime. For now, doctor
+/// surfaces them as informational warnings.
+///
+/// Returns the set of pending subject names (for use by callers like doctor).
+pub fn inject_pending_definitions(config: &mut Value) -> Vec<String> {
+    // Collect all referenced subjects.
+    let all_subjects = walk_all_subject_references(config);
+
+    // Collect all authored lexicon keys (the "registered" ones).
+    let authored_keys: std::collections::HashSet<String> = config
+        .pointer("/lexicon")
+        .and_then(Value::as_object)
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+
+    // Find subjects not yet registered.
+    let mut pending: Vec<String> = all_subjects
+        .into_iter()
+        .filter(|s| !authored_keys.contains(s.as_str()))
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    pending.sort(); // deterministic order for tests
+
+    if pending.is_empty() {
+        return Vec::new();
+    }
+
+    // Inject placeholders into each workflow's _lexiconLibrary.
+    let placeholder_entry = json!({
+        "state": "PENDING_DEFINITION",
+        "governance": DEFAULT_GOVERNANCE
+    });
+
+    if let Some(workflows) = config
+        .pointer_mut("/workflows")
+        .and_then(Value::as_object_mut)
+    {
+        for def in workflows.values_mut() {
+            let Some(obj) = def.as_object_mut() else { continue };
+            // Only inject into workflows that have a _lexiconLibrary stamped.
+            // If no _lexiconLibrary exists yet, create one (the workflow may have
+            // no authored entries to merge with).
+            let lib = obj
+                .entry("_lexiconLibrary".to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()))
+                .as_object_mut();
+            if let Some(lib_map) = lib {
+                for subject in &pending {
+                    // Don't overwrite an authored (resolved) entry.
+                    if !lib_map.contains_key(subject.as_str()) {
+                        lib_map.insert(subject.clone(), placeholder_entry.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    pending
+}
+
+/// SPEC §30.10.3 — scan the `_lexiconLibrary` of any workflow in an already-
+/// resolved config and return the list of subjects whose entries carry
+/// `state: "PENDING_DEFINITION"`. This is the post-resolve view used by
+/// doctor; it reads the data that `inject_pending_definitions` already wrote.
+///
+/// Returns a sorted, deduplicated list of pending subject names.
+pub fn pending_subjects_from_resolved(config: &Value) -> Vec<String> {
+    let mut pending = std::collections::BTreeSet::new();
+    if let Some(workflows) = config.pointer("/workflows").and_then(Value::as_object) {
+        for def in workflows.values() {
+            if let Some(lib) = def.get("_lexiconLibrary").and_then(Value::as_object) {
+                for (term, entry) in lib {
+                    if entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION") {
+                        pending.insert(term.clone());
+                    }
+                }
+            }
+        }
+    }
+    pending.into_iter().collect()
+}
+
 /// SPEC §30.5 / §30.10.1 — build a proposed entry value from
 /// `gateway.lexicon.define` arguments. Uses `definition_short` as the
 /// primary one-sentence definition field. Used by the MCP handler before

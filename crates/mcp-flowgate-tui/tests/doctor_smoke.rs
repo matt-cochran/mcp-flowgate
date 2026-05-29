@@ -6,6 +6,7 @@
 //! - CONFIG_INVALID when YAML doesn't parse
 //! - WORKFLOW_NOT_DECLARED when --workflow doesn't match
 //! - MISSING_API_KEY when provider env var is absent
+//! - lexicon coverage: LEXICON_PENDING_DEFINITIONS when unresolved subjects exist
 
 use mcp_flowgate_tui::doctor::{count_failures, run_doctor, CheckStatus, DoctorArgs};
 
@@ -126,5 +127,111 @@ async fn doctor_skips_workflow_check_when_no_config_argument() {
     assert!(
         find_status(&results, "WORKFLOW_NOT_DECLARED").is_none(),
         "should not attempt workflow-declared check without a config arg"
+    );
+}
+
+// ── lexicon coverage checks ───────────────────────────────────────────────
+
+/// Write a YAML config string to a temp file and return (TempDir, path string).
+/// TempDir must be held for the duration of the test or the file is deleted.
+fn write_temp_config(yaml: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gateway.yaml");
+    std::fs::write(&path, yaml).unwrap();
+    let path_str = path.to_string_lossy().into_owned();
+    (dir, path_str)
+}
+
+#[tokio::test]
+async fn doctor_warns_on_lexicon_pending_definitions() {
+    // Config has a script whose subject "evidence-foo" is not in the lexicon.
+    // Doctor should surface a LEXICON_PENDING_DEFINITIONS warning.
+    let yaml = r#"
+version: "1.0.0"
+flowgate:
+  strict_namespacing: false
+lexicon: {}
+scripts:
+  build.evidence-foo:
+    verb: build
+    lifecycle: experimental
+    body: |
+      #!/usr/bin/env bash
+      echo hi
+workflows:
+  demo:
+    initialState: idle
+    states:
+      idle:
+        terminal: true
+"#;
+    let (_dir, path) = write_temp_config(yaml);
+    let args = DoctorArgs {
+        config: Some(path),
+        workflow: None,
+        agents: vec![],
+        refresh_agents: false,
+    };
+    let results = run_doctor(&args).await;
+    let check = results
+        .iter()
+        .find(|r| r.name == "lexicon coverage")
+        .expect("lexicon coverage check must appear");
+    // The check warns (is a Warn with LEXICON_PENDING_DEFINITIONS) because
+    // "evidence-foo" has no lexicon entry. It must NOT be a Fail (that would
+    // break CI for configs with unresolved subjects).
+    assert!(
+        matches!(&check.status, CheckStatus::Warn(code) if code == "LEXICON_PENDING_DEFINITIONS"),
+        "expected Warn(LEXICON_PENDING_DEFINITIONS); got: {:?}",
+        check.status
+    );
+    assert!(
+        check.detail.contains("evidence-foo"),
+        "detail must name the pending subject; got: {}",
+        check.detail
+    );
+}
+
+#[tokio::test]
+async fn doctor_passes_lexicon_coverage_when_all_subjects_registered() {
+    // Config has a script whose subject "evidence-foo" IS in the lexicon.
+    // Doctor should pass the lexicon coverage check.
+    let yaml = r#"
+version: "1.0.0"
+flowgate:
+  strict_namespacing: false
+lexicon:
+  evidence-foo:
+    definition_short: "A real lexicon entry."
+scripts:
+  build.evidence-foo:
+    verb: build
+    lifecycle: experimental
+    body: |
+      #!/usr/bin/env bash
+      echo hi
+workflows:
+  demo:
+    initialState: idle
+    states:
+      idle:
+        terminal: true
+"#;
+    let (_dir, path) = write_temp_config(yaml);
+    let args = DoctorArgs {
+        config: Some(path),
+        workflow: None,
+        agents: vec![],
+        refresh_agents: false,
+    };
+    let results = run_doctor(&args).await;
+    let check = results
+        .iter()
+        .find(|r| r.name == "lexicon coverage")
+        .expect("lexicon coverage check must appear");
+    assert!(
+        matches!(check.status, CheckStatus::Pass),
+        "lexicon coverage must pass when all subjects are registered; got: {:?}",
+        check.status
     );
 }
