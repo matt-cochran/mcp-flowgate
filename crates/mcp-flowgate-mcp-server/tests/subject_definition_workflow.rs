@@ -16,7 +16,9 @@
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
+use mcp_flowgate_core::embeddings::{EmbeddingError, EmbeddingProvider};
 use mcp_flowgate_core::guards::DefaultGuardEvaluator;
 use mcp_flowgate_core::ports::ExecutorRegistry;
 use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
@@ -24,6 +26,52 @@ use mcp_flowgate_core::WorkflowRuntime;
 use mcp_flowgate_mcp_server::{FlowgateServer, TOOL_COMMAND};
 use rmcp::model::{CallToolRequestParams, JsonObject};
 use serde_json::{json, Value};
+
+// ── Embedding stubs ───────────────────────────────────────────────────────────
+
+/// Test stub: always returns the same fixed vector regardless of input.
+struct FixedVectorEmbedder {
+    vector: Vec<f32>,
+}
+
+impl FixedVectorEmbedder {
+    fn returning(vector: Vec<f32>) -> Arc<Self> {
+        Arc::new(Self { vector })
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for FixedVectorEmbedder {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Ok(self.vector.clone())
+    }
+
+    fn dimensions(&self) -> usize {
+        self.vector.len()
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "fixed"
+    }
+}
+
+/// Test stub: always returns an error.
+struct FailingEmbedder;
+
+#[async_trait]
+impl EmbeddingProvider for FailingEmbedder {
+    async fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+        Err(EmbeddingError::BackendFailed("injected test failure".to_string()))
+    }
+
+    fn dimensions(&self) -> usize {
+        0
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "failing"
+    }
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,6 +91,14 @@ fn call(tool: &'static str, args: Value) -> CallToolRequestParams {
 /// Build a server with lexicon writes enabled and the given config.
 /// Returns (server, audit_sink) so tests can inspect emitted events.
 fn build_server(cfg: Value) -> (FlowgateServer, Arc<MemoryAuditSink>) {
+    build_server_with_embedder(cfg, None)
+}
+
+/// Build a server with lexicon writes enabled, given config, and optional embedder.
+fn build_server_with_embedder(
+    cfg: Value,
+    embedder: Option<Arc<dyn EmbeddingProvider>>,
+) -> (FlowgateServer, Arc<MemoryAuditSink>) {
     let resolved = mcp_flowgate_core::config::resolve(cfg).expect("resolve");
     let pending = mcp_flowgate_core::lexicon::pending_subjects_from_resolved(&resolved);
     let lexicon_base = resolved
@@ -60,13 +116,15 @@ fn build_server(cfg: Value) -> (FlowgateServer, Arc<MemoryAuditSink>) {
         guards,
         audit.clone() as Arc<dyn AuditSink>,
     );
-    (
-        FlowgateServer::new(runtime)
-            .with_lexicon_writes(true)
-            .with_lexicon(lexicon_base)
-            .with_pending_subjects(pending),
-        audit,
-    )
+    let server = FlowgateServer::new(runtime)
+        .with_lexicon_writes(true)
+        .with_lexicon(lexicon_base)
+        .with_pending_subjects(pending);
+    let server = match embedder {
+        Some(e) => server.with_embedder(e),
+        None => server,
+    };
+    (server, audit)
 }
 
 /// Config with a scripts block referencing an unregistered subject.
@@ -1424,5 +1482,251 @@ async fn after_cancel_retry_of_original_start_succeeds_because_subject_removed_f
         retry_resp.pointer("/workflow/id").is_some(),
         "retry after cancel must create workflow instance — cancel lifts the block \
          by removing the subject from the live pending set (Gap 2 fix); got: {retry_resp}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase F — EmbeddingProvider wiring (SPEC §30.10.10)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// define_new with a configured embedder stores `_embedding` on the entry.
+#[tokio::test]
+async fn define_with_embedder_stores_embedding_on_entry() {
+    let fixed_vec = vec![1.0_f32, 0.0, 0.0];
+    let embedder = FixedVectorEmbedder::returning(fixed_vec.clone());
+    let (server, _) = build_server_with_embedder(
+        config_with_pending_and_real(),
+        Some(embedder as Arc<dyn EmbeddingProvider>),
+    );
+
+    // Define the pending subject.
+    let _ = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({
+                "subject": "lexicon:evidence-foo",
+                "definition": {
+                    "definition_short": "An evidence artifact for foo.",
+                    "governance": "human-only"
+                }
+            }),
+        ))
+        .await
+        .expect("dispatch_call");
+
+    // Lookup and verify _embedding is stored.
+    let lookup = server
+        .dispatch_call(call(
+            "flowgate.query",
+            json!({ "subject": "lexicon:evidence-foo" }),
+        ))
+        .await
+        .expect("lookup");
+
+    let stored = lookup
+        .pointer("/entry/_embedding")
+        .and_then(Value::as_array)
+        .expect("_embedding must be present on the entry after define with embedder");
+
+    let parsed: Vec<f32> = stored
+        .iter()
+        .map(|v| v.as_f64().expect("f64") as f32)
+        .collect();
+    assert_eq!(
+        parsed, fixed_vec,
+        "stored _embedding must match the fixed-vector embedder output; got: {lookup}"
+    );
+}
+
+/// define_new with an embedder that fails returns EMBEDDING_BACKEND_FAILED structured error.
+#[tokio::test]
+async fn define_with_failing_embedder_returns_embedding_backend_failed() {
+    let failing: Arc<dyn EmbeddingProvider> = Arc::new(FailingEmbedder);
+    let (server, _) =
+        build_server_with_embedder(config_with_pending_and_real(), Some(failing));
+
+    let resp = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({
+                "subject": "lexicon:evidence-foo",
+                "definition": {
+                    "definition_short": "An evidence artifact.",
+                    "governance": "human-only"
+                }
+            }),
+        ))
+        .await
+        .expect("dispatch_call returns Ok — error is structured");
+
+    assert_eq!(
+        resp.pointer("/error/code").and_then(Value::as_str),
+        Some("EMBEDDING_BACKEND_FAILED"),
+        "define with failing embedder must return EMBEDDING_BACKEND_FAILED; got: {resp}"
+    );
+}
+
+/// After alias_add with an embedder, the entry's `_embedding` reflects the
+/// new text (canonical + aliases). The vector changes between define and alias_add.
+#[tokio::test]
+async fn alias_add_with_embedder_reembeds_entry() {
+    // Use a counter-based embedder: returns a distinct vector on each call
+    // so we can verify a second embed call happened.
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingEmbedder {
+        call_count: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl EmbeddingProvider for CountingEmbedder {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
+            let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+            // Each call returns a distinct vector so we can tell them apart.
+            Ok(vec![n as f32, 0.0, 0.0])
+        }
+        fn dimensions(&self) -> usize { 3 }
+        fn backend_name(&self) -> &'static str { "counting" }
+    }
+
+    let embedder: Arc<dyn EmbeddingProvider> =
+        Arc::new(CountingEmbedder { call_count: AtomicUsize::new(0) });
+    let (server, _) =
+        build_server_with_embedder(config_with_pending_and_real(), Some(embedder));
+
+    // Step 1: define evidence-pack (already in base, use evidence-foo as a new term).
+    let _ = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({
+                "subject": "lexicon:evidence-foo",
+                "definition": {
+                    "definition_short": "Initial definition.",
+                    "governance": "human-only"
+                }
+            }),
+        ))
+        .await
+        .expect("define");
+
+    // Capture embedding after define (call_count was 0 → embedding = [0.0, 0.0, 0.0]).
+    let lookup_after_define = server
+        .dispatch_call(call(
+            "flowgate.query",
+            json!({ "subject": "lexicon:evidence-foo" }),
+        ))
+        .await
+        .expect("lookup after define");
+    let emb_after_define = lookup_after_define
+        .pointer("/entry/_embedding/0")
+        .and_then(Value::as_f64)
+        .expect("_embedding[0] after define") as f32;
+
+    // Step 2: alias_add → triggers re-embed (call_count becomes 1 → embedding = [1.0, 0.0, 0.0]).
+    let _ = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({
+                "subject": "lexicon:evidence-foo",
+                "definition": { "aliases_add": ["ef"] }
+            }),
+        ))
+        .await
+        .expect("alias_add");
+
+    let lookup_after_alias = server
+        .dispatch_call(call(
+            "flowgate.query",
+            json!({ "subject": "lexicon:evidence-foo" }),
+        ))
+        .await
+        .expect("lookup after alias_add");
+    let emb_after_alias = lookup_after_alias
+        .pointer("/entry/_embedding/0")
+        .and_then(Value::as_f64)
+        .expect("_embedding[0] after alias_add") as f32;
+
+    assert!(
+        (emb_after_alias - emb_after_define).abs() > 0.5,
+        "embedding must change after alias_add (re-embed fires); \
+         before={emb_after_define}, after={emb_after_alias}"
+    );
+}
+
+/// Full end-to-end: configure embedder; trigger SUBJECT_NEEDS_DEFINITION;
+/// assert a candidate has `match_kind: "semantic"`.
+///
+/// The lexicon has an entry with a stored `_embedding` that is near-identical
+/// to the vector the embedder returns for the unknown subject — so Tier 3 fires
+/// and the candidate shows up as `match_kind: "semantic"`.
+#[tokio::test]
+async fn subject_needs_definition_includes_semantic_candidate_when_embedder_configured() {
+    // near_x has cosine ≈ 0.9994 with unit_x — well above the 0.85 threshold.
+    let unit_x = vec![1.0_f32, 0.0, 0.0];
+    let near_x = vec![0.9994_f32, 0.035, 0.0];
+
+    // Config: evidence-candidate has a stored _embedding (near_x).
+    // evidence-foo is pending (no definition). The embedder will return
+    // unit_x for the unknown subject, giving cosine ≥ 0.85 → semantic hit.
+    let cfg = json!({
+        "version": "1.0.0",
+        "flowgate": { "strict_namespacing": false },
+        "lexicon": {
+            "evidence-candidate": {
+                "definition_short": "A semantically similar evidence concept.",
+                "governance": "human-only",
+                "_embedding": near_x
+            }
+        },
+        "scripts": {
+            "build.evidence-foo": {
+                "verb": "build",
+                "lifecycle": "experimental",
+                "body": "#!/usr/bin/env bash\necho hi\n"
+            }
+        },
+        "workflows": {
+            "pending_wf": {
+                "initialState": "idle",
+                "states": { "idle": { "terminal": true } }
+            }
+        }
+    });
+
+    // Embedder always returns unit_x — the unknown subject's query vector.
+    let embedder = FixedVectorEmbedder::returning(unit_x);
+    let (server, _) = build_server_with_embedder(cfg, Some(embedder as Arc<dyn EmbeddingProvider>));
+
+    // Trigger SUBJECT_NEEDS_DEFINITION.
+    let resp = server
+        .dispatch_call(call(
+            TOOL_COMMAND,
+            json!({ "definitionId": "pending_wf", "input": {} }),
+        ))
+        .await
+        .expect("dispatch_call");
+
+    assert_eq!(
+        resp["interaction"]["kind"], "SUBJECT_NEEDS_DEFINITION",
+        "expected SUBJECT_NEEDS_DEFINITION interaction; got: {resp}"
+    );
+
+    let candidates = resp["interaction"]["candidates"]
+        .as_array()
+        .expect("candidates must be an array");
+
+    let semantic_candidate = candidates
+        .iter()
+        .find(|c| c["match_kind"] == "semantic");
+
+    assert!(
+        semantic_candidate.is_some(),
+        "candidates must include at least one semantic match when embedder is configured \
+         and a stored vector matches; candidates: {candidates:?}"
+    );
+    assert_eq!(
+        semantic_candidate.unwrap()["term"],
+        "evidence-candidate",
+        "semantic candidate must identify evidence-candidate; candidates: {candidates:?}"
     );
 }

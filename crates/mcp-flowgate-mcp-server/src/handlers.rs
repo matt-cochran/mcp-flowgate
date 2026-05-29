@@ -4,6 +4,7 @@
 
 use mcp_flowgate_core::audit::AuditEvent;
 use mcp_flowgate_core::discovery::{DiscoveryKind, SearchRequest};
+use mcp_flowgate_core::embeddings::{entry_embed_text, EmbeddingProvider};
 use mcp_flowgate_core::model::{GetWorkflow, Principal, StartWorkflow, SubmitTransition};
 use serde_json::{json, Value};
 
@@ -726,12 +727,48 @@ impl FlowgateServer {
             }
         }
 
+        // SPEC §30.10.10 — compute embedding when a non-noop backend is wired.
+        let embedding = if self.embedder.backend_name() == "noop" {
+            None
+        } else {
+            let aliases_str: Vec<String> = args
+                .get("refs") // aliases not yet attached; use empty slice for now
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let text = entry_embed_text(
+                &term,
+                &aliases_str,
+                definition,
+                None,
+            );
+            match self.embedder.embed(&text).await {
+                Ok(vec) => Some(vec),
+                Err(e) => {
+                    return Ok(json!({
+                        "error": {
+                            "code": "EMBEDDING_BACKEND_FAILED",
+                            "message": format!(
+                                "embedding backend '{}' failed: {e}",
+                                self.embedder.backend_name()
+                            ),
+                        },
+                        "links": []
+                    }));
+                }
+            }
+        };
+
         let entry = mcp_flowgate_core::lexicon::build_entry(
             definition,
             bounded_context.as_deref(),
             refs.as_ref(),
             governance.as_deref(),
-            None, // embeddings computed by the caller when a backend is configured
+            embedding,
         )?;
         {
             let mut overlay = self
@@ -1080,7 +1117,44 @@ impl FlowgateServer {
                 new_aliases.push(v);
             }
         }
+        let new_aliases_strings: Vec<String> = new_aliases
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
         entry.insert("aliases".to_string(), serde_json::Value::Array(new_aliases));
+
+        // SPEC §30.10.10 — re-embed when a non-noop backend is configured.
+        // The embed text includes aliases (per entry_embed_text), so adding an
+        // alias changes the text and the stored vector would go stale.
+        if self.embedder.backend_name() != "noop" {
+            let definition_short = entry
+                .get("definition_short")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let text = entry_embed_text(
+                target_term,
+                &new_aliases_strings,
+                definition_short,
+                None,
+            );
+            match self.embedder.embed(&text).await {
+                Ok(vec) => {
+                    entry.insert("_embedding".to_string(), json!(vec));
+                }
+                Err(e) => {
+                    return Ok(json!({
+                        "error": {
+                            "code": "EMBEDDING_BACKEND_FAILED",
+                            "message": format!(
+                                "embedding backend '{}' failed during alias re-embed: {e}",
+                                self.embedder.backend_name()
+                            ),
+                        },
+                        "links": []
+                    }));
+                }
+            }
+        }
 
         // Persist into the overlay.
         {
@@ -1280,27 +1354,34 @@ pub(crate) fn run_id_already_running(run_id: &str, existing_workflow_id: &str) -
 /// - `cancel`         — abandon the original command.
 ///
 /// `merged_definition` is the synthetic `{ _lexiconLibrary: … }` value from
-/// `FlowgateServer::lexicon_merged_definition`. It is used to rank Tier 1/2/4
-/// candidates (SPEC §30.10.10.4) — exact canonical, exact alias, Levenshtein
-/// fuzzy ≤ 2. Pass `None` (or an empty object) to receive an empty candidates
-/// array (backward-compatible fallback).
-pub(crate) fn subject_needs_definition(
+/// `FlowgateServer::lexicon_merged_definition`. It is used to rank Tier 1/2/3/4
+/// candidates (SPEC §30.10.10.4) — exact canonical, exact alias, semantic
+/// (Tier 3), Levenshtein fuzzy ≤ 2. Pass `None` (or an empty object) to receive
+/// an empty candidates array (backward-compatible fallback).
+///
+/// `embedder` — when `Some`, Tier 3 semantic ranking fires via
+/// `rank_candidates_with_embedding`. Pass `None` or a `NoopEmbedder` to skip.
+pub(crate) async fn subject_needs_definition(
     unknown_subject: &str,
     bounded_context: Option<&str>,
     workflow_id_context: &str,
     queued_args: &Value,
     merged_definition: Option<&Value>,
+    embedder: Option<&dyn EmbeddingProvider>,
 ) -> Value {
     let lexicon_subject = format!("lexicon:{unknown_subject}");
 
-    // Compute candidates from Tier 1, 2, 4.
+    // Compute candidates from Tier 1, 2, 3 (if embedder), 4.
     let candidates: serde_json::Value = match merged_definition {
         Some(def) => {
-            let ranked = mcp_flowgate_core::lexicon_candidates::rank_candidates_from_definition(
-                unknown_subject,
-                def,
-                bounded_context,
-            );
+            let ranked =
+                mcp_flowgate_core::lexicon_candidates::rank_candidates_from_definition_with_embedding(
+                    unknown_subject,
+                    def,
+                    bounded_context,
+                    embedder,
+                )
+                .await;
             mcp_flowgate_core::lexicon_candidates::candidates_to_json(&ranked)
         }
         None => serde_json::Value::Array(vec![]),

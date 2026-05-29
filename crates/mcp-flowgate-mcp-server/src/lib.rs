@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use mcp_flowgate_core::audit::AuditEvent;
 use mcp_flowgate_core::discovery::{DiscoveryIndex, InMemoryDiscoveryIndex};
+use mcp_flowgate_core::embeddings::{EmbeddingProvider, NoopEmbedder};
 use mcp_flowgate_core::model::Principal;
 use mcp_flowgate_core::runtime::WorkflowRuntime;
 use rmcp::model::{
@@ -103,6 +104,13 @@ pub struct FlowgateServer {
     /// (SPEC §30.10.9).
     pub(crate) pending_subjects:
         Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
+    /// SPEC §30.10.10 — optional Tier 3 embedding backend. Defaults to
+    /// `NoopEmbedder` (disabled). Set via `with_embedder(...)`. When a
+    /// non-noop backend is configured, `handle_lexicon_define` computes and
+    /// stores the embedding vector on each written entry, and
+    /// `rank_candidates_with_embedding` fires Tier 3 in the
+    /// SUBJECT_NEEDS_DEFINITION candidate response.
+    pub(crate) embedder: Arc<dyn EmbeddingProvider>,
 }
 
 impl FlowgateServer {
@@ -126,7 +134,16 @@ impl FlowgateServer {
             pending_subjects: Arc::new(std::sync::RwLock::new(
                 std::collections::HashSet::new(),
             )),
+            embedder: Arc::new(NoopEmbedder),
         }
+    }
+
+    /// SPEC §30.10.10 — wire an embedding backend. Default is `NoopEmbedder`
+    /// (Tier 3 disabled). Pass an `Arc<HttpEmbedder>` or any custom
+    /// `EmbeddingProvider` to enable semantic candidate ranking.
+    pub fn with_embedder(mut self, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+        self.embedder = embedder;
+        self
     }
 
     /// SPEC §30 — wire the persistent (config-loaded) lexicon base.
@@ -219,6 +236,156 @@ impl FlowgateServer {
     ) -> Self {
         self.script_ack_store = Some(store);
         self
+    }
+
+    /// SPEC §30.10.10 — config-load embedding backfill.
+    ///
+    /// Walks every entry in `lexicon_base` (and the current overlay). For
+    /// each entry that is missing `_embedding`, computes and stores the
+    /// vector. Failures are logged as warnings and do NOT abort — backfill
+    /// is best-effort.
+    ///
+    /// No-ops when the active embedder is `NoopEmbedder`. Callers should
+    /// invoke this once after `FlowgateServer::new(...).with_lexicon(...)
+    /// .with_embedder(...)` before serving requests.
+    pub async fn backfill_lexicon_embeddings(&self) {
+        if self.embedder.backend_name() == "noop" {
+            return;
+        }
+
+        // Collect (term, entry) pairs that are missing _embedding.
+        // We read base and overlay independently then merge for the full picture.
+        let base_entries: Vec<(String, serde_json::Value)> = {
+            self.lexicon_base
+                .as_object()
+                .map(|obj| obj.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default()
+        };
+
+        // Process base entries first.
+        for (term, entry) in base_entries {
+            if entry
+                .get("_embedding")
+                .is_some()
+            {
+                continue; // already has embedding
+            }
+            if entry.get("state").and_then(serde_json::Value::as_str)
+                == Some("PENDING_DEFINITION")
+            {
+                continue; // skip placeholders
+            }
+            let definition_short = entry
+                .get("definition_short")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let aliases: Vec<String> = entry
+                .get("aliases")
+                .and_then(serde_json::Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let text = mcp_flowgate_core::embeddings::entry_embed_text(
+                &term,
+                &aliases,
+                definition_short,
+                None,
+            );
+            match self.embedder.embed(&text).await {
+                Ok(vec) => {
+                    let mut updated = entry.clone();
+                    if let Some(obj) = updated.as_object_mut() {
+                        obj.insert("_embedding".to_string(), json!(vec));
+                    }
+                    let mut overlay = self
+                        .lexicon_overlay
+                        .write()
+                        .expect("lexicon overlay lock poisoned");
+                    // Only write to overlay if not already present there
+                    // (overlay would have a more-current version).
+                    overlay.entry(term.clone()).or_insert(updated);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        term = %term,
+                        error = %e,
+                        "backfill_lexicon_embeddings: failed to embed term '{}'; skipping",
+                        term
+                    );
+                }
+            }
+        }
+
+        // Process overlay entries (may have been added at runtime, also missing _embedding).
+        let overlay_snapshot: Vec<(String, serde_json::Value)> = {
+            let overlay = self
+                .lexicon_overlay
+                .read()
+                .expect("lexicon overlay lock poisoned");
+            overlay.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        };
+
+        let mut overlay_updates: Vec<(String, serde_json::Value)> = Vec::new();
+        for (term, entry) in overlay_snapshot {
+            if entry.get("_embedding").is_some() {
+                continue;
+            }
+            if entry.get("state").and_then(serde_json::Value::as_str)
+                == Some("PENDING_DEFINITION")
+            {
+                continue;
+            }
+            let definition_short = entry
+                .get("definition_short")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let aliases: Vec<String> = entry
+                .get("aliases")
+                .and_then(serde_json::Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let text = mcp_flowgate_core::embeddings::entry_embed_text(
+                &term,
+                &aliases,
+                definition_short,
+                None,
+            );
+            match self.embedder.embed(&text).await {
+                Ok(vec) => {
+                    let mut updated = entry.clone();
+                    if let Some(obj) = updated.as_object_mut() {
+                        obj.insert("_embedding".to_string(), json!(vec));
+                    }
+                    overlay_updates.push((term.clone(), updated));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        term = %term,
+                        error = %e,
+                        "backfill_lexicon_embeddings: failed to embed overlay term '{}'; skipping",
+                        term
+                    );
+                }
+            }
+        }
+
+        // Batch-write overlay updates.
+        if !overlay_updates.is_empty() {
+            let mut overlay = self
+                .lexicon_overlay
+                .write()
+                .expect("lexicon overlay lock poisoned");
+            for (term, updated) in overlay_updates {
+                overlay.insert(term, updated);
+            }
+        }
     }
 
     fn principal(_request: &CallToolRequestParams) -> Principal {
@@ -403,7 +570,9 @@ impl FlowgateServer {
                         workflow_id_context,
                         &original_args,
                         Some(&merged),
-                    ));
+                        Some(self.embedder.as_ref()),
+                    )
+                    .await);
                 }
 
                 Err(McpError::internal_error(e.to_string(), None))
