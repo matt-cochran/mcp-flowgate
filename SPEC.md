@@ -2441,13 +2441,90 @@ operators can review the system's vocabulary evolution.
 | `SUBJECT_NEEDS_DEFINITION` | Runtime: a command's reachable subjects include a `PENDING_DEFINITION` placeholder (returned as `Ok(structured response)`, not an MCP protocol error) |
 | `INVALID_RESOLUTION` | Runtime: a resolution call (`link_as_alias` / `define_new` / `cancel`) targets a subject that is not currently pending, or the resolution payload is malformed |
 
-#### 30.10.10 SPEC §32 implications
+#### 30.10.10 Optional semantic embeddings (queued for v0.5)
+
+Vector embeddings make the `SUBJECT_NEEDS_DEFINITION` candidates list
+much smarter — the runtime can surface terms that are semantically
+close even when they're lexically distant (e.g., "proof bundle"
+matches `evidence-pack`; "user retention metric" matches `churn`).
+**Embeddings are fully optional.** The runtime works without them;
+candidates degrade to Tiers 1+2+4 (canonical / alias / Levenshtein).
+
+##### 30.10.10.1 Definition split
+
+To support both human ergonomics and embedding quality, the
+`definition` field splits into two:
+
+| Field | Purpose |
+|---|---|
+| `definition_short` | One-sentence summary. Required. Used in candidate previews, inline lexicon embeds (200-byte budget per §30.10.6), `--list` output. |
+| `definition_long` | Optional multi-paragraph detail. Used in full lookup responses + as additional embedding source. |
+
+Embedding source (when enabled): `<canonical term> + <aliases joined> + <definition_short> + <definition_long if present>`. One embedding per entry.
+
+##### 30.10.10.2 Backend configuration
+
+Top-level `embeddings` config block (server-level, not per-bounded-context):
+
+```yaml
+embeddings:
+  backend: http
+  url: http://localhost:11434/api/embeddings   # or any provider endpoint
+  model: nomic-embed-text                       # provider's model name
+  dimensions: 768                               # validation guard; runtime rejects mismatched vectors
+  request_format: ollama                        # ollama | openai_compatible
+  api_key_env: OPENROUTER_API_KEY               # optional; absent for unauth'd local Ollama
+```
+
+Backends:
+
+- **`none`** (default) — embeddings disabled; Tier 3 skipped.
+- **`http`** — POST to an external embedding service.
+
+No `local` backend in v0.5. Operators wanting a local model run their own server (Ollama, `llama-server`, vLLM) and point `http` at it.
+
+Request adapters:
+
+- **`ollama`** — POST `{ model, prompt }` → `{ embedding: [float; N] }`.
+- **`openai_compatible`** — POST `{ model, input }` → `{ data: [{ embedding: [float; N] }] }`. Covers OpenAI, OpenRouter, Together, and most hosted providers.
+
+##### 30.10.10.3 Lifecycle
+
+- **At lexicon write** (`flowgate.command({ subject: "lexicon:<term>", definition: {...} })`): synchronously compute the embedding before persisting. On embed-backend failure → reject the write with `EMBEDDING_BACKEND_FAILED`.
+- **At config load** for entries that don't have a stored embedding yet (backwards compat, migration): batch-compute. Doctor reports the migration count + any failures.
+- **At `SUBJECT_NEEDS_DEFINITION` time** for the unknown subject: synchronously embed the unknown subject + surrounding context (`"<verb> <unknown_subject>"`), nearest-neighbor against the per-bounded-context index.
+
+##### 30.10.10.4 Tiered candidate ranking
+
+The candidates list combines all available tiers, sorted by a unified score:
+
+| Tier | Strategy | `match_kind` | When |
+|---|---|---|---|
+| 1 | Exact canonical | `exact` | Always. |
+| 2 | Exact alias | `alias` | Always. |
+| 3 | Semantic (embedding) | `semantic` | When `embeddings.backend != none`. Threshold default 0.85 cosine similarity. |
+| 4 | Levenshtein fuzzy | `fuzzy_close` (≤1) / `fuzzy_loose` (≤2) | Always (fallback / tiebreaker). |
+
+When Tier 3 is available, it dominates the ranking because semantic captures meaning, not just surface form. Tier 4 fills in when Tier 3 has no high-confidence match.
+
+##### 30.10.10.5 New error code
+
+| Code | When |
+|---|---|
+| `EMBEDDING_BACKEND_FAILED` | Runtime: embedding backend returned an error, timed out, or returned a vector of unexpected dimensionality. Lexicon-write commands are rejected; candidate ranking degrades to non-semantic tiers. |
+
+##### 30.10.10.6 MCP parity
+
+The embedding pipeline lives entirely in the runtime. MCP-only consumers, the TUI, the CLI, and any future client all see the same response shape — they never compute embeddings themselves, never pass them in. The wire contract for `flowgate.command` (write) and `SUBJECT_NEEDS_DEFINITION` (read) is unchanged whether embeddings are configured or not; only the *quality* of the candidates list shifts.
+
+#### 30.10.11 SPEC §32 implications
 
 This section resolves §32 open question OQ3 ("Lexicon term extraction
 performance"). The replacement design is the typed pre-start walk
 described in §30.10.4, not the regex-based prose scan originally
 sketched. Aliases (§30.10.1) carry the surface-form variation that
-the regex was meant to recover.
+the regex was meant to recover. Optional embeddings (§30.10.10) add
+the semantic layer on top.
 
 ## 31. Pattern fragments + `extends:` (DRAFT — queued for v0.5)
 
