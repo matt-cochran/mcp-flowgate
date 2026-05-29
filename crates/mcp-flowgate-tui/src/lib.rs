@@ -18,6 +18,7 @@ pub mod doctor_probe_cache;
 pub mod flowgate_mcp;
 pub mod interpreter;
 pub mod keyring;
+pub mod lexicon;
 pub mod mcp_caller;
 pub mod mcp_init;
 pub mod migrate;

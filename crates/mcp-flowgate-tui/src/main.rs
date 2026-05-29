@@ -27,7 +27,7 @@ use mcp_flowgate_tui::agent_resolver::{
 use mcp_flowgate_tui::interpreter::{
     AgentRegistry, LegacyAgentRegistry, McpToolCaller, YamlAgentRegistry,
 };
-use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, mcp_init, provider_keys, tui_config};
+use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, lexicon as lexicon_mod, mcp_init, provider_keys, tui_config};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -66,6 +66,13 @@ Agent configuration:\n\
               Migrate v0.2 --agent flags to a v0.3 agents.yaml\n\
   set-provider-keys\n\
               Write provider API keys to ~/.config/flowgate/providers.env\n\
+\n\
+Lexicon management:\n\
+  lexicon define  Define or redefine a term\n\
+  lexicon alias   Add an alias to an existing term\n\
+  lexicon cancel  Drop a PENDING_DEFINITION placeholder\n\
+  lexicon list    List all lexicon entries\n\
+  lexicon pending List PENDING_DEFINITION placeholders\n\
 \n\
 Diagnostics & generators:\n\
   doctor      Pre-flight checks before walk\n\
@@ -175,6 +182,20 @@ enum Command {
                       supported providers (anthropic, openai, openrouter, bedrock, gemini)."
     )]
     SetProviderKeys(provider_keys::SetProviderKeysArgs),
+    /// Out-of-band lexicon management: define, alias, cancel, list, pending.
+    ///
+    /// Mutations (define/alias/cancel) update an in-memory overlay for the
+    /// current run; they do not persist to `flowgate.yaml` automatically.
+    /// `list` and `pending` read from the resolved config file.
+    #[command(
+        subcommand,
+        next_help_heading = "Lexicon management",
+        long_about = "Out-of-band lexicon management. Subcommands: define (create/overwrite a \
+                      term), alias (add an alias), cancel (drop a pending placeholder), list \
+                      (print all entries), pending (print PENDING_DEFINITION entries). Reads \
+                      config from --config or $FLOWGATE_CONFIG."
+    )]
+    Lexicon(lexicon_mod::LexiconCmd),
     /// Print a shell completion script to stdout. Source it from your
     /// shell rc to get tab-completion for every flowgate subcommand
     /// and flag. Example:
@@ -356,6 +377,7 @@ async fn main() -> Result<ExitCode> {
         Some(Command::ValidateAgentsConfig(args)) => Ok(run_validate_agents_config(&args.path)),
         Some(Command::MigrateAgentsFromCli(args)) => run_migrate_agents_from_cli(args),
         Some(Command::SetProviderKeys(args)) => provider_keys::run(args),
+        Some(Command::Lexicon(cmd)) => lexicon_mod::run(cmd),
         Some(Command::Completions(args)) => Ok(run_completions(args)),
         Some(Command::Man) => run_man(),
     }
