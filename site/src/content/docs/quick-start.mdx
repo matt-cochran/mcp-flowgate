@@ -1,9 +1,9 @@
 ---
 title: "Quick start"
-description: "Create a minimal config, wire mcp-flowgate into your MCP host, and see the ten tools in action — all in about 30 seconds."
+description: "Create a minimal config, wire mcp-flowgate into your MCP host, and see the two tools in action — all in about 30 seconds."
 ---
 
-You're going to create one capability, connect it to your MCP host, and watch the model discover and call it through mcp-flowgate's ten tools. The whole thing takes about 30 seconds.
+You're going to create one capability, connect it to your MCP host, and watch the model discover and call it through mcp-flowgate's two tools. The whole thing takes about 30 seconds.
 
 ## 1. Create a config file
 
@@ -55,25 +55,20 @@ Absolute paths — relative paths won't resolve when the host launches the proce
 
 ## 4. Restart your host
 
-Restart Claude Desktop (or Zed). Ten tools appear in the model's tool list:
+Restart Claude Desktop (or Zed). Two tools appear in the model's tool list:
 
-- `gateway.home` -- entry point, lists top-level links
-- `gateway.search` -- keyword search across all capabilities
-- `gateway.describe` -- full schema and details for a specific capability
-- `workflow.start` -- begin executing a capability
-- `workflow.get` -- check workflow state
-- `workflow.submit` -- advance a workflow with input
-- `workflow.explain` -- describe what a workflow does before running it
+- `flowgate.query` -- all reads: browse, search, describe, get workflow state, look up lexicon
+- `flowgate.command` -- all writes: start workflows, fire transitions, define lexicon entries
 
-That's it. Ten tools, always. Whether you have one capability or five hundred behind them.
+That's it. Two tools, always. Whether you have one capability or five hundred behind them.
 
 ## 5. Try it
 
 Ask the model to "echo hello world." It will:
 
-1. Call `gateway.search` with a query like "echo"
+1. Call `flowgate.query` with `{ "query": "echo" }` to search
 2. Find `hello.echo` in the results
-3. Call `workflow.start` to execute it
+3. Call `flowgate.command` with `{ "definitionId": "proxy_default", "input": { "capability": "hello.echo" } }` to execute it
 4. Get the response back
 
 You didn't teach the model about `hello.echo`. It found the capability through search, followed the links in the response to act on it, and the gateway handled schema validation and audit along the way.

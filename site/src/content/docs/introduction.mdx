@@ -1,6 +1,6 @@
 ---
 title: "What is mcp-flowgate?"
-description: "Every MCP tool costs tokens. mcp-flowgate replaces your entire tool list with ten fixed tools, adds governance, and lets your model discover capabilities on demand."
+description: "Every MCP tool costs tokens. mcp-flowgate replaces your entire tool list with two fixed tools, adds governance, and lets your model discover capabilities on demand."
 ---
 
 ## The problem you already have
@@ -11,15 +11,16 @@ It gets worse. The model has to *reason* about every tool in the list to pick th
 
 And none of this comes with audit trails, retries, approval gates, or any governance. You get a flat list and a prayer.
 
-## The fix: ten tools, any number of capabilities
+## The fix: two tools, any number of capabilities
 
-mcp-flowgate exposes exactly ten MCP tools to your model, no matter how many capabilities you wire in behind them:
+mcp-flowgate exposes exactly **two** MCP tools to your model, no matter how many capabilities you wire in behind them:
 
-| Layer | Tools | What they do |
-|-------|-------|--------------|
-| **Discovery** | `gateway.home`, `gateway.search`, `gateway.describe` | Find capabilities by keyword, get schemas on demand |
-| **Action** | `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain` | Execute capabilities through governed workflows |
-| **Vocabulary** | `gateway.lexicon.search`, `gateway.lexicon.lookup`, `gateway.lexicon.define` | A persistent project glossary the model can read and (with permission) extend across runs |
+| Tool | What it does |
+|------|--------------|
+| `flowgate.query` | All reads: browse the catalog, search, describe capabilities, check workflow state, look up lexicon terms |
+| `flowgate.command` | All writes: start workflows, fire transitions, define lexicon entries |
+
+The split follows CQRS: reads vs. writes. MCP hosts can gate permissions at exactly that axis — auto-approve reads, require confirmation for state-changing moves. Two tools is the honest minimum.
 
 Your 50 capabilities don't disappear -- they surface through search results and response links, loaded one at a time, only when relevant. The model's token cost for tool definitions stays fixed regardless of scale.
 
