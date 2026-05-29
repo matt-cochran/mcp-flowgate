@@ -29,6 +29,7 @@
 pub mod audit;
 pub mod cap_verb;
 pub mod capability;
+pub mod embeddings;
 pub mod contract_hash;
 pub mod config;
 pub mod discovery;

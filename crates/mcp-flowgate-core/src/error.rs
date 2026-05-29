@@ -49,6 +49,15 @@ pub enum RuntimeError {
         /// The `encountered_in` context, formatted as `"workflow:<id>"`.
         workflow_id_context: String,
     },
+
+    /// SPEC §30.10.10 — the configured embedding backend failed during a
+    /// lexicon write or a SUBJECT_NEEDS_DEFINITION candidate ranking call.
+    ///
+    /// When the operator has configured a non-`none` embedding backend,
+    /// failures at write time must be surfaced as a structured error so
+    /// callers can distinguish "backend down" from other write errors.
+    #[error("EMBEDDING_BACKEND_FAILED: {message}")]
+    EmbeddingBackendFailed { message: String },
 }
 
 impl RuntimeError {
@@ -59,6 +68,7 @@ impl RuntimeError {
             RuntimeError::RecordWriteFailed { .. } => "RECORD_WRITE_FAILED",
             RuntimeError::RunIdAlreadyRunning { .. } => "RUN_ID_ALREADY_RUNNING",
             RuntimeError::SubjectNeedsDefinition { .. } => "SUBJECT_NEEDS_DEFINITION",
+            RuntimeError::EmbeddingBackendFailed { .. } => "EMBEDDING_BACKEND_FAILED",
         }
     }
 }

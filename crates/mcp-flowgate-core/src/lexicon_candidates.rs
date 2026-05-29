@@ -3,25 +3,29 @@
 //! When a workflow encounters a placeholder subject, the runtime asks: "what
 //! lexicon entries might be the one the author meant?" This module walks the
 //! *current bounded context* in the merged lexicon and scores each entry across
-//! three tiers:
+//! four tiers:
 //!
 //! - **Tier 1 — exact canonical**: `entry.term == unknown_subject`
 //! - **Tier 2 — exact alias**: any alias of the entry matches exactly
+//! - **Tier 3 — semantic similarity**: cosine similarity ≥ 0.85 between the
+//!   unknown subject's embedding and each entry's stored embedding vector.
+//!   Only active when an embedding backend is configured (`backend != none`).
 //! - **Tier 4 — Levenshtein fuzzy**: edit distance ≤ 1 (close) or ≤ 2 (loose)
 //!   against the canonical term or any alias
 //!
-//! Results are sorted: exact → alias → fuzzy_close → fuzzy_loose, then by
-//! distance ascending within each tier. The top 5 are returned.
-//!
-//! Tier 3 (semantic similarity) is deferred to Task 3.9.
+//! Results are sorted: exact → alias → semantic → fuzzy_close → fuzzy_loose,
+//! then by distance ascending within each tier. The top 5 are returned.
 
 use serde_json::{json, Map, Value};
+
+use crate::embeddings::{cosine_similarity, EmbeddingProvider, EMBEDDING_COSINE_THRESHOLD};
 
 /// Sort priority for each match kind (lower = higher priority in the ranking).
 const PRIORITY_EXACT: u8 = 0;
 const PRIORITY_ALIAS: u8 = 1;
-const PRIORITY_FUZZY_CLOSE: u8 = 2;
-const PRIORITY_FUZZY_LOOSE: u8 = 3;
+const PRIORITY_SEMANTIC: u8 = 2;
+const PRIORITY_FUZZY_CLOSE: u8 = 3;
+const PRIORITY_FUZZY_LOOSE: u8 = 4;
 
 /// A single candidate entry returned in the `candidates` array of
 /// `SUBJECT_NEEDS_DEFINITION`.
@@ -42,6 +46,7 @@ impl Candidate {
         match self.match_kind {
             "exact" => PRIORITY_EXACT,
             "alias" => PRIORITY_ALIAS,
+            "semantic" => PRIORITY_SEMANTIC,
             "fuzzy_close" => PRIORITY_FUZZY_CLOSE,
             _ => PRIORITY_FUZZY_LOOSE,
         }
@@ -183,7 +188,7 @@ pub fn rank_candidates(
                     match_kind: "alias",
                     definition_preview: preview.clone(),
                 };
-                // Alias exact is better than fuzzy; replace if current best is fuzzy.
+                // Alias exact is better than semantic/fuzzy; replace if current best is lower priority.
                 match &best {
                     None => best = Some(c),
                     Some(existing) if existing.priority() > PRIORITY_ALIAS => best = Some(c),
@@ -257,6 +262,138 @@ pub fn rank_candidates_from_definition(
         None => return Vec::new(),
     };
     rank_candidates(unknown_subject, lib, bounded_context)
+}
+
+/// SPEC §30.10.10 — rank candidates including optional Tier 3 (semantic).
+///
+/// Calls `rank_candidates` for Tiers 1/2/4, then — when `embedder` is
+/// `Some` and produces a non-empty vector — augments the result with Tier 3
+/// semantic candidates (cosine similarity ≥ `EMBEDDING_COSINE_THRESHOLD`).
+///
+/// Entries must have a `_embedding` JSON array stored by the write path to
+/// participate in Tier 3 scoring. Entries without a stored vector are silently
+/// skipped.
+///
+/// The final list is sorted: exact → alias → semantic → fuzzy_close →
+/// fuzzy_loose, then by distance/similarity within each tier. Top 5 returned.
+pub async fn rank_candidates_with_embedding(
+    unknown_subject: &str,
+    lexicon_map: &Map<String, Value>,
+    bounded_context: Option<&str>,
+    embedder: Option<&dyn EmbeddingProvider>,
+) -> Vec<Candidate> {
+    // Tiers 1/2/4 — always computed.
+    let mut base = rank_candidates(unknown_subject, lexicon_map, bounded_context);
+
+    // Tier 3 — semantic, only when an embedder is supplied.
+    let Some(emb) = embedder else {
+        return base;
+    };
+
+    let unknown_vec = match emb.embed(unknown_subject).await {
+        Ok(v) if !v.is_empty() => v,
+        _ => return base, // no embedding or backend error → fall back to Tiers 1/2/4
+    };
+
+    // Set of terms already ranked by Tiers 1/2/4 so we don't add duplicates.
+    // Use owned Strings so we don't hold an immutable borrow on `base` while
+    // later pushing into it.
+    let already_ranked: std::collections::HashSet<String> =
+        base.iter().map(|c| c.term.clone()).collect();
+
+    for (term, entry) in lexicon_map {
+        let entry_obj = match entry.as_object() {
+            Some(o) => o,
+            None => continue,
+        };
+
+        // Skip PENDING_DEFINITION placeholders.
+        if entry_obj
+            .get("state")
+            .and_then(Value::as_str)
+            == Some("PENDING_DEFINITION")
+        {
+            continue;
+        }
+
+        // Bounded context filter.
+        if let Some(filter_ctx) = bounded_context {
+            let entry_ctx = entry_obj
+                .get("bounded_context")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if entry_ctx != filter_ctx {
+                continue;
+            }
+        }
+
+        // Already have a better match from Tiers 1/2/4.
+        if already_ranked.contains(term.as_str()) {
+            continue;
+        }
+
+
+        // Retrieve the stored embedding vector.
+        let stored_vec: Vec<f32> = match entry_obj
+            .get("_embedding")
+            .and_then(Value::as_array)
+        {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                .collect(),
+            None => continue,
+        };
+
+        if stored_vec.is_empty() {
+            continue;
+        }
+
+        let sim = cosine_similarity(&unknown_vec, &stored_vec);
+        if sim >= EMBEDDING_COSINE_THRESHOLD {
+            let definition_short = entry_obj
+                .get("definition_short")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let preview: String = definition_short.chars().take(100).collect();
+            // Distance for semantic = 1.0 - similarity (lower = better).
+            base.push(Candidate {
+                term: term.clone(),
+                distance: 1.0 - sim,
+                match_kind: "semantic",
+                definition_preview: preview,
+            });
+        }
+    }
+
+    // Re-sort with semantic tier in place.
+    base.sort_by(|a, b| {
+        a.priority()
+            .cmp(&b.priority())
+            .then(a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal))
+            .then(a.term.cmp(&b.term))
+    });
+
+    base.truncate(5);
+    base
+}
+
+/// Convenience wrapper: extract `_lexiconLibrary` and call
+/// `rank_candidates_with_embedding`.
+pub async fn rank_candidates_from_definition_with_embedding(
+    unknown_subject: &str,
+    workflow_definition: &Value,
+    bounded_context: Option<&str>,
+    embedder: Option<&dyn EmbeddingProvider>,
+) -> Vec<Candidate> {
+    let lib = match workflow_definition
+        .get("_lexiconLibrary")
+        .and_then(Value::as_object)
+    {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+    rank_candidates_with_embedding(unknown_subject, lib, bounded_context, embedder).await
 }
 
 /// Convert a slice of `Candidate`s to the JSON array used in the MCP response.

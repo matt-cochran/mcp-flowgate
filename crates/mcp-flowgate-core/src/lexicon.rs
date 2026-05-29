@@ -582,11 +582,17 @@ pub fn pending_subjects_from_resolved(config: &Value) -> Vec<String> {
 /// primary one-sentence definition field. Used by the MCP handler before
 /// persisting; centralized so the shape is consistent and validation runs
 /// in one place.
+///
+/// `embedding` — when `Some`, stores the vector as `_embedding` on the entry
+/// so Tier 3 semantic candidate ranking can compare it against unknown
+/// subjects. Callers are responsible for computing the vector before calling
+/// this function (e.g. via `embeddings::EmbeddingProvider::embed`).
 pub fn build_entry(
     definition_short: &str,
     bounded_context: Option<&str>,
     refs: Option<&Vec<String>>,
     governance: Option<&str>,
+    embedding: Option<Vec<f32>>,
 ) -> Result<Value> {
     if definition_short.trim().is_empty() {
         bail!("INVALID_LEXICON_ENTRY: definition must be non-empty");
@@ -607,5 +613,10 @@ pub fn build_entry(
         );
     }
     entry.insert("governance".into(), json!(gov));
+    if let Some(vec) = embedding {
+        // Store as a JSON array; the `_` prefix marks it as a runtime-internal
+        // field (not authored by operators, not validated by the lexicon schema).
+        entry.insert("_embedding".into(), json!(vec));
+    }
     Ok(Value::Object(entry))
 }

@@ -39,6 +39,9 @@
       "default": {},
       "description": "Curated ubiquitous-language vocabulary (SPEC §30). Each key is the canonical term; each value carries a one-sentence `definition_short`, an optional multi-paragraph `definition_long`, optional surface-form `aliases`, an optional DDD `bounded_context`, optional `refs` to related terms, and a `governance` marker (default `human-only`). At config load the full block is snapshot-stamped onto every workflow definition (`_lexiconLibrary`). Same-bounded-context alias collisions fail at load."
     },
+    "embeddings": {
+      "$ref": "#/$defs/embeddingsConfig"
+    },
     "skills": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/skillFragment" },
@@ -887,6 +890,37 @@
       }
     },
     "jsonSchema": { "type": "object" },
+    "embeddingsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional Tier 3 semantic embedding backend (SPEC §30.10.10). Defaults to `backend: none` — Tier 3 is disabled and the system operates on Tiers 1/2/4 only. When a backend is configured, embeddings are computed at lexicon write time and stored on entries; at SUBJECT_NEEDS_DEFINITION time, the unknown subject is embedded and compared against stored vectors (cosine ≥ 0.85 threshold).",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["none", "ollama", "openai_compatible"],
+          "default": "none",
+          "description": "Embedding backend to use. `none` (default) disables Tier 3. `ollama` — POST `{model, prompt}` to `url`, parse `embedding` field. `openai_compatible` — POST `{model, input}` to `url`, parse `data[0].embedding`."
+        },
+        "url": {
+          "type": "string",
+          "description": "Required when `backend != none`. The HTTP endpoint to POST embedding requests to. Example: `http://localhost:11434/api/embeddings` for Ollama."
+        },
+        "model": {
+          "type": "string",
+          "description": "Required when `backend != none`. The model name sent in the request body. Example: `nomic-embed-text` for Ollama, `text-embedding-ada-002` for OpenAI."
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Expected dimensionality of the embedding vector. Informational — used by `HttpEmbedder::dimensions()`; does not affect runtime behaviour."
+        },
+        "api_key_env": {
+          "type": "string",
+          "description": "Optional. Environment variable name whose value is sent as `Authorization: Bearer <value>`. Required for OpenAI and other key-gated backends."
+        }
+      }
+    },
     "lexiconEntry": {
       "type": "object",
       "additionalProperties": false,

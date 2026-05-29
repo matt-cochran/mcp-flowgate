@@ -731,6 +731,7 @@ impl FlowgateServer {
             bounded_context.as_deref(),
             refs.as_ref(),
             governance.as_deref(),
+            None, // embeddings computed by the caller when a backend is configured
         )?;
         {
             let mut overlay = self

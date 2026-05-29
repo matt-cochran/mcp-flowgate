@@ -234,20 +234,20 @@ fn agent_allowed_against_agent_may_propose_term() {
 
 #[test]
 fn build_entry_sets_defaults() {
-    let entry = build_entry("a real def", None, None, None).expect("ok");
+    let entry = build_entry("a real def", None, None, None, None).expect("ok");
     assert_eq!(entry.pointer("/definition_short").and_then(|v| v.as_str()), Some("a real def"));
     assert_eq!(entry.pointer("/governance").and_then(|v| v.as_str()), Some("human-only"));
 }
 
 #[test]
 fn build_entry_rejects_empty_definition() {
-    let err = build_entry("  ", None, None, None).expect_err("must reject");
+    let err = build_entry("  ", None, None, None, None).expect_err("must reject");
     assert!(format!("{err:?}").contains("definition must be non-empty"));
 }
 
 #[test]
 fn build_entry_rejects_unknown_governance() {
-    let err = build_entry("a", None, None, Some("wat")).expect_err("must reject");
+    let err = build_entry("a", None, None, Some("wat"), None).expect_err("must reject");
     assert!(format!("{err:?}").contains("governance must be"));
 }
 

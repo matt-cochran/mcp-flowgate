@@ -178,6 +178,7 @@ fn run_define(args: DefineArgs) -> Result<ExitCode> {
         args.bounded_context.as_deref(),
         None,
         args.governance.as_deref(),
+        None, // TUI does not have an embedder context; embeddings are a server-side concern
     )?;
 
     // Add optional fields to the entry object.
