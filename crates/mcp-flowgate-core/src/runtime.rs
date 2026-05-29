@@ -1,5 +1,6 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use anyhow::bail;
 use chrono::Utc;
@@ -88,6 +89,22 @@ pub struct WorkflowRuntime {
     /// graceful drain. Existing `submit`/`get` keep working so in-flight work
     /// finishes cleanly. See `docs/CONFIG.md` "Zero-downtime config changes".
     pub(crate) draining: Arc<AtomicBool>,
+    /// SPEC §30.10.4 — live set of subject names that are still
+    /// `PENDING_DEFINITION`. Resolution handlers (define_new, link_as_alias,
+    /// cancel) in the MCP layer remove entries from this set. The runtime's
+    /// pre-start walk checks this set rather than the baked-in snapshot in
+    /// `_lexiconLibrary`, so a retry after resolution proceeds without
+    /// needing to re-resolve the entire config.
+    ///
+    /// `None` (default) means the set was never wired — the runtime falls back
+    /// to the baked-in `_lexiconLibrary` snapshot for PENDING_DEFINITION checks.
+    /// This preserves backward compatibility for call sites that do not wire the
+    /// pending-subjects set (direct construction without an MCP server layer).
+    ///
+    /// `Some(arc)` means the MCP server layer wired the live set. The runtime
+    /// uses the live set exclusively as the source of truth — a subject removed
+    /// from the set by a resolution handler is immediately unblocked.
+    pub(crate) pending_subjects: Option<Arc<RwLock<HashSet<String>>>>,
 }
 
 impl WorkflowRuntime {
@@ -106,7 +123,18 @@ impl WorkflowRuntime {
             audit,
             evidence: None,
             draining: Arc::new(AtomicBool::new(false)),
+            pending_subjects: None,
         }
+    }
+
+    /// SPEC §30.10.4 — wire the live pending-subjects set. The MCP layer
+    /// calls this with the subjects detected at config-load time; resolution
+    /// handlers then remove entries from the shared Arc as subjects are defined.
+    /// Wiring the same `Arc` into the runtime means the pre-start subject walk
+    /// always reflects the current resolved state without needing a config reload.
+    pub fn with_pending_subjects(mut self, pending: Arc<RwLock<HashSet<String>>>) -> Self {
+        self.pending_subjects = Some(pending);
+        self
     }
 
     /// Mark this runtime as draining. Subsequent `start` calls fail with a
@@ -265,24 +293,69 @@ impl WorkflowRuntime {
 
         let definition = self.definitions.load(&request.definition_id).await?;
 
-        // SPEC §30.10.4 — pre-start subject walk. Scan the definition's
-        // `_lexiconLibrary` for any placeholder entry whose `state` is
-        // `PENDING_DEFINITION`. If one is found, abort before creating the
-        // instance and return a structured error. The MCP layer translates this
-        // to a SUBJECT_NEEDS_DEFINITION interaction with HATEOAS links.
+        // SPEC §30.10.4 — pre-start subject walk.
+        //
+        // Two-phase check against the workflow's `_lexiconLibrary`:
+        //
+        // Phase 1 (live set — wired path): when `pending_subjects` is `Some`,
+        // the MCP server layer has shared its live set with the runtime. Use
+        // this set as the exclusive source of truth. Resolution handlers
+        // (define_new, link_as_alias, cancel) remove entries from this set,
+        // and the next retry immediately sees the resolved state — no config
+        // reload needed. A subject removed from the live set is treated as
+        // resolved even though the baked-in snapshot still says PENDING_DEFINITION.
+        //
+        // Phase 2 (snapshot fallback — unwired path): when `pending_subjects`
+        // is `None`, the runtime was constructed without wiring the set (direct
+        // construction in benchmarks, integration tests, or call sites that don't
+        // use the MCP server layer). Fall back to the baked-in `_lexiconLibrary`
+        // snapshot. This preserves backward compatibility.
         if let Some(lib) = definition.get("_lexiconLibrary").and_then(Value::as_object) {
-            for (term, entry) in lib {
-                if entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION") {
-                    let bounded_context = entry
-                        .get("bounded_context")
-                        .and_then(Value::as_str)
-                        .map(String::from);
-                    return Err(RuntimeError::SubjectNeedsDefinition {
-                        unknown_subject: term.clone(),
-                        bounded_context,
-                        workflow_id_context: format!("workflow:{}", request.definition_id),
+            match &self.pending_subjects {
+                Some(pending_arc) => {
+                    // Phase 1 — live set is the source of truth.
+                    let pending = pending_arc
+                        .read()
+                        .expect("pending_subjects RwLock poisoned");
+                    for (term, entry) in lib {
+                        if pending.contains(term.as_str()) {
+                            let bounded_context = entry
+                                .get("bounded_context")
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            return Err(RuntimeError::SubjectNeedsDefinition {
+                                unknown_subject: term.clone(),
+                                bounded_context,
+                                workflow_id_context: format!(
+                                    "workflow:{}",
+                                    request.definition_id
+                                ),
+                            }
+                            .into());
+                        }
                     }
-                    .into());
+                }
+                None => {
+                    // Phase 2 — snapshot fallback.
+                    for (term, entry) in lib {
+                        if entry.get("state").and_then(Value::as_str)
+                            == Some("PENDING_DEFINITION")
+                        {
+                            let bounded_context = entry
+                                .get("bounded_context")
+                                .and_then(Value::as_str)
+                                .map(String::from);
+                            return Err(RuntimeError::SubjectNeedsDefinition {
+                                unknown_subject: term.clone(),
+                                bounded_context,
+                                workflow_id_context: format!(
+                                    "workflow:{}",
+                                    request.definition_id
+                                ),
+                            }
+                            .into());
+                        }
+                    }
                 }
             }
         }

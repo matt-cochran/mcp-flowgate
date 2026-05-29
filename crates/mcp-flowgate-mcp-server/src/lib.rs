@@ -189,10 +189,25 @@ impl FlowgateServer {
     /// `mcp_flowgate_core::lexicon::pending_subjects_from_resolved(config)`.
     /// Resolution handlers remove entries from this set; cancel uses it to
     /// distinguish bookkeeping placeholders from authored entries.
+    ///
+    /// The same `Arc` is shared into the embedded `WorkflowRuntime` so that
+    /// the runtime's pre-start subject walk reflects resolved state immediately
+    /// when a resolution handler removes an entry from the set — no config
+    /// reload needed (SPEC §30.10.4, Gap 2 fix).
+    ///
+    /// When `subjects` is empty, the server still wires the live set into the
+    /// runtime (as an empty `Some(Arc)`) so that Phase 1 (live-set check) is
+    /// used and future additions to the set are observable. This is correct:
+    /// a config with no pending subjects should start workflows without the
+    /// snapshot fallback blocking them.
     pub fn with_pending_subjects(mut self, subjects: Vec<String>) -> Self {
-        self.pending_subjects = Arc::new(std::sync::RwLock::new(
-            subjects.into_iter().collect(),
-        ));
+        let shared: Arc<std::sync::RwLock<std::collections::HashSet<String>>> =
+            Arc::new(std::sync::RwLock::new(subjects.into_iter().collect()));
+        self.pending_subjects = shared.clone();
+        // Share the same Arc into the runtime. WorkflowRuntime::with_pending_subjects
+        // sets pending_subjects to Some(arc), switching the runtime to Phase 1
+        // (live-set) subject checks (SPEC §30.10.4 Gap 2 fix).
+        self.runtime = self.runtime.with_pending_subjects(shared);
         self
     }
 

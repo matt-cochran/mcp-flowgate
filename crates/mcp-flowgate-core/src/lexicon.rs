@@ -361,9 +361,15 @@ pub fn walk_all_subject_references(config: &Value) -> Vec<String> {
     }
 
     // 3. capabilities: block keys (SPEC §30.10.2).
+    //    Only keys that follow `verb.subject` form (contain `.`) are lexicon
+    //    subjects. Simple capability names like `do_thing` are not subject
+    //    references — they're capability handles that don't require a lexicon
+    //    entry.
     if let Some(caps) = config.pointer("/capabilities").and_then(Value::as_object) {
         for key in caps.keys() {
-            subjects.push(subject_portion(key));
+            if key.contains('.') {
+                subjects.push(subject_portion(key));
+            }
         }
     }
 
@@ -385,6 +391,14 @@ fn subject_portion(key: &str) -> String {
         Some((_, rest)) => rest.to_string(),
         None => key.to_string(),
     }
+}
+
+/// Public wrapper around [`subject_portion`] for callers outside this module
+/// (e.g. `config.rs`) that need to extract the subject portion from a
+/// verb-subject key. Named distinctly to keep the internal `subject_portion`
+/// a private detail.
+pub fn subject_portion_pub(key: &str) -> String {
+    subject_portion(key)
 }
 
 /// Recursively walk a JSON value looking for executor objects with
@@ -476,10 +490,17 @@ fn walk_executor_subjects_in_value(value: &Value, out: &mut Vec<String>) {
 /// will use this to block workflow execution at runtime. For now, doctor
 /// surfaces them as informational warnings.
 ///
+/// `extra_subjects` carries subjects collected from parts of the config that
+/// were stripped before this function runs (e.g. the `capabilities:` block
+/// which is removed at resolve step 4). Those subjects are merged into the
+/// pending detection walk so capability-block subjects are not invisible to
+/// the injector.
+///
 /// Returns the set of pending subject names (for use by callers like doctor).
-pub fn inject_pending_definitions(config: &mut Value) -> Vec<String> {
-    // Collect all referenced subjects.
-    let all_subjects = walk_all_subject_references(config);
+pub fn inject_pending_definitions(config: &mut Value, extra_subjects: &[String]) -> Vec<String> {
+    // Collect all referenced subjects (from current config + pre-strip extras).
+    let mut all_subjects = walk_all_subject_references(config);
+    all_subjects.extend_from_slice(extra_subjects);
 
     // Collect all authored lexicon keys (the "registered" ones).
     let authored_keys: std::collections::HashSet<String> = config

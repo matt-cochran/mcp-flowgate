@@ -170,6 +170,22 @@ pub fn resolve_with_diagnostics(mut config: Value) -> anyhow::Result<(Value, Vec
 
     // 4. Strip the now-fully-resolved `capabilities` block — it's an authoring
     //    affordance, not runtime state.
+    //    SPEC §30.10.3 — capture capability subjects BEFORE stripping so
+    //    `inject_pending_definitions` can see them even though the block will
+    //    no longer be present in the config when that function runs.
+    //    Only keys that follow the `verb.subject` pattern (contain a `.`) are
+    //    lexicon subjects; simple names like `do_thing` are capability names,
+    //    not subject references, and are skipped.
+    let capability_subjects: Vec<String> = config
+        .pointer("/capabilities")
+        .and_then(Value::as_object)
+        .map(|caps| {
+            caps.keys()
+                .filter(|k| k.contains('.'))
+                .map(|k| crate::lexicon::subject_portion_pub(k))
+                .collect()
+        })
+        .unwrap_or_default();
     if let Some(obj) = config.as_object_mut() {
         let _: Option<Value> = obj.remove("capabilities");
     }
@@ -258,10 +274,14 @@ pub fn resolve_with_diagnostics(mut config: Value) -> anyhow::Result<(Value, Vec
     //               the stamped _lexiconLibrary so doctor and (Task 3.3) the
     //               runtime can surface unresolved subjects without hard-failing
     //               the load.
+    //               `capability_subjects` carries subjects harvested from the
+    //               `capabilities:` block at step 4 (before it was stripped).
+    //               Passing them here closes the pipeline-ordering gap so
+    //               capability-block subjects are detected as pending (SPEC §30.10.3).
     // TODO(SPEC §30.10.3): inherit bounded_context from the referencing
     // config. Currently defaults to global; sufficient for v0.5 since
     // Tier-1 lexicons are typically single-context.
-    crate::lexicon::inject_pending_definitions(&mut config);
+    crate::lexicon::inject_pending_definitions(&mut config, &capability_subjects);
 
     // 7-sexies. SPEC §6 — for every transition whose executor is
     //           `kind: workflow` with a `use:` block, synthesize the

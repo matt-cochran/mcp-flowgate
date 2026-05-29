@@ -142,11 +142,9 @@ fn config_with_registered_script_subject() -> Value {
 }
 
 /// Config with a capabilities block referencing an unregistered subject.
-/// NOTE: In the current implementation, the `capabilities:` block is stripped
-/// from the config at resolve step 4 BEFORE `inject_pending_definitions` runs
-/// at step 7-sexties-bis. As a result, capability-block subjects are NOT
-/// visible to `walk_all_subject_references` and no placeholder is created.
-/// This is a known production gap — see the test comment below.
+/// The `capabilities:` block subjects are captured before the block is
+/// stripped at resolve step 4 and passed into `inject_pending_definitions` —
+/// so capability-block subjects ARE visible to the injector. See Gap 1 fix.
 fn config_with_pending_capability_subject() -> Value {
     json!({
         "version": "1.0.0",
@@ -288,35 +286,24 @@ fn placeholder_is_created_when_skill_subject_is_unregistered() {
     );
 }
 
-/// PRODUCTION GAP (capability subjects not yet walked at inject time):
-/// The `capabilities:` block is stripped from the config at resolve step 4
-/// BEFORE `inject_pending_definitions` runs at step 7-sexties-bis. Because
-/// `walk_all_subject_references` operates on the post-step-4 config value,
-/// capability-block subjects are never detected and no placeholder is created.
-///
-/// This test documents the CURRENT (broken) behavior: no placeholder is created
-/// for capability subjects. When the gap is fixed, this test should assert that
-/// the placeholder IS present.
-///
-/// Tracking: capability subject walk happens before strip in the resolve pipeline;
-/// the fix is to collect capability subjects before step 4 removes the block.
+/// Capability-block subjects are captured before the `capabilities:` block is
+/// stripped at resolve step 4 and passed into `inject_pending_definitions`,
+/// so an unregistered capability subject DOES create a PENDING_DEFINITION
+/// placeholder. (Gap 1 fix — SPEC §30.10.3.)
 #[test]
-fn placeholder_is_not_created_for_capability_subject_due_to_resolve_pipeline_ordering_gap() {
+fn placeholder_is_created_when_capability_subject_is_unregistered() {
     let cfg = config_with_pending_capability_subject();
     let resolved = mcp_flowgate_core::config::resolve(cfg).expect("resolve");
     let lib = resolved
         .pointer("/workflows/cap_pending_wf/_lexiconLibrary")
         .expect("_lexiconLibrary must be stamped");
-    // CURRENT BEHAVIOR: no placeholder (the gap). When fixed, assert Some + PENDING_DEFINITION.
-    let entry = lib.get("my-cap");
-    assert!(
-        entry.is_none()
-            || entry
-                .and_then(|e| e.get("state").and_then(Value::as_str))
-                != Some("PENDING_DEFINITION"),
-        "CURRENT BEHAVIOR: capability placeholder must NOT be present due to pipeline gap; \
-         when this gap is fixed, this assertion must be inverted to check for PENDING_DEFINITION. \
-         got: {entry:?}"
+    let entry = lib
+        .get("my-cap")
+        .expect("placeholder for my-cap must exist (Gap 1 fix)");
+    assert_eq!(
+        entry.get("state").and_then(Value::as_str),
+        Some("PENDING_DEFINITION"),
+        "capability subject placeholder must have state=PENDING_DEFINITION; got: {entry}"
     );
 }
 
@@ -1013,30 +1000,13 @@ async fn define_new_upgrades_placeholder_to_real_entry() {
     );
 }
 
-/// PRODUCTION GAP (retry not yet wired):
-/// define_new removes the subject from `FlowgateServer.pending_subjects` (the
-/// in-memory set used by the MCP server to track resolution). However,
-/// `WorkflowRuntime::start` reads the definition from `ConfigDefinitionStore`,
-/// which has the PENDING_DEFINITION placeholder baked into `_lexiconLibrary`
-/// at config-load time. That baked-in placeholder is NOT updated when the
-/// resolution handlers run — they only update `FlowgateServer.lexicon_overlay`
-/// and `pending_subjects`.
-///
-/// As a result, a retry of the original start STILL returns
-/// SUBJECT_NEEDS_DEFINITION even after define_new succeeds, because the runtime
-/// sees the old definition snapshot.
-///
-/// This test documents the CURRENT (broken) retry behavior. When the gap is
-/// fixed (e.g., by having the runtime check `FlowgateServer.pending_subjects`
-/// or by updating the definition snapshot after resolution), this test should
-/// assert that the start retry succeeds.
-///
-/// Tracking: the `WorkflowRuntime::start` subject-walk reads from the definition
-/// snapshot, not from the MCP-layer `pending_subjects` set. The fix must either
-/// (a) pass the resolved pending_subjects into the runtime check, or (b) update
-/// the definition snapshot in `ConfigDefinitionStore` on resolution.
+/// After define_new resolves a pending subject, a retry of the original start
+/// SUCCEEDS. The runtime's pre-start walk now consults the live `pending_subjects`
+/// set (shared between FlowgateServer and WorkflowRuntime via the same Arc),
+/// so removing the subject from pending_subjects immediately lifts the block —
+/// no config reload needed. (Gap 2 fix — SPEC §30.10.4.)
 #[tokio::test]
-async fn define_new_removes_subject_from_pending_set_but_retry_still_blocked_by_definition_snapshot() {
+async fn after_define_new_resolution_retry_of_original_start_succeeds() {
     let (server, _) = build_server(config_with_pending_and_real());
     // upgrade evidence-foo from placeholder to real
     let _ = server
@@ -1052,8 +1022,7 @@ async fn define_new_removes_subject_from_pending_set_but_retry_still_blocked_by_
         ))
         .await
         .expect("dispatch_call");
-    // CURRENT BEHAVIOR: retry still blocked because definition snapshot still has placeholder.
-    // When fixed, this should return a workflow instance (no interaction field).
+    // Retry: evidence-foo is now resolved — the start must succeed.
     let resp = server
         .dispatch_call(call(
             TOOL_COMMAND,
@@ -1061,13 +1030,9 @@ async fn define_new_removes_subject_from_pending_set_but_retry_still_blocked_by_
         ))
         .await
         .expect("retry dispatch_call");
-    // Document the current broken behavior: still gets SUBJECT_NEEDS_DEFINITION.
-    // When the gap is fixed, invert this assertion to check for workflow.id.
-    assert_eq!(
-        resp["interaction"]["kind"].as_str(),
-        Some("SUBJECT_NEEDS_DEFINITION"),
-        "CURRENT BEHAVIOR: retry is still blocked by definition snapshot gap; \
-         expected SUBJECT_NEEDS_DEFINITION, got: {resp}"
+    assert!(
+        resp.pointer("/workflow/id").is_some(),
+        "retry after define_new must create a workflow instance (Gap 2 fix); got: {resp}"
     );
 }
 
@@ -1296,15 +1261,12 @@ async fn cancel_returns_invalid_resolution_when_subject_does_not_exist() {
 // Phase E — End-to-end: placeholder → resolve → retry → success
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// PRODUCTION GAP (end-to-end retry path not yet complete):
 /// Full happy path via define_new: placeholder → SUBJECT_NEEDS_DEFINITION →
-/// define_new → retry. Documents the current broken behavior where retry still
-/// fails because the definition snapshot in `ConfigDefinitionStore` retains the
-/// placeholder even after `define_new` updates `pending_subjects`.
-///
-/// Steps 1 and 2 PASS. Step 3 (retry) documents the gap.
+/// define_new → retry succeeds. The runtime consults the live pending_subjects
+/// set (not the baked-in snapshot), so resolution is immediately reflected.
+/// (Gap 2 fix — SPEC §30.10.4.)
 #[tokio::test]
-async fn after_define_new_resolution_retry_of_original_start_still_blocked_due_to_snapshot_gap() {
+async fn after_define_new_resolution_retry_of_original_start_succeeds_e2e() {
     let (server, _) = build_server(config_with_pending_and_real());
 
     // Step 1: attempt start — must get SUBJECT_NEEDS_DEFINITION.
@@ -1339,8 +1301,7 @@ async fn after_define_new_resolution_retry_of_original_start_still_blocked_due_t
         "define_new resolution must succeed; got: {define_resp}"
     );
 
-    // Step 3: retry original start — CURRENT BEHAVIOR: still blocked.
-    // When the gap is fixed, this should assert workflow.id is present.
+    // Step 3: retry original start — must now succeed (Gap 2 fix).
     let retry_resp = server
         .dispatch_call(call(
             TOOL_COMMAND,
@@ -1348,22 +1309,18 @@ async fn after_define_new_resolution_retry_of_original_start_still_blocked_due_t
         ))
         .await
         .expect("dispatch_call step 3");
-    assert_eq!(
-        retry_resp["interaction"]["kind"].as_str(),
-        Some("SUBJECT_NEEDS_DEFINITION"),
-        "CURRENT BEHAVIOR: retry still blocked by definition snapshot gap; \
-         when fixed, assert retry_resp.pointer('/workflow/id').is_some(); got: {retry_resp}"
+    assert!(
+        retry_resp.pointer("/workflow/id").is_some(),
+        "retry after define_new must create workflow instance (Gap 2 fix); got: {retry_resp}"
     );
 }
 
-/// PRODUCTION GAP (end-to-end retry path not yet complete):
 /// Full path via link_as_alias: placeholder → SUBJECT_NEEDS_DEFINITION →
-/// link_as_alias → retry. Documents the current broken behavior where retry
-/// still fails because the definition snapshot retains the placeholder.
-///
-/// Steps 1 and 2 PASS. Step 3 (retry) documents the gap.
+/// link_as_alias → retry succeeds. The alias resolution removes evidence-foo
+/// from pending_subjects; the runtime's live-set check sees it as resolved.
+/// (Gap 2 fix — SPEC §30.10.4.)
 #[tokio::test]
-async fn after_link_as_alias_resolution_retry_of_original_start_still_blocked_due_to_snapshot_gap() {
+async fn after_link_as_alias_resolution_retry_of_original_start_succeeds() {
     let (server, _) = build_server(config_with_pending_and_real());
 
     // Step 1: attempt start — pauses.
@@ -1395,8 +1352,7 @@ async fn after_link_as_alias_resolution_retry_of_original_start_still_blocked_du
         "link_as_alias must succeed; got: {alias_resp}"
     );
 
-    // Step 3: retry — CURRENT BEHAVIOR: still blocked by definition snapshot gap.
-    // When fixed, assert retry_resp.pointer('/workflow/id').is_some().
+    // Step 3: retry — must now succeed (Gap 2 fix).
     let retry_resp = server
         .dispatch_call(call(
             TOOL_COMMAND,
@@ -1404,28 +1360,25 @@ async fn after_link_as_alias_resolution_retry_of_original_start_still_blocked_du
         ))
         .await
         .expect("dispatch_call step 3");
-    assert_eq!(
-        retry_resp["interaction"]["kind"].as_str(),
-        Some("SUBJECT_NEEDS_DEFINITION"),
-        "CURRENT BEHAVIOR: retry still blocked by definition snapshot gap; \
-         when fixed, assert workflow.id is present; got: {retry_resp}"
+    assert!(
+        retry_resp.pointer("/workflow/id").is_some(),
+        "retry after link_as_alias must create workflow instance (Gap 2 fix); got: {retry_resp}"
     );
 }
 
-/// PRODUCTION GAP (retry path not yet complete):
-/// After cancel, the placeholder is removed from `FlowgateServer.pending_subjects`.
-/// However, `WorkflowRuntime::start` reads the definition snapshot from
-/// `ConfigDefinitionStore`, which still has the PENDING_DEFINITION placeholder
-/// baked in. The retry is therefore still blocked.
+/// After cancel, the subject is removed from `FlowgateServer.pending_subjects`
+/// (and therefore also from the shared `WorkflowRuntime.pending_subjects` Arc).
+/// The retry of the original start SUCCEEDS because the runtime's live-set check
+/// no longer finds the subject as pending.
 ///
-/// Steps 1 and 2 PASS. Step 3 documents the gap.
-///
-/// Note: the design intention is that cancel lifts the block for this server's
-/// lifetime. A fresh server from the same config would re-create the placeholder.
-/// When the snapshot-gap is fixed, step 3 should assert the start proceeds
-/// (returns a workflow instance, not SUBJECT_NEEDS_DEFINITION).
+/// Semantic choice: cancel says "operator acknowledges this subject is unresolved
+/// and explicitly lifts the block for this server's lifetime". The config still
+/// references the unregistered subject (the workflow's `_lexiconLibrary` snapshot
+/// still carries PENDING_DEFINITION), but the live set is the source of truth for
+/// blocking. A fresh server from the same config would re-create the placeholder.
+/// (Gap 2 fix — SPEC §30.10.4.)
 #[tokio::test]
-async fn after_cancel_retry_of_original_start_still_blocked_due_to_definition_snapshot_gap() {
+async fn after_cancel_retry_of_original_start_succeeds_because_subject_removed_from_pending_set() {
     let (server, _) = build_server(config_with_pending_and_real());
 
     // Step 1: pause on SUBJECT_NEEDS_DEFINITION.
@@ -1441,7 +1394,8 @@ async fn after_cancel_retry_of_original_start_still_blocked_due_to_definition_sn
         "step 1 must pause; got: {pause_resp}"
     );
 
-    // Step 2: cancel — removes placeholder from pending set in MCP server layer.
+    // Step 2: cancel — removes placeholder from pending set in MCP server layer
+    // (and therefore from the runtime's live set too, via the shared Arc).
     let cancel_resp = server
         .dispatch_call(call(
             TOOL_COMMAND,
@@ -1457,9 +1411,8 @@ async fn after_cancel_retry_of_original_start_still_blocked_due_to_definition_sn
         "cancel must succeed; got: {cancel_resp}"
     );
 
-    // Step 3: retry — CURRENT BEHAVIOR: still blocked because the runtime reads
-    // the definition snapshot which still has the placeholder. When fixed, the
-    // retry should NOT return SUBJECT_NEEDS_DEFINITION.
+    // Step 3: retry — must now succeed because cancel lifted the block by
+    // removing the subject from pending_subjects (Gap 2 fix).
     let retry_resp = server
         .dispatch_call(call(
             TOOL_COMMAND,
@@ -1467,11 +1420,9 @@ async fn after_cancel_retry_of_original_start_still_blocked_due_to_definition_sn
         ))
         .await
         .expect("dispatch_call step 3");
-    // Document the current gap: cancel does not yet clear the definition snapshot.
-    assert_eq!(
-        retry_resp["interaction"]["kind"].as_str(),
-        Some("SUBJECT_NEEDS_DEFINITION"),
-        "CURRENT BEHAVIOR: retry still blocked by definition snapshot gap after cancel; \
-         when fixed, retry must NOT return SUBJECT_NEEDS_DEFINITION; got: {retry_resp}"
+    assert!(
+        retry_resp.pointer("/workflow/id").is_some(),
+        "retry after cancel must create workflow instance — cancel lifts the block \
+         by removing the subject from the live pending set (Gap 2 fix); got: {retry_resp}"
     );
 }
