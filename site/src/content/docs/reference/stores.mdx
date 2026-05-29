@@ -47,7 +47,7 @@ SQLite is a solid choice for single-process production deployments. No extra inf
 
 ## Optimistic locking
 
-All stores enforce optimistic locking. When you call `workflow.submit`, you pass an `expectedVersion`. The store checks this against the current version before saving:
+All stores enforce optimistic locking. When you call `flowgate.command({workflowId, transition, expectedVersion})` (submit), you pass an `expectedVersion`. The store checks this against the current version before saving:
 
 1. Read the instance and its version.
 2. If `expectedVersion` doesn't match, reject with `STALE_WORKFLOW_VERSION`.

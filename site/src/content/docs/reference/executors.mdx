@@ -275,7 +275,7 @@ The `queue` is a logical name. It shows up in audit events so your approval syst
 
 ### How it works
 
-1. The model calls `workflow.submit` with a `human` executor transition.
+1. The model calls `flowgate.command({workflowId, transition, expectedVersion})` (submit) with a `human` executor transition.
 2. The gateway records a `human.approval.requested` audit event (or similar) with the queue name.
 3. The workflow stays in its current state, waiting.
 4. A human uses a separate interface (your approval tool, a dashboard, a Slack bot) to review and submit the actual transition.

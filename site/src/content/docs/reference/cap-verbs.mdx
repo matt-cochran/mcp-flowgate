@@ -86,7 +86,7 @@ For deterministic and coordination verbs there's no skill equivalent. `cap.verif
 
 ## Closed enums and amendments
 
-The 24-token cloud is closed. Adding a new verb requires a spec amendment in `docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md §4`. The closed enum is what makes verb-aware search useful (`gateway.search?verb=review` returns a deterministic set) and what makes V6 surface verb drift loudly at load.
+The 24-token cloud is closed. Adding a new verb requires a spec amendment in `docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md §4`. The closed enum is what makes verb-aware search useful (`flowgate.query({kind:"capability", query:"review"})` returns a deterministic set) and what makes V6 surface verb drift loudly at load.
 
 The criterion for a new verb: it has to name a category that's structurally distinct from every existing verb's category. "Better word for `implement`" is not a new verb. "There's a class of caps that does X and no existing verb describes X without bending the semantics" might be.
 

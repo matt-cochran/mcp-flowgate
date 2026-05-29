@@ -42,7 +42,7 @@ The `format`/`lint` split matters: a `format` script writes; a `lint` script doe
 
 ## Why closed?
 
-Closed enums let `gateway.scripts.search verb=build` filter cleanly without synonym matching. They also force authors to pick — `compile.cargo.release` versus `build.cargo.release` is a debate; with the closed enum there's no debate, it's `build`. Less bike-shedding, more shipping.
+Closed enums let `flowgate.query({kind:"script", query:"build"})` filter cleanly without synonym matching. They also force authors to pick — `compile.cargo.release` versus `build.cargo.release` is a debate; with the closed enum there's no debate, it's `build`. Less bike-shedding, more shipping.
 
 ## Subject namespaces
 

@@ -35,11 +35,11 @@ The closest-neighbor confusions worth disambiguating:
 | `explain` | …you're compressing rather than expanding → **`summarize`** |
 | `compose` | …you're assembling existing artifacts into a deliverable (compose), not just summarizing what was done (summarize) — both can be right depending on what the output is |
 
-The model reads a skill ref as `"{verb} {subject}"` — `review review.style.house-voice` — and fetches the body with `gateway.describe` only if relevant.
+The model reads a skill ref as `"{verb} {subject}"` — `review review.style.house-voice` — and fetches the body with `flowgate.query({subject})` only if relevant.
 
 ## Why a closed enum?
 
-Closed enums let `gateway.search` filter by `verb=review` and get an exact, deterministic set. Open vocabulary would force fuzzy matching ("is `evaluate` the same as `review`?") and synonym tables, and the synonym table is itself a config the operator has to maintain. Closed forces authors to pick: this skill is a `review`, not an `evaluate`. The discipline is the point.
+Closed enums let `flowgate.query({kind:"skill", query:"review"})` return an exact, deterministic set. Open vocabulary would force fuzzy matching ("is `evaluate` the same as `review`?") and synonym tables, and the synonym table is itself a config the operator has to maintain. Closed forces authors to pick: this skill is a `review`, not an `evaluate`. The discipline is the point.
 
 It also gives the model a stable cognitive vocabulary across every architecture it encounters. The same eight verbs, everywhere. No re-learning per project.
 
