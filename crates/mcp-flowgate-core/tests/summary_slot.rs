@@ -167,7 +167,7 @@ async fn get_after_summary_submit_returns_summary() {
     assert_eq!(
         get_resp["summary"].as_str(),
         Some("Cold-resumeable note."),
-        "workflow.get must surface the same summary as the prior submit; got: {get_resp}"
+        "flowgate.query(workflowId) must surface the same summary as the prior submit; got: {get_resp}"
     );
 }
 
