@@ -4,7 +4,7 @@
 **Status:** Draft v2 — revised after an FMECA architecture review; supersedes the
 pre-review draft.
 **Scope:** `mcp-flowgate-core` and `mcp-flowgate-executors`. No new MCP tools —
-the seven-tool surface is unchanged.
+the two-tool surface (`flowgate.query` / `flowgate.command`) is unchanged.
 
 ## 1. Summary
 
@@ -14,8 +14,8 @@ valid. Each survived an architecture-validity review (§4).
 1. **Guidance** — reusable "how to think" text, delivered in **two tiers**: a
    small *inline* payload (decision-critical, every response, `{{ }}`-templated)
    and a *referenced* tier (larger reusable fragments, surfaced as keys, fetched
-   on demand via `gateway.describe`). Inlining everything would re-create the
-   context bloat this product exists to remove.
+   on demand via `flowgate.query({subject})`). Inlining everything would
+   re-create the context bloat this product exists to remove.
 2. **Blackboard slot declaration** — name the workflow `context` slots so guards
    and templates are statically checkable. Per-slot typing is optional.
 3. **Transition records** — every applied transition emits one typed, schema'd
@@ -84,7 +84,7 @@ Guidance is therefore *one concept* delivered in two tiers, split by
 | Tier | What | Delivery | Rationale |
 |---|---|---|---|
 | **Inline** | `goal` + a short situational line; `{{ }}` live values | in every response | small, bounded, decision-critical *now* |
-| **Referenced** | reusable fragments ("skills") — larger "how we work" text | a surfaced key; body fetched via `gateway.describe` | the repeat-offender bloat; fetched once, then in the model's own memory |
+| **Referenced** | reusable fragments ("skills") — larger "how we work" text | a surfaced key; body fetched via `flowgate.query({subject})` (see §32) | the repeat-offender bloat; fetched once, then in the model's own memory |
 
 ### 5.2 Inline tier — templated
 
@@ -154,8 +154,8 @@ small object with bounded fields; no body content appears in the listing.
   "hash":    "sha256:9c1d…" }
 ```
 
-- **`subject`** — the fragment's `skills:` map key; also the `gateway.describe`
-  lookup handle. Required.
+- **`subject`** — the fragment's `skills:` map key; also the `flowgate.query({subject})`
+  lookup handle (see §32). Required.
 - **`verb`** — one of eight closed cognitive operations (see below). Required.
 - **`hash`** — `sha256:` prefix + hex digest of the **normalized** body (see
   §5.7). Required. Enables cache invalidation: when the body is edited, the
@@ -164,7 +164,7 @@ small object with bounded fields; no body content appears in the listing.
 
 No `excerpt`, `preview`, or `body` field exists on a ref — by design. The
 listing carries discovery metadata only; bodies cross the wire exactly once,
-on demand, via `gateway.describe`.
+on demand, via `flowgate.query({subject})` (§32 + §30.10).
 
 #### 5.4.1 Closed `verb` vocabulary (poka-yoke)
 
@@ -194,7 +194,8 @@ in the body of a fragment or the framing of a workflow state, not in the verb
 metadata.
 
 The model reads a ref as `"{verb} {subject}"` — `review review.style.house-voice`
-— and fetches the body with `gateway.describe` only if relevant.
+— and fetches the body with `flowgate.query({subject: "review.style.house-voice"})`
+only if relevant (§32).
 
 #### 5.4.2 Blessed `subject` namespace roots (poka-yoke)
 
@@ -343,19 +344,20 @@ the model fetched, *when*, and under *which* correlation:
   "timestamp":    "2026-05-24T14:03:11Z" }
 ```
 
-`gateway.describe` is a non-critical-path audit (per §7.3 terminology): a
-sink failure during the describe-audit emission **does not** abort the
-describe call, but it MUST emit an `audit.write_failed` self-event so the
-failure is observable. This differs from `workflow.transition` records, which
-abort the transition on sink failure (§7.3).
+`flowgate.query` with a `subject` argument (the describe mode, §32) is a
+non-critical-path audit (per §7.3 terminology): a sink failure during the
+describe-audit emission **does not** abort the describe call, but it MUST emit
+an `audit.write_failed` self-event so the failure is observable. This differs
+from `workflow.transition` records, which abort the transition on sink failure (§7.3).
 
 ### 5.9 Acknowledgment as a guard kind — semantic limit (TRIZ-bounded)
 
 For workflows where reading the guidance before acting genuinely matters
 (e.g. a review-style workflow that *requires* the reviewer to have consulted
 the rubric), the runtime exposes a `guidance_acknowledged` guard kind (full
-guard mechanics in §17). This guard fails until `gateway.describe { subject }`
-has been called for the named subject within the **same workflow correlation**.
+guard mechanics in §17). This guard fails until
+`flowgate.query({ subject: "<subject>" })` (§32) has been called for the named
+subject within the **same workflow correlation**.
 
 **Semantic limit (irreducible, documented as a constraint):** the gateway can
 verify the model *fetched* the body. It cannot verify the model *read* or
@@ -402,10 +404,10 @@ slots are the default and are sufficient for use-before-def (§9).
 
 ### 6.3 The optional `summary` slot
 
-`summary` is a reserved, **optional** string slot. `workflow.submit` accepts an
-optional top-level `summary`; when present it is stored to `context.summary` and
-surfaced in every response and `workflow.get`, letting a model resume a workflow
-cold. It is **never** a guard input (model-authored content is untrusted; this
+`summary` is a reserved, **optional** string slot. `flowgate.command` (submit
+mode) accepts an optional top-level `summary`; when present it is stored to
+`context.summary` and surfaced in every response and `flowgate.query({workflowId})`,
+letting a model resume a workflow cold. It is **never** a guard input (model-authored content is untrusted; this
 is why guards may not read `$.context.summary` — `check` errors on that). It is
 not required and has no enforcing config knob.
 
@@ -495,8 +497,12 @@ without `version:` gets a default and behaves as today.
 
 A workflow definition version is a **complete, immutable, self-contained
 snapshot** — states, transitions, guards, blackboard slots, guidance and the
-*resolved fragment bodies* it references. At `workflow.start` the resolved
-snapshot is stored **with the instance** in the `WorkflowStore`.
+*resolved fragment bodies* it references. At `flowgate.command({definitionId})`
+(workflow start) the resolved snapshot is stored **with the instance** in the
+`WorkflowStore`. The §30.10.4 pre-start subject walk runs at this point,
+ensuring every reachable lexicon subject is fully defined before the snapshot
+is pinned — guaranteeing the snapshot-immutability invariant is never
+violated by a `PENDING_DEFINITION` placeholder.
 
 Consequence (FMECA mitigation): a running instance never depends on an external
 definition file. Editing config, or deleting archived files, cannot strand an
@@ -506,9 +512,9 @@ under a new version.
 
 ### 8.3 Hot-reload is additive; archive-never-delete
 
-On SIGHUP, the incoming config's definitions are *added*; new `workflow.start`
-uses the newest version; in-flight instances are untouched and drain on their
-pinned version. Superseded definition versions are retained on disk, never
+On SIGHUP, the incoming config's definitions are *added*; new
+`flowgate.command({definitionId})` calls use the newest version; in-flight
+instances are untouched and drain on their pinned version. Superseded definition versions are retained on disk, never
 deleted by the crate (their lifecycle is the operator's — §3). There are no
 declared migrations (§4): pinning plus natural drain is the whole mechanism.
 
@@ -600,16 +606,16 @@ The request schemas (tool argument shapes) remain Rust-first in
 ## 12. Wire format
 
 ```jsonc
-→ workflow.get { "workflowId": "wf_8f3a" }
+→ flowgate.query { "workflowId": "wf_8f3a" }
 ← { "workflow": { "id": "wf_8f3a", "version": 4, "state": "drafting" },
     "guidance": {
       "goal": "Write the draft",
       "instructions": "Draft from the approved outline.",
       "refs": [ { "verb": "review", "subject": "review.style.house-voice",
                   "hash": "sha256:9c1d…" } ] },
-    "links": [ { "rel": "submit_draft", "method": "workflow.submit", … } ] }
+    "links": [ { "rel": "submit_draft", "method": "flowgate.command", … } ] }
 
-→ gateway.describe { "id": "review.style.house-voice" }    // model chooses to fetch
+→ flowgate.query { "subject": "review.style.house-voice" }    // model chooses to fetch
 ← { "kind":     "guidance",
     "subject":  "review.style.house-voice",
     "verb":     "review",
@@ -618,8 +624,10 @@ The request schemas (tool argument shapes) remain Rust-first in
     "body":     "# House voice\n…" }
 ```
 
-The `gateway.describe` call emits a `guidance.describe_requested` audit event
-(see §5.8). The body is fetched once per workflow's life; subsequent
+The `flowgate.query({subject})` call (describe mode) emits a
+`guidance.describe_requested` audit event — note: `"workflow.transition"` in
+the event_type field is an audit-payload value, distinct from the tool name.
+(See §5.8.) The body is fetched once per workflow's life; subsequent
 references to the same subject from the same correlation reuse the cached body
 unless the ref's `hash` differs (cache invalidation, §5.7).
 
@@ -631,7 +639,7 @@ unless the ref's `hash` differs (cache invalidation, §5.7).
 | `skills:` | workflow / state / transition | list of subject references |
 | `blackboard:` | workflow | slot names, or `{ name: <schema> }` for typed slots |
 | `version:` | workflow | version discriminator; ISO date recommended |
-| `summary` | `workflow.submit` arg | optional model-written string |
+| `summary` | `flowgate.command` (submit mode) arg | optional model-written string |
 | `rotation:` | `audit:` | `daily` (default) / `hourly` / `weekly` |
 | `strict_namespacing:` | `flowgate:` (top level) | `true` (default) / `false` — controls whether unblessed `subject` roots error or warn (§5.4.2) |
 | `delegate:` | workflow state | optional non-empty string — agent-config name for sub-agent delegation. Pass-through only — see §21 |
@@ -652,7 +660,7 @@ unless the ref's `hash` differs (cache invalidation, §5.7).
 | `MISSING_BODY` | `body` field absent from a fragment declaration |
 | `MISSING_SKILL_HASH` | a fragment ref reaches the runtime without a `hash` field |
 | `HASH_MISMATCH` | stored `hash` does not match `normalize_for_hash(body)` at load |
-| `GUIDANCE_DESCRIBE_FAILED` | `gateway.describe` could not resolve a body (snapshot lookup failure) |
+| `GUIDANCE_DESCRIBE_FAILED` | `flowgate.query({subject})` could not resolve a body (snapshot lookup failure) |
 | `GUIDANCE_NOT_ACKNOWLEDGED` | `guidance_acknowledged` guard fired; payload names the unacknowledged subject and the current vs acknowledged hash |
 | `GUIDANCE_SUBJECT_UNKNOWN` | `guidance_acknowledged` guard names a subject absent from the instance's snapshot |
 | `CONFIG_FLAG_NOT_RUNTIME_MUTABLE` | a flag scoped to `flowgate:` top level (e.g. `strict_namespacing`, `authoring.write_enabled`) appears within `workflows:` |
@@ -692,7 +700,7 @@ introduced (§4).
 4. Versioned definitions: `version:` discriminator, the per-instance definition
    snapshot, additive hot-reload.
 5. Guidance: templated inline tier; the `skills:` fragment library; surfaced
-   `verb`/`subject` refs; `gateway.describe` fetch; `check` lints.
+   `verb`/`subject` refs; `flowgate.query({subject})` describe fetch; `check` lints.
 6. use-before-def analysis in `check`.
 
 Each step is independently shippable and rollback-able. A phased, test-first
@@ -934,12 +942,12 @@ Both are surfaced via builder methods on `AuditEvent` (`with_trace_id`,
 pattern. Sinks that serialize to JSON include the fields when present and
 omit them otherwise.
 
-**MCP server plumbing.** The MCP-server-level tools (`workflow.start`,
-`workflow.submit`, `gateway.describe`, etc.) accept optional `traceId` /
-`runId` arguments. When present, the server propagates them to every
-`AuditEvent` produced by the resulting workflow operation. When absent,
-the fields stay `None`. The plumbing is mechanical and does not change
-existing semantics for callers that omit the fields.
+**MCP server plumbing.** The MCP-server-level tools (`flowgate.query` and
+`flowgate.command`) accept optional `traceId` / `runId` arguments. When
+present, the server propagates them to every `AuditEvent` produced by the
+resulting workflow operation. When absent, the fields stay `None`. The
+plumbing is mechanical and does not change existing semantics for callers
+that omit the fields.
 
 ### 20.3 Metric extraction contract
 
@@ -989,8 +997,8 @@ A workflow state MAY declare a `delegate: <string>` field. The gateway
 treats it as **pass-through only**:
 
 - It is read at response-build time and surfaced verbatim at the top
-  level of every `workflow.get` / `workflow.start` / `workflow.submit`
-  response for that state.
+  level of every `flowgate.query({workflowId})` / `flowgate.command({definitionId})`
+  / `flowgate.command({workflowId, transition})` response for that state.
 - It is **not** validated against any agent registry, **not** acted on
   by the gateway, **not** required to be present for the workflow to
   function. A state with no `delegate` is identical to today.
@@ -1004,13 +1012,13 @@ sub-agent receives:
 
 - the state's `goal` and `guidance` as system-prompt material,
 - the full blackboard at spawn time,
-- the same seven Flowgate MCP tools (no extra tools, no out-of-band
-  access).
+- the same two Flowgate MCP tools (`flowgate.query` + `flowgate.command`;
+  no extra tools, no out-of-band access).
 
-The sub-agent runs until it calls `workflow.submit` (advancing the
-workflow) or hits its timeout / step limit. Timeout exhaustion submits
-the `escalate` transition if one is declared, else propagates an
-`InterpreterError::SubAgentTimeout` to the parent interpreter.
+The sub-agent runs until it calls `flowgate.command` with a transition
+(advancing the workflow) or hits its timeout / step limit. Timeout
+exhaustion submits the `escalate` transition if one is declared, else
+propagates an `InterpreterError::SubAgentTimeout` to the parent interpreter.
 
 The pass-through design is deliberate: it lets the gateway stay
 model-agnostic. The TUI is one consumer; other harnesses (IDE
@@ -1182,8 +1190,8 @@ self-identify in logs/metrics without parsing argv:
 
 Mirror of `gateway.skills.search`. Returns refs (`{verb, subject,
 source}`) filterable by `verb` / `subject_root` / `source`. Never
-emits bodies — bodies are fetched on demand via `gateway.describe`
-(progressive disclosure).
+emits bodies — bodies are fetched on demand via
+`flowgate.query({subject})` (progressive disclosure; §32).
 
 Advertised only when `FlowgateServer::with_scripts_search(true)` is
 set. Default off; authoring-time only.
@@ -1195,11 +1203,11 @@ guards:
   - { kind: script_acknowledged, subject: deploy.production.rollout }
 ```
 
-Passes iff `gateway.describe` was called for `subject` against this
-workflow AND the recorded body hash matches the current snapshot's
-hash. Hash flip invalidates the prior ack — editing the script body
-forces re-review. Use case: review-before-execute gates on destructive
-scripts.
+Passes iff `flowgate.query({subject})` (§32) was called for `subject`
+against this workflow AND the recorded body hash matches the current
+snapshot's hash. Hash flip invalidates the prior ack — editing the
+script body forces re-review. Use case: review-before-execute gates on
+destructive scripts.
 
 The guard requires a `ScriptAcknowledgmentStore` wired via
 `FlowgateServer::with_script_ack_store(...)`. Without one, the guard
@@ -1343,8 +1351,8 @@ and the substituted value is what the LLM sees in its system prompt.
 Snapshot stamping (SPEC §8.2): `flowgate.authoring` is copied onto
 each workflow's snapshot as `_authoringPrefs` at config-resolve time.
 In-flight instances see the preferences that existed at
-`workflow.start` — editing the gateway config doesn't mutate what an
-already-running authoring workflow sees.
+`flowgate.command({definitionId})` start time — editing the gateway
+config doesn't mutate what an already-running authoring workflow sees.
 
 Shape validation: `preferred_script_language` must be a non-empty
 string if present (`INVALID_AUTHORING_PREFERENCE` at config load).
@@ -1826,7 +1834,7 @@ states:
 
 | Event | Action |
 |---|---|
-| `workflow.start` lands in state S with `slots: { scope: state }` declarations | Each declared slot is initialized to its `default:` value (or omitted if no default). |
+| `flowgate.command({definitionId})` (workflow start) lands in state S with `slots: { scope: state }` declarations | Each declared slot is initialized to its `default:` value (or omitted if no default). |
 | Transition fires from state S to state T (T ≠ S) | Every state-local slot declared on S is cleared from context. `workflow.slot.cleared` audit event fired with `{state: S, slots: [<names>]}`. |
 | Transition fires from S back to S (via `while:` re-entry or explicit self-loop) | State-local slots PERSIST. Iteration n+1 sees iteration n's values. |
 | Chain hop S → T → U (S has state-local slots; T does too) | S's slots cleared on S→T; T's slots cleared on T→U. Standard transition cleanup. |
@@ -2139,7 +2147,7 @@ across runs, the result needs a STORE that:
 1. **Snapshot-stamps** onto in-flight workflows so a run started
    before a redefine keeps the old understanding (same invariant as
    `_skillsLibrary` per §8.2, `_scriptsLibrary` per §22.5).
-2. **Is searchable** from any workflow via `gateway.lexicon.search`.
+2. **Is searchable** from any workflow via `flowgate.query({kind: "lexicon", query})`.
 3. **Is human-governed by default** so vocabulary doesn't drift
    silently as agents propose definitions.
 4. **Is version-controllable** (Tier 1: lives in `flowgate.yaml`,
@@ -2185,19 +2193,25 @@ field.
 At config-load, every workflow gets a `_lexiconLibrary` snapshot on
 its definition. In-flight workflows are immune to edits of the
 top-level `lexicon:` block — they see the lexicon that existed at
-`workflow.start` time. Same invariant as `_skillsLibrary` /
-`_scriptsLibrary`.
+`flowgate.command({definitionId})` start time. Same invariant as
+`_skillsLibrary` / `_scriptsLibrary`.
 
 ### 30.5 MCP tools
 
-Three new tools on the `gateway.lexicon.*` namespace (additions to the
-seven core tools, becoming 10 total in the always-advertised set):
+Lexicon operations dispatch through the two-tool surface (§32) rather
+than dedicated tools:
 
-| Tool | Purpose | Args | Returns |
+| Operation | Call | Args | Returns |
 |---|---|---|---|
-| `gateway.lexicon.search` | Substring match across term names + definitions | `{query, bounded_context?, limit?}` | `{hits: [{term, definition, ...}]}` |
-| `gateway.lexicon.lookup` | Exact-term lookup | `{term, bounded_context?}` | `{term, entry}` (entry may be null) |
-| `gateway.lexicon.define` | Propose / set a term — governance-gated | `{term, definition, bounded_context?, refs?, governance?}` | `{term, entry, persisted_to: "overlay"}` |
+| Search | `flowgate.query({kind:"lexicon", query, bounded_context?, limit?})` | query string | `{hits: [{term, definition_short, aliases?, ...}]}` |
+| Lookup | `flowgate.query({subject:"lexicon:<term>", bounded_context?})` | exact term | `{term, entry}` (entry may be null) |
+| Define | `flowgate.command({subject:"lexicon:<term>", definition:{definition_short, definition_long?, aliases?, refs?, bounded_context?, governance?}})` | term + entry fields | `{term, entry, persisted_to: "overlay"}` |
+
+The `definition` object in the define call aligns with §30.10.1
+(`aliases: string[]`) and §30.10.10.1 (`definition_short` required
+one-sentence summary; `definition_long` optional multi-paragraph
+detail). Search results use `definition_short` for inline previews.
+Full lookup responses include `definition_long` when present.
 
 Search and lookup read the union of the config-loaded base + a
 runtime overlay (overlay wins on collision). Define writes to the
@@ -2209,9 +2223,10 @@ reloading. Overlay survives only for the runtime's lifetime.
 The `governance:` field on each lexicon entry is either:
 
 - `human-only` (default) — agent callers writing via
-  `gateway.lexicon.define` get `LEXICON_DEFINE_REQUIRES_HUMAN`. The
-  workflow must route through an `actor: human` transition (or a
-  human-principal call surface) to commit the change.
+  `flowgate.command({subject:"lexicon:<term>", definition:{...}})` get
+  `LEXICON_DEFINE_REQUIRES_HUMAN`. The workflow must route through an
+  `actor: human` transition (or a human-principal call surface) to
+  commit the change.
 - `agent-may-propose` — agents can define directly. Suitable for
   scratch / sandbox contexts.
 
@@ -2219,12 +2234,24 @@ The `governance:` field on each lexicon entry is either:
 human contract. Operators opting into `agent-may-propose` are making
 an explicit choice to accept faster iteration over discipline.
 
+**Placeholder-fill bypass (§30.10.5).** When the runtime surfaces a
+`SUBJECT_NEEDS_DEFINITION` interaction, the `define_new` link it
+returns is pre-filled with `flowgate.command({subject:"lexicon:<term>",
+definition:{...}})`. Following this link is NOT subject to the
+`human-only` governance gate on the placeholder — the guard system
+treats a `PENDING_DEFINITION`-sourced define call as a first-write
+(the term has no governance field yet; the caller supplies one). The
+result adopts whichever `governance` value the caller provides, and
+subsequent edits honor it normally.
+
 ### 30.7 Audit
 
-Every successful `gateway.lexicon.define` emits a `lexicon.defined`
-event with payload `{term, bounded_context, by_human}`. Combined with
-the existing `workflow.transition` audit per route-to-human, this
-gives operators full replay of vocabulary changes.
+Every successful `flowgate.command({subject:"lexicon:<term>", definition:{...}})`
+emits a `lexicon.defined` event with payload `{term, bounded_context, by_human}`.
+Combined with the existing `workflow.transition` audit-event payload (note:
+`"workflow.transition"` is an `event_type` value in the audit payload, not a
+tool name) per route-to-human, this gives operators full replay of vocabulary
+changes.
 
 ### 30.8 Error codes
 
@@ -2324,9 +2351,9 @@ subject resolves to a `PENDING_DEFINITION` placeholder, the start is
 **paused, not executed**: the runtime returns a structured
 `SUBJECT_NEEDS_DEFINITION` interaction (see §30.10.5).
 
-This invariant ensures the pinned snapshot at `workflow.start` time
-(§8.2) is always complete — every subject reachable from the
-workflow definition has a real lexicon entry. There is no in-flight
+This invariant ensures the pinned snapshot at `flowgate.command({definitionId})`
+start time (§8.2) is always complete — every subject reachable from
+the workflow definition has a real lexicon entry. There is no in-flight
 workflow with a partially-resolved lexicon, and no need to retroactively
 mutate a pinned snapshot.
 
@@ -2879,8 +2906,8 @@ can follow via a `subject: "lexicon:<term>"` query call.
 
 Whether the LLM should be allowed to extend the lexicon is a **policy
 question, not an architecture question** — it belongs in the same
-mechanism that governs `workflow.submit`: the guard system. Two layers
-of control:
+mechanism that governs `flowgate.command` (submit mode): the guard system.
+Two layers of control:
 
 1. **Per-workflow guards.** A workflow author who wants a
    knowledge-curation step can declare the transition that emits a
@@ -3047,8 +3074,8 @@ One landing PR, sequenced internally so each step compiles green:
 5. `run_id` idempotency in `WorkflowRuntime::start` (check for existing
    instance by `(definitionId, run_id)` before creating).
 6. Embedded `lexicon` field in describe/get/explain response bodies.
-   Term extraction at workflow.start time (regex first-pass + cache
-   per pinned snapshot).
+   Term extraction at `flowgate.command({definitionId})` start time
+   (regex first-pass + cache per pinned snapshot).
 7. `flowgate lexicon define <term> <definition>` CLI subcommand as
    operator-friendly convenience wrapper for the same handler.
 8. Documentation: README + SPEC §5/§8.2/§12/§17/§22/§30 references
