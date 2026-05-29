@@ -39,9 +39,9 @@ Everything flows through three layers. Discovery finds what's available. Action 
         └─────────────────────────┘
 ```
 
-**Discovery** is how the model finds capabilities. `gateway.home` returns the top-level catalog. `gateway.search` matches keywords against names, descriptions, and tags. `gateway.describe` loads the full schema for a specific capability. The model pays tokens only for what it actually looks at.
+**Discovery** is how the model finds capabilities. `flowgate.query({})` (home) returns the top-level catalog. `flowgate.query({query})` (search) matches keywords against names, descriptions, and tags. `flowgate.query({subject})` (describe) loads the full schema for a specific capability. The model pays tokens only for what it actually looks at.
 
-**Action** is how the model interacts with capabilities. Every capability runs as a workflow -- even single-step ones. `workflow.start` kicks it off, `workflow.get` checks status, `workflow.submit` provides input at decision points, and `workflow.explain` shows the full state machine. Guards, approval gates, and validation all live here.
+**Action** is how the model interacts with capabilities. Every capability runs as a workflow -- even single-step ones. `flowgate.command({definitionId})` (start) kicks it off, `flowgate.query({workflowId})` (get) checks status, `flowgate.command({workflowId, transition})` (submit) provides input at decision points, and `flowgate.query({workflowId, transition})` (explain) shows the full state machine. Guards, approval gates, and validation all live here.
 
 **Execution** is where the real work happens. The runtime dispatches to whatever executor you've configured -- an MCP server, a CLI command, an HTTP endpoint, a human approval queue. The model never talks to executors directly. The action layer mediates everything.
 

@@ -154,7 +154,7 @@ workflows:
         terminal: true
 ```
 
-When `workflow.start` fires with `{ "service": "payment-api" }`, the runtime:
+When `flowgate.command({definitionId: "deploy_pipeline", input: {"service": "payment-api"}})` fires, the runtime:
 
 1. Enters `lint`, sees only a deterministic transition, executes `lint-check payment-api`
 2. Enters `test`, same deal, executes `test-runner payment-api`

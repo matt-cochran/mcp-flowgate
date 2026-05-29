@@ -34,8 +34,8 @@ The four orchestrators reuse a small set of caps. This is the composition the tw
 | `cap.review.adversarial` | review | Adversarial review of the candidate YAML. Shadowed from cognitive-architectures' richer version when both repos are loaded. |
 | `cap.coordinate.pr-open` | coordinate | Opens the PR (same shadow pattern). |
 | `cap.audit.mine-transitions` | audit | (optimize-* only.) Mines transition records for the workflow you're refining — stalls, failing guards, human interventions, slow transitions. |
-| `cap.research.lexicon-lookup` | research | Typed wrapper over `gateway.lexicon.lookup` so authoring stays vocabulary-consistent. |
-| `cap.summarize.lexicon-define` | summarize | Typed wrapper over `gateway.lexicon.define` — register new terms the authored content introduces. |
+| `cap.research.lexicon-lookup` | research | Typed wrapper over `flowgate.query({subject:"lexicon:<term>"})` so authoring stays vocabulary-consistent. |
+| `cap.summarize.lexicon-define` | summarize | Typed wrapper over `flowgate.command({subject:"lexicon:<term>", definition:{...}})` — register new terms the authored content introduces. |
 
 ## Why "tool inventory" is the first step
 

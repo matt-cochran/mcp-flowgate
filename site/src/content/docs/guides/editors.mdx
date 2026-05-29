@@ -3,7 +3,7 @@ title: "Wire flowgate into your editor"
 description: "Two integration paths — MCP (Zed, Cursor, Claude Desktop, Claude Code, VS Code via Continue/Cline) and ACP (Zed, others adopting). One-liner setup via `flowgate mcp init`. Copy-paste config for each editor."
 ---
 
-You install `mcp-flowgate`. You install the `flowgate` TUI. You write your `gateway.yaml`. Now the model in your editor needs to actually see the 10 fixed tools instead of whatever the editor ships with.
+You install `mcp-flowgate`. You install the `flowgate` TUI. You write your `gateway.yaml`. Now the model in your editor needs to actually see the 2 fixed tools instead of whatever the editor ships with.
 
 Each editor wires it slightly differently. This guide walks each one — Zed, Cursor, Claude Desktop, Claude Code — and shows both integration paths.
 
@@ -11,7 +11,7 @@ Each editor wires it slightly differently. This guide walks each one — Zed, Cu
 
 There are two ways an editor talks to flowgate:
 
-**MCP path.** The editor's agent panel speaks the Model Context Protocol. It spawns `mcp-flowgate serve` as a child process, gets the 10 fixed tools (`gateway.home`, `gateway.search`, `gateway.describe`, `workflow.start`/`get`/`submit`/`explain`, `gateway.lexicon.search`/`lookup`/`define`), and the model uses them. Every editor in this guide supports MCP.
+**MCP path.** The editor's agent panel speaks the Model Context Protocol. It spawns `mcp-flowgate serve` as a child process, gets the 2 fixed tools (`flowgate.query` for all reads, `flowgate.command` for all writes), and the model uses them. Every editor in this guide supports MCP.
 
 **ACP path.** The editor speaks the Agent Communication Protocol (Zed today, others adopting). Instead of giving the model a tool surface, the editor drives a workflow through the deterministic interpreter — same code path the [TUI](/guides/tui/) uses for `flowgate walk`. The agent panel walks workflow states; the model fills in the cognitive blanks per state. Different shape, different ceiling.
 
@@ -81,16 +81,8 @@ Add to `.zed/settings.json`:
         "context_servers": {
           "flowgate": {
             "tools": {
-              "gateway.home": true,
-              "gateway.search": true,
-              "gateway.describe": true,
-              "workflow.start": true,
-              "workflow.get": true,
-              "workflow.submit": true,
-              "workflow.explain": true,
-              "gateway.lexicon.search": true,
-              "gateway.lexicon.lookup": true,
-              "gateway.lexicon.define": true
+              "flowgate.query": true,
+              "flowgate.command": true
             }
           }
         }
@@ -103,7 +95,7 @@ Add to `.zed/settings.json`:
 That's two things:
 
 1. **`context_servers.flowgate`** — registers `mcp-flowgate` as an MCP server Zed can spawn.
-2. **`agent.profiles.flowgate`** — a custom agent profile that disables all 19 of Zed's built-in tools (`read_file`, `terminal`, etc.) and enables only the 10 flowgate tools. Switching to this profile in the agent panel gives the model exactly the 10 tools, nothing else.
+2. **`agent.profiles.flowgate`** — a custom agent profile that disables all 19 of Zed's built-in tools (`read_file`, `terminal`, etc.) and enables only the 2 flowgate tools. Switching to this profile in the agent panel gives the model exactly the 2 tools, nothing else.
 
 Open the agent panel, pick **Flowgate** from the profile dropdown at the bottom. The model now sees only governed actions. Switch back to **Write** when you want raw editor access.
 

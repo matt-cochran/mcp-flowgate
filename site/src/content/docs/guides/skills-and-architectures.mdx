@@ -25,7 +25,7 @@ skills:
 
 The verb (`review`) is one of eight closed cognitive operations — see [Cognitive verbs and subject namespaces](/reference/cognitive-verbs/). The subject (`review.code.adversarial`) is a dotted namespace starting with a blessed root. The body is prose the model reads. The lifecycle (`stable`) tells you whether to trust it in production.
 
-Skills don't ride along in the model's context for free. The gateway surfaces a ref — `{ verb, subject, hash }` — and the model fetches the body via `gateway.describe` only if it's relevant. This is progressive disclosure: nine skills cost you nine refs (a few hundred bytes), not nine full bodies. The hash invalidates the model's cache the moment you edit the body.
+Skills don't ride along in the model's context for free. The gateway surfaces a ref — `{ verb, subject, hash }` — and the model fetches the body via `flowgate.query({subject})` only if it's relevant. This is progressive disclosure: nine skills cost you nine refs (a few hundred bytes), not nine full bodies. The hash invalidates the model's cache the moment you edit the body.
 
 ## A workflow is a state machine
 
@@ -124,10 +124,10 @@ Scripts get the same treatment skills do:
 
 - **Closed verb enum** — eight action verbs (`build`, `test`, `deploy`, `format`, `lint`, `install`, `verify`, `run`). Different vocabulary from cognitive verbs because a bash script doesn't `triage` or `explain` — it builds, tests, deploys.
 - **Subject namespaces** — dotted, kebab, blessed-root-enforced. `build.cargo.release`, `test.pytest.coverage`, `deploy.production.rollout`.
-- **Hash pinning** — the workflow's instance snapshot stamps the body hash. A future replay can pull the exact code that ran from cold storage by hash. Editing the body after `workflow.start` is invisible to in-flight instances.
+- **Hash pinning** — the workflow's instance snapshot stamps the body hash. A future replay can pull the exact code that ran from cold storage by hash. Editing the body after `flowgate.command({definitionId})` (start) is invisible to in-flight instances.
 - **Body source** — either inline `body: |` literal, OR external `uri: file://...` + `hash: sha256:...` (v1 supports `file://` only; remote URIs are planned).
-- **Authoring-time discovery** — `gateway.scripts.search verb=build subject_root=cargo` returns refs filterable by verb, subject root, and source.
-- **Acknowledged-before-execute guard** — pair the `script` executor with a `script_acknowledged` guard for destructive scripts. The workflow refuses to run until an operator has called `gateway.describe` on the current body. Hash flip invalidates the prior ack — editing the script forces re-review.
+- **Authoring-time discovery** — `flowgate.query({ kind: "script", query: "build cargo" })` returns refs filterable by verb, subject root, and source.
+- **Acknowledged-before-execute guard** — pair the `script` executor with a `script_acknowledged` guard for destructive scripts. The workflow refuses to run until an operator has called `flowgate.query({subject: "script:<subject>"})` on the current body. Hash flip invalidates the prior ack — editing the script forces re-review.
 
 The point: instead of inlining brittle `command: ["bash", "-c", "..."]` arrays across every workflow, curate a library. Operators replace the library wholesale per environment; workflows reference subjects, not commands.
 

@@ -32,9 +32,9 @@ layout:
 The manifest declares:
 
 - **`schema`** — pinned to `flowgate.repo/v1` for v0.2. Forward-incompatible schema bumps will use new constants so older gateways refuse to mis-parse newer repos.
-- **`name`** — the repo's identifier, lowercase kebab. Used in diagnostics and `gateway.describe`.
+- **`name`** — the repo's identifier, lowercase kebab. Used in diagnostics and `flowgate.query({subject})` describe.
 - **`namespace`** — the prefix every loaded definitionId gets. Single segment, lowercase kebab. Two repos sharing a namespace fail at load (V20).
-- **`version`** — repo version, semver-shaped by convention. Surfaced via `gateway.describe`.
+- **`version`** — repo version, semver-shaped by convention. Surfaced via `flowgate.query({subject})`.
 - **`layout`** — per-tier directory locations. All fields optional; defaults match the field names. A repo that doesn't ship one tier (a connections-only repo, say) leaves that field unset and the loader silently skips the missing directory.
 
 ## Loading repos

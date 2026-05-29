@@ -114,8 +114,8 @@ The manifest is short — six required fields plus the layout block:
 schema: flowgate.repo/v1            # pinned; new repo schemas use new constants
 name: swe-core                       # repo identifier (lowercase kebab)
 namespace: swe                       # prefix every loaded id gets
-version: 0.6.0                       # repo version; surfaces in gateway.describe
-description: |                       # surfaces in gateway.describe and operator-facing diagnostics
+version: 0.6.0                       # repo version; surfaces in `flowgate.query({subject})`
+description: |                       # surfaces in `flowgate.query({subject})` and operator-facing diagnostics
   Core SWE capabilities + lifecycle orchestrators for plan-driven
   feature delivery, bugfix-from-error-log, and safe-refactor.
 layout:                              # all fields optional; defaults match the directory names

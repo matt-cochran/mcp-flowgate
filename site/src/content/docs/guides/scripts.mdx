@@ -170,7 +170,7 @@ Fully-qualify to reference scripts from a different namespace explicitly (`inter
 
 ## Snapshot stamping (`_scriptsLibrary`)
 
-Same SPEC §8.2 invariant as `_skillsLibrary`. When `workflow.start` creates an instance, the runtime stamps a `_scriptsLibrary` onto the instance's definition snapshot — copy of every script the workflow references, with body, hash, and verb included.
+Same SPEC §8.2 invariant as `_skillsLibrary`. When `flowgate.command({definitionId})` creates an instance, the runtime stamps a `_scriptsLibrary` onto the instance's definition snapshot — copy of every script the workflow references, with body, hash, and verb included.
 
 For inline `body:` scripts the snapshot carries the literal text. For external `uri:` scripts the snapshot carries the *resolved* body — the runtime fetched it at load time, verified the hash, and snapshotted the verified bytes. The instance executes against the snapshotted body, not against a re-fetch.
 

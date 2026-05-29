@@ -112,7 +112,7 @@ workflows:
 | State-level | Just that state | "The critiquing state needs the adversarial rubric; the next state doesn't." |
 | Transition-level | Just when that transition is the current decision | "Only when the model is about to fire `escalate`, surface the escalation rubric." |
 
-The model gets the subjects (the menu), not the bodies (the meal). When it decides a particular skill is relevant, it calls `gateway.describe(subject)` to fetch the body. Progressive disclosure — the model pulls one mental model at a time, only when it's about to use it.
+The model gets the subjects (the menu), not the bodies (the meal). When it decides a particular skill is relevant, it calls `flowgate.query({subject})` to fetch the body. Progressive disclosure — the model pulls one mental model at a time, only when it's about to use it.
 
 ### Cross-namespace references from repo-loaded workflows
 
@@ -127,19 +127,19 @@ The lookup is the same fall-through pattern [Multi-repo loading](/guides/multi-r
 
 ## How the model finds them
 
-Two of the [ten MCP tools](/reference/tools/) are how the model discovers and reads skills:
+The [two MCP tools](/reference/tools/) are how the model discovers and reads skills:
 
-### `gateway.search` indexes them
+### `flowgate.query` with `query` searches them
 
 The search index includes every loaded skill alongside capabilities and workflows. Each skill contributes its subject, verb, source, and body to the index. A query like `"adversarial review"` ranks `review.code.adversarial` highly because the term hits the subject + verb + body together.
 
-The model can filter by verb (`gateway.search { query: "review", verb: "review" }`) or by subject root if you're exploring a namespace. Closed-enum verbs make the filter deterministic — no fuzzy matching across "review" vs "evaluate" vs "critique."
+The model can filter by kind (`flowgate.query({ query: "review", kind: "skill" })`). Closed-enum verbs make the filter deterministic — no fuzzy matching across "review" vs "evaluate" vs "critique."
 
-### `gateway.describe` returns the body
+### `flowgate.query` with `subject` returns the body
 
 ```json
 {
-  "name": "gateway.describe",
+  "name": "flowgate.query",
   "arguments": { "subject": "cognitive/review.code.adversarial" }
 }
 ```
@@ -150,7 +150,7 @@ returns the verb, body, hash, and source. The model reads the body, applies the 
 
 This is the SPEC §8.2 invariant that keeps in-flight workflows stable.
 
-When `workflow.start` creates an instance, the runtime stamps a `_skillsLibrary` onto the instance's definition snapshot — a copy of every skill referenced anywhere in the workflow, with body, hash, and verb included. The instance carries this for its entire lifetime. Subsequent `workflow.get` / `workflow.submit` calls read from the stamp; they never re-query the live `skills:` config.
+When `flowgate.command({definitionId})` creates an instance, the runtime stamps a `_skillsLibrary` onto the instance's definition snapshot — a copy of every skill referenced anywhere in the workflow, with body, hash, and verb included. The instance carries this for its entire lifetime. Subsequent `flowgate.query({workflowId})` (get) and `flowgate.command({workflowId, transition})` (submit) calls read from the stamp; they never re-query the live `skills:` config.
 
 What that buys you:
 
@@ -184,7 +184,7 @@ states:
             subject: review.code.adversarial
 ```
 
-This passes only if the model called `gateway.describe(review.code.adversarial)` on this workflow AND the recorded body hash matches the current snapshot's hash. Hash flip → acknowledgment expires → the model has to re-read.
+This passes only if the model called `flowgate.query({subject: "review.code.adversarial", workflowId: "..."})` on this workflow AND the recorded body hash matches the current snapshot's hash. Hash flip → acknowledgment expires → the model has to re-read.
 
 Use this when the guidance is load-bearing — when you want the runtime to enforce "you read the rubric before you submitted the verdict." Don't sprinkle it on every transition; it adds friction. Reach for it on the transitions where skipping the rubric would cost something real.
 
@@ -196,7 +196,7 @@ Some practical conventions that emerge from real use:
 - **100–400 words.** Long enough to encode actual discipline; short enough that the body cost isn't a tax on every snapshot-stamped instance.
 - **Cite the trap.** Skill bodies are at their best when they name a specific failure mode. "The temptation here is to..." or "Anti-pattern:" lines do more for model behavior than abstract principles.
 - **Bounded scope.** `review.code.adversarial` is good. `review.code.everything-you-need-to-know` is too broad — split into the actual sub-disciplines.
-- **Lifecycle honestly.** Mark experimental skills `experimental` — operators see this in `gateway.describe` and treat them accordingly. Promoting to `stable` is a commitment.
+- **Lifecycle honestly.** Mark experimental skills `experimental` — operators see this in `flowgate.query({subject})` describe responses and treat them accordingly. Promoting to `stable` is a commitment.
 
 ## What's next
 

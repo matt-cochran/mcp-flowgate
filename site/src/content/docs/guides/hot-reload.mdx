@@ -26,7 +26,7 @@ When SIGHUP arrives, the gateway reloads and rebuilds:
 
 ## What survives
 
-- **In-flight workflows** -- any workflow instance that's already started continues on its current definition. It doesn't get yanked mid-step. The model can still call `workflow.get` and `workflow.submit` on existing instances.
+- **In-flight workflows** -- any workflow instance that's already started continues on its current definition. It doesn't get yanked mid-step. The model can still call `flowgate.query({workflowId})` (get) and `flowgate.command({workflowId, transition})` (submit) on existing instances.
 - **The audit sink** -- audit events keep flowing without gaps. The reload itself emits a `config.reloaded` audit event so you have a record of when the config changed.
 
 ## How the swap works
@@ -45,7 +45,7 @@ For changes that SIGHUP can't handle -- like upgrading the binary itself -- you 
 
 1. Start a new mcp-flowgate instance on a different port with the new binary and config.
 2. Update your load balancer or reverse proxy to point to the new instance.
-3. Call `begin_drain` on the old instance (or let it drain naturally). It stops accepting new `workflow.start` calls but lets in-flight workflows finish.
+3. Call `begin_drain` on the old instance (or let it drain naturally). It stops accepting new `flowgate.command({definitionId})` (start) calls but lets in-flight workflows finish.
 4. Once the old instance has no active workflows, shut it down.
 
 This gives you binary upgrades without dropping a single workflow.
