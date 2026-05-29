@@ -239,6 +239,12 @@ async fn response_surfaces_guidance_refs() {
 
     let cfg = json!({
         "version": "1.0.0",
+        // Lexicon entries for the subjects referenced in skills keys so the
+        // pre-start walk (SPEC §30.10.4) does not block the workflow start.
+        "lexicon": {
+            "style.house-voice": { "definition_short": "Voice and tone guidelines." },
+            "editorial.checklist": { "definition_short": "Editorial quality checklist." }
+        },
         "skills": {
             "review.style.house-voice": {
                 "verb": "review",
@@ -340,6 +346,11 @@ async fn response_surfaces_guidance_refs() {
 async fn transition_scope_refs_ride_on_link() {
     let cfg = json!({
         "version": "1.0.0",
+        // Lexicon entry for the subject referenced by the skills key so the
+        // pre-start walk (SPEC §30.10.4) does not block the workflow start.
+        "lexicon": {
+            "style.tone-for-review": { "definition_short": "Tone guidelines for review." }
+        },
         "skills": {
             "review.style.tone-for-review": {
                 "verb": "review",

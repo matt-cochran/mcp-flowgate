@@ -899,6 +899,78 @@ pub(crate) fn run_id_already_running(run_id: &str, existing_workflow_id: &str) -
     })
 }
 
+/// SPEC §30.10.5 — structured SUBJECT_NEEDS_DEFINITION interaction response.
+///
+/// Returned when `WorkflowRuntime::start` detects a `PENDING_DEFINITION`
+/// placeholder in the workflow's `_lexiconLibrary`. The workflow instance is
+/// NOT created. The original tool-call args are echoed back verbatim as
+/// `queued_command.args` so the resolver can retry unchanged after defining the
+/// subject.
+///
+/// Three HATEOAS links guide resolution:
+///
+/// - `link_as_alias`  — link the unknown subject as a synonym for an existing term.
+/// - `define_new`     — add a new first-class lexicon entry.
+/// - `cancel`         — abandon the original command.
+///
+/// The `candidates` array is intentionally empty here. Task 3.4 (Levenshtein
+/// ranking) and Task 3.9 (semantic ranking) will populate it.
+pub(crate) fn subject_needs_definition(
+    unknown_subject: &str,
+    bounded_context: Option<&str>,
+    workflow_id_context: &str,
+    queued_args: &Value,
+) -> Value {
+    let lexicon_subject = format!("lexicon:{unknown_subject}");
+    json!({
+        "interaction": {
+            "kind": "SUBJECT_NEEDS_DEFINITION",
+            "unknown_subject": unknown_subject,
+            "context": {
+                "encountered_in": workflow_id_context,
+                "bounded_context": bounded_context
+            },
+            "candidates": []
+        },
+        "queued_command": {
+            "method": "flowgate.command",
+            "args": queued_args
+        },
+        "links": [
+            {
+                "rel": "link_as_alias",
+                "method": "flowgate.command",
+                "args": {
+                    "subject": lexicon_subject,
+                    "definition": { "aliases_add": [unknown_subject] }
+                },
+                "hint": "Use this if the unknown subject is a synonym for an existing term."
+            },
+            {
+                "rel": "define_new",
+                "method": "flowgate.command",
+                "args": {
+                    "subject": lexicon_subject,
+                    "definition": {
+                        "definition_short": "<fill in>",
+                        "boundedContext": bounded_context
+                    }
+                },
+                "hint": "Use this if the unknown subject is a genuinely new concept."
+            },
+            {
+                "rel": "cancel",
+                "method": "flowgate.command",
+                "args": {
+                    "intent": "cancel_pending_subject",
+                    "unknown_subject": unknown_subject
+                },
+                "hint": "Abandon the original command — the subject was a mistake."
+            }
+        ]
+    })
+}
+
 /// Structured AMBIGUOUS_INTENT response body for `flowgate.command` dispatch.
 /// Per SPEC §32, this is a 4xx-class structured response — NOT an MCP
 /// protocol error — so HATEOAS links remain machine-parseable by clients.

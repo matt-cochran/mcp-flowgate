@@ -32,6 +32,23 @@ pub enum RuntimeError {
         run_id: String,
         existing_workflow_id: String,
     },
+
+    /// SPEC §30.10.4-5 — pre-start subject walk found a placeholder subject.
+    ///
+    /// Raised in `WorkflowRuntime::start` when the workflow definition's
+    /// `_lexiconLibrary` contains an entry with `state: "PENDING_DEFINITION"`.
+    /// The runtime must NOT create the workflow instance. The MCP layer
+    /// translates this into a structured `SUBJECT_NEEDS_DEFINITION` interaction
+    /// response per §30.10.5.
+    #[error("subject '{unknown_subject}' is unresolved in workflow '{workflow_id_context}'")]
+    SubjectNeedsDefinition {
+        /// The placeholder term that has no lexicon definition.
+        unknown_subject: String,
+        /// Optional bounded context from the placeholder entry (if any).
+        bounded_context: Option<String>,
+        /// The `encountered_in` context, formatted as `"workflow:<id>"`.
+        workflow_id_context: String,
+    },
 }
 
 impl RuntimeError {
@@ -41,6 +58,7 @@ impl RuntimeError {
         match self {
             RuntimeError::RecordWriteFailed { .. } => "RECORD_WRITE_FAILED",
             RuntimeError::RunIdAlreadyRunning { .. } => "RUN_ID_ALREADY_RUNNING",
+            RuntimeError::SubjectNeedsDefinition { .. } => "SUBJECT_NEEDS_DEFINITION",
         }
     }
 }

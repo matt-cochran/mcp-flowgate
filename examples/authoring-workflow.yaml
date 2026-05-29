@@ -13,6 +13,15 @@
 
 version: "1.0.0"
 
+# Lexicon entries for subjects referenced in skills keys (SPEC §30.10.4).
+lexicon:
+  rubric.workflow-shape:
+    definition_short: "Structural rubric for well-formed workflow definitions."
+  rubric.skill-shape:
+    definition_short: "Structural rubric for well-formed skill fragments."
+  pitfall.common-failures:
+    definition_short: "Catalogue of common authoring mistakes to avoid."
+
 flowgate:
   # Enable both gates below to make this workflow actually publish.
   # Default is off in production; opt in deliberately.

@@ -264,6 +264,29 @@ impl WorkflowRuntime {
         }
 
         let definition = self.definitions.load(&request.definition_id).await?;
+
+        // SPEC §30.10.4 — pre-start subject walk. Scan the definition's
+        // `_lexiconLibrary` for any placeholder entry whose `state` is
+        // `PENDING_DEFINITION`. If one is found, abort before creating the
+        // instance and return a structured error. The MCP layer translates this
+        // to a SUBJECT_NEEDS_DEFINITION interaction with HATEOAS links.
+        if let Some(lib) = definition.get("_lexiconLibrary").and_then(Value::as_object) {
+            for (term, entry) in lib {
+                if entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION") {
+                    let bounded_context = entry
+                        .get("bounded_context")
+                        .and_then(Value::as_str)
+                        .map(String::from);
+                    return Err(RuntimeError::SubjectNeedsDefinition {
+                        unknown_subject: term.clone(),
+                        bounded_context,
+                        workflow_id_context: format!("workflow:{}", request.definition_id),
+                    }
+                    .into());
+                }
+            }
+        }
+
         let mut input = request.input;
         apply_schema_defaults(definition.pointer("/inputSchema"), &mut input);
         validate_schema(definition.pointer("/inputSchema"), &input, "workflow input")?;

@@ -20,7 +20,7 @@ pub mod args;
 mod handlers;
 mod tools;
 
-use handlers::run_id_already_running;
+use handlers::{run_id_already_running, subject_needs_definition};
 
 use std::sync::Arc;
 
@@ -202,6 +202,12 @@ impl FlowgateServer {
             .map(|m| Value::Object(m.clone()))
             .unwrap_or_else(|| json!({}));
 
+        // Retain a clone of the original args so the error-handler block below
+        // can echo them back in structured error responses (e.g.
+        // SUBJECT_NEEDS_DEFINITION queued_command.args) even after `args` has
+        // been moved into a dispatch call.
+        let original_args = args.clone();
+
         let result = match request.name.as_ref() {
             TOOL_QUERY => {
                 // §32: Some `kind` values and `subject: "lexicon:..."` need
@@ -339,6 +345,25 @@ impl FlowgateServer {
                 {
                     return Ok(run_id_already_running(run_id, existing_workflow_id));
                 }
+
+                // SPEC §30.10.5 — SUBJECT_NEEDS_DEFINITION is a structured
+                // interaction response. The original `original_args` (the full
+                // CommandArgs JSON) are echoed back as `queued_command.args`
+                // so the caller can retry unchanged once the subject is defined.
+                if let Some(mcp_flowgate_core::RuntimeError::SubjectNeedsDefinition {
+                    unknown_subject,
+                    bounded_context,
+                    workflow_id_context,
+                }) = e.downcast_ref::<mcp_flowgate_core::RuntimeError>()
+                {
+                    return Ok(subject_needs_definition(
+                        unknown_subject,
+                        bounded_context.as_deref(),
+                        workflow_id_context,
+                        &original_args,
+                    ));
+                }
+
                 Err(McpError::internal_error(e.to_string(), None))
             }
         }

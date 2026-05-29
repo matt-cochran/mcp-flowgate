@@ -94,9 +94,45 @@ fn fixture_path() -> PathBuf {
 }
 
 fn write_host_config(td: &TempDir) -> PathBuf {
+    // Lexicon entries for all subjects referenced by scripts, skills, and
+    // capabilities in the flowgate-meta fixture. Required so the pre-start
+    // subject walk (SPEC §30.10.4) does not block workflow starts.
     let body = format!(
-        "version: \"1.0.0\"\nrepos:\n  - path: \"{}\"\n",
-        fixture_path().display()
+        "version: \"1.0.0\"\nrepos:\n  - path: \"{path}\"\n\
+         lexicon:\n\
+           # scripts\n\
+           capability-harness:           {{ definition_short: \"Capability harness verification.\" }}\n\
+           provider-model-inventory:     {{ definition_short: \"Provider model inventory fetch.\" }}\n\
+           agents-config:                {{ definition_short: \"Agents configuration install.\" }}\n\
+           mine-flowgate-transitions:    {{ definition_short: \"Flowgate transition mining.\" }}\n\
+           mcp-flowgate.check:           {{ definition_short: \"MCP flowgate config check.\" }}\n\
+           auth-only-smoke-test:         {{ definition_short: \"Auth-only smoke test.\" }}\n\
+           # skills\n\
+           emit-flowgate-yaml:           {{ definition_short: \"Emit flowgate YAML skill.\" }}\n\
+           lexicon-extend:               {{ definition_short: \"Lexicon extension skill.\" }}\n\
+           audit-mining:                 {{ definition_short: \"Audit mining research skill.\" }}\n\
+           code.adversarial:             {{ definition_short: \"Adversarial code review skill.\" }}\n\
+           compose-implementation:       {{ definition_short: \"Implementation composition skill.\" }}\n\
+           suggest-bindings:             {{ definition_short: \"Binding suggestion skill.\" }}\n\
+           tool-inventory.assemble:      {{ definition_short: \"Tool inventory assembly.\" }}\n\
+           # capabilities\n\
+           audit.mine-transitions:       {{ definition_short: \"Mine flowgate transitions.\" }}\n\
+           review.adversarial:           {{ definition_short: \"Adversarial review capability.\" }}\n\
+           gate.human-approve-plan:      {{ definition_short: \"Human plan approval gate.\" }}\n\
+           summarize.lexicon-define:     {{ definition_short: \"Lexicon define summarization.\" }}\n\
+           implement.write-agents-config: {{ definition_short: \"Write agents config.\" }}\n\
+           coordinate.pr-open:           {{ definition_short: \"Open a pull request.\" }}\n\
+           gate.human-pick-shape:        {{ definition_short: \"Human shape picker gate.\" }}\n\
+           verify.capability-harness:    {{ definition_short: \"Capability harness check.\" }}\n\
+           verify.auth-only-smoke-test:  {{ definition_short: \"Auth smoke test verify.\" }}\n\
+           verify.check-config:          {{ definition_short: \"Config check verify.\" }}\n\
+           research.tool-inventory:      {{ definition_short: \"Tool inventory research.\" }}\n\
+           plan.suggest-bindings:        {{ definition_short: \"Binding suggestion plan.\" }}\n\
+           implement.emit-yaml:          {{ definition_short: \"Emit YAML implementation.\" }}\n\
+           research.model-inventory:     {{ definition_short: \"Model inventory research.\" }}\n\
+           plan.compose-implementation:  {{ definition_short: \"Implementation composition plan.\" }}\n\
+           research.lexicon-lookup:      {{ definition_short: \"Lexicon lookup research.\" }}\n",
+        path = fixture_path().display()
     );
     let p = td.path().join("flowgate.yaml");
     std::fs::write(&p, body).unwrap();

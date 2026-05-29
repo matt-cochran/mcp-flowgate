@@ -141,9 +141,68 @@ fn fixture_path() -> PathBuf {
 }
 
 fn write_host_config(td: &TempDir) -> PathBuf {
+    // Lexicon entries for all subjects referenced by scripts, skills, and
+    // capabilities in the cognitive-architectures fixture. Required so the
+    // pre-start subject walk (SPEC §30.10.4) does not block workflow starts.
+    // Entries are intentionally minimal — definition_short is the only
+    // required field for a resolved lexicon entry.
     let body = format!(
-        "version: \"1.0.0\"\nrepos:\n  - path: \"{}\"\n",
-        fixture_path().display()
+        "version: \"1.0.0\"\nrepos:\n  - path: \"{path}\"\n\
+         lexicon:\n\
+           # scripts\n\
+           cargo.release:             {{ definition_short: \"Cargo release build.\" }}\n\
+           full-sweep:                {{ definition_short: \"Full CI sweep.\" }}\n\
+           cargo-install:             {{ definition_short: \"Cargo install step.\" }}\n\
+           rust.check:                {{ definition_short: \"Rust format check.\" }}\n\
+           cargo.dependency-tree:     {{ definition_short: \"Cargo dependency analysis.\" }}\n\
+           rust.clippy-strict:        {{ definition_short: \"Strict Clippy lint.\" }}\n\
+           codebase.ripgrep:          {{ definition_short: \"Ripgrep codebase search.\" }}\n\
+           baseline.compare:          {{ definition_short: \"Baseline comparison test.\" }}\n\
+           baseline.snapshot:         {{ definition_short: \"Baseline snapshot capture.\" }}\n\
+           cargo.workspace:           {{ definition_short: \"Cargo workspace test run.\" }}\n\
+           workspace.green:           {{ definition_short: \"Workspace green verification.\" }}\n\
+           # skills\n\
+           skill.script-shape:        {{ definition_short: \"Script shape authoring rubric.\" }}\n\
+           integration:               {{ definition_short: \"Integration composition skill.\" }}\n\
+           plan.vet:                  {{ definition_short: \"Plan vetting skill.\" }}\n\
+           safety.checklist:          {{ definition_short: \"Deploy safety checklist.\" }}\n\
+           codebase.search:           {{ definition_short: \"Codebase search skill.\" }}\n\
+           error-trace.parse:         {{ definition_short: \"Error trace parsing skill.\" }}\n\
+           reproduction:              {{ definition_short: \"Bug reproduction skill.\" }}\n\
+           edit.constrained:          {{ definition_short: \"Scope-constrained edit skill.\" }}\n\
+           tdd.discipline:            {{ definition_short: \"TDD discipline skill.\" }}\n\
+           fix.scope-bounded:         {{ definition_short: \"Scope-bounded fix plan.\" }}\n\
+           gap-reconciliation:        {{ definition_short: \"Plan gap reconciliation.\" }}\n\
+           specify.change-request:    {{ definition_short: \"Change request specification.\" }}\n\
+           scope-bounded:             {{ definition_short: \"Scope-bounded refactor.\" }}\n\
+           context.assemble:          {{ definition_short: \"Context assembly skill.\" }}\n\
+           code.adversarial:          {{ definition_short: \"Adversarial code review.\" }}\n\
+           code.final-approval:       {{ definition_short: \"Final code approval review.\" }}\n\
+           session.delta:             {{ definition_short: \"Session delta summarization.\" }}\n\
+           issue.routing:             {{ definition_short: \"Issue routing triage.\" }}\n\
+           # capabilities\n\
+           coordinate.label-and-route: {{ definition_short: \"Label and route coordination.\" }}\n\
+           coordinate.pr-open:        {{ definition_short: \"Open a pull request.\" }}\n\
+           diagnose.localize:         {{ definition_short: \"Localize defect diagnosis.\" }}\n\
+           diagnose.parse-error:      {{ definition_short: \"Parse error diagnosis.\" }}\n\
+           diagnose.reproduce:        {{ definition_short: \"Reproduce defect diagnosis.\" }}\n\
+           gate.human-disambiguate:   {{ definition_short: \"Human disambiguation gate.\" }}\n\
+           gate.human-signoff:        {{ definition_short: \"Human signoff gate.\" }}\n\
+           implement.scope-bounded:   {{ definition_short: \"Scope-bounded implementation.\" }}\n\
+           implement.tdd-loop:        {{ definition_short: \"TDD implementation loop.\" }}\n\
+           plan.draft:                {{ definition_short: \"Plan drafting capability.\" }}\n\
+           plan.fix:                  {{ definition_short: \"Fix plan capability.\" }}\n\
+           plan.track-gaps:           {{ definition_short: \"Gap tracking capability.\" }}\n\
+           refactor.draft:            {{ definition_short: \"Refactor draft capability.\" }}\n\
+           research.context-assemble: {{ definition_short: \"Context assembly research.\" }}\n\
+           review.adversarial:        {{ definition_short: \"Adversarial review capability.\" }}\n\
+           test.baseline-snapshot:    {{ definition_short: \"Baseline snapshot test.\" }}\n\
+           test.compare-baseline:     {{ definition_short: \"Baseline comparison test.\" }}\n\
+           triage.classify-severity:  {{ definition_short: \"Severity classification triage.\" }}\n\
+           triage.route-component:    {{ definition_short: \"Component routing triage.\" }}\n\
+           verify.regression-tests:   {{ definition_short: \"Regression test verification.\" }}\n\
+           verify.workspace-green:    {{ definition_short: \"Workspace green verification.\" }}\n",
+        path = fixture_path().display()
     );
     let p = td.path().join("flowgate.yaml");
     std::fs::write(&p, body).unwrap();

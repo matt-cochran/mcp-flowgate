@@ -40,6 +40,11 @@ fn build_runtime(config: Value) -> WorkflowRuntime {
 async fn instance_describe_returns_snapshot_body_not_live_config() {
     let original = json!({
         "version": "1.0.0",
+        // Lexicon entry for 'style.house-voice' so the pre-start walk (SPEC §30.10.4)
+        // does not block the workflow start.
+        "lexicon": {
+            "style.house-voice": { "definition_short": "House voice style guide." }
+        },
         "skills": {
             "review.style.house-voice": {
                 "verb": "review",
@@ -93,6 +98,7 @@ async fn instance_describe_returns_snapshot_body_not_live_config() {
 async fn unknown_workflow_returns_none() {
     let cfg = json!({
         "version": "1.0.0",
+        "lexicon": { "style.x": { "definition_short": "Fixture." } },
         "skills": { "review.style.x": { "verb": "review", "lifecycle": "stable", "body": "..." } },
         "workflows": {
             "wf": {
@@ -115,6 +121,7 @@ async fn unknown_workflow_returns_none() {
 async fn unknown_subject_returns_none() {
     let cfg = json!({
         "version": "1.0.0",
+        "lexicon": { "style.x": { "definition_short": "Fixture." } },
         "skills": { "review.style.x": { "verb": "review", "lifecycle": "stable", "body": "..." } },
         "workflows": {
             "wf": {

@@ -7,6 +7,11 @@ use serde_json::{json, Value};
 fn config_with_body(body: &str) -> Value {
     json!({
         "version": "1.0.0",
+        // Lexicon entry for 'style.fixture' so the pre-start walk (SPEC §30.10.4)
+        // does not block the workflow start in the async emitted_ref test.
+        "lexicon": {
+            "style.fixture": { "definition_short": "Fixture skill for tests." }
+        },
         "skills": {
             "review.style.fixture": {
                 "verb": "review",

@@ -10,6 +10,13 @@ version: "1.0.0"
 audit:
   sink: stdout
 
+# Lexicon entries for subjects referenced in skills keys (SPEC §30.10.4).
+lexicon:
+  security.checklist:
+    definition_short: "Security review checklist for deployment validation."
+  style.house-voice:
+    definition_short: "House style and voice guidelines."
+
 skills:
   review.security.checklist:
     verb: review

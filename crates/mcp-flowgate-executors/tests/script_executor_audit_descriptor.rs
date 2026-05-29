@@ -71,6 +71,10 @@ fn last_transition_record(audit: &MemoryAuditSink) -> Value {
 async fn script_executor_transition_record_carries_subject_and_hash() {
     let yaml = r#"
 version: "1.0.0"
+# Lexicon entry so the pre-start walk (SPEC §30.10.4) passes.
+lexicon:
+  cargo.release:
+    definition_short: "Cargo release build."
 scripts:
   build.cargo.release:
     verb: build

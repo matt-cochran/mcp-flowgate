@@ -9,6 +9,13 @@ version: "1.0.0"
 audit:
   sink: stdout
 
+# Lexicon entries for subjects referenced in scripts keys (SPEC §30.10.4).
+lexicon:
+  production.rollout:
+    definition_short: "Production deployment rollout procedure."
+  compliance.scan:
+    definition_short: "Compliance audit scan against regulatory requirements."
+
 scripts:
   deploy.production.rollout:
     verb: deploy
