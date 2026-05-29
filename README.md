@@ -3,7 +3,7 @@
 [![CI](https://github.com/matt-cochran/mcp-flowgate/actions/workflows/ci.yml/badge.svg)](https://github.com/matt-cochran/mcp-flowgate/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with seven.**
+**Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with two.**
 
 Wire in any number of MCP servers, CLI commands, and REST APIs. The
 model never sees them in its tool list. It searches for what it needs,
@@ -31,17 +31,26 @@ governance. You get a flat list and a prayer.
 
 ---
 
-## The fix: seven tools, any number of capabilities
+## The fix: two tools, any number of capabilities
 
-mcp-flowgate exposes exactly seven MCP tools regardless of how many
+mcp-flowgate exposes exactly two MCP tools regardless of how many
 capabilities you wire in:
 
-| Layer | Tools | Purpose |
-|-------|-------|---------|
-| **Discovery** | `gateway.home`, `gateway.search`, `gateway.describe` | Find capabilities by keyword, get schemas on demand |
-| **Action** | `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain` | Execute capabilities through governed state machines |
+| Tool | Purpose | Key args |
+|------|---------|----------|
+| **`flowgate.query`** | Read-only: discover, inspect, and look up anything | `{}` (home), `{query, kind?, limit?}` (search), `{subject}` (describe/lookup), `{workflowId}` (get), `{workflowId, transition}` (explain) |
+| **`flowgate.command`** | State-mutating: start, advance, or define | `{definitionId, input?}` (start workflow), `{workflowId, expectedVersion, transition, arguments?}` (submit transition), `{subject: "lexicon:<term>", definition}` (define term) |
 
-The model's tool list is always seven entries. Your 50 capabilities
+Everything that used to be spread across ten named tools — `gateway.home`,
+`gateway.search`, `gateway.describe`, `workflow.start`, `workflow.get`,
+`workflow.submit`, `workflow.explain`, `gateway.lexicon.search`,
+`gateway.lexicon.lookup`, `gateway.lexicon.define` — dispatches through
+these two. The dispatch is driven by which args are present; every
+response carries pre-filled `links[]` so the model never has to derive
+the next call from the schema. (See SPEC §30.10 for the full dispatch
+table and §32 for the HATEOAS contract.)
+
+The model's tool list is always two entries. Your 50 capabilities
 surface through search results and response links — loaded one at a
 time, only when relevant.
 
@@ -65,7 +74,7 @@ verify with the included `checksums.sha256`:
 
 ```bash
 # Linux x86_64 example:
-curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/mcp-flowgate-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/matt-cochran/mcp-flowgate/releases/latest/download/mcp-flowgate-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
 tar xzf mcp-flowgate-*.tar.gz
 ./mcp-flowgate --help
 ```
@@ -118,9 +127,10 @@ Wire it into Claude Desktop
 }
 ```
 
-Restart the host. Seven tools appear. The model can find and call
-`hello.echo` through them. You just shipped a tool with discovery,
-schema validation, and audit built in.
+Restart the host. Two tools appear: `flowgate.query` and
+`flowgate.command`. The model can find and call `hello.echo` through
+them. You just shipped a tool with discovery, schema validation, and
+audit built in.
 
 | Host | Config location | Example |
 |------|----------------|---------|
@@ -128,7 +138,92 @@ schema validation, and audit built in.
 | Zed | `~/.config/zed/settings.json` | [`examples/zed-gateway/`](examples/zed-gateway/) |
 
 That was one tool. The interesting part is what happens when you add
-fifty — and the model's tool list stays at seven.
+fifty — and the model's tool list stays at two.
+
+---
+
+## Discovering commands
+
+`flowgate` ships with a full clap-driven CLI. Four ways to find what's available:
+
+```bash
+flowgate --help                    # grouped list of every subcommand
+flowgate help <subcommand>         # long-form description + example
+flowgate completions bash          # emit a tab-completion script for your shell
+flowgate man | less                # roff-formatted man page (install with: sudo tee /usr/local/share/man/man1/flowgate.1)
+```
+
+Commands are grouped under three headings:
+
+- **Agent runtime** — `headless`, `acp`, `walk` (interactive TUI is the default with no subcommand).
+- **Agent configuration** — `agent`, `set-provider-keys`, `migrate-agents-from-cli`, `validate-agents-config`.
+- **Diagnostics & generators** — `doctor`, `mcp init`, `completions`, `man`.
+
+### Setting provider API keys
+
+`flowgate set-provider-keys` writes a flat dotenv file at `~/.config/flowgate/providers.env` (mode 0600, parent dir 0700) which is loaded into env at startup. Existing environment variables take precedence, so CI / shell exports always win over the file.
+
+```bash
+flowgate set-provider-keys                          # interactive walk through all 5 providers
+flowgate set-provider-keys --provider anthropic     # one provider, no-echo prompt
+echo "$KEY" | flowgate set-provider-keys --provider openrouter --stdin
+flowgate set-provider-keys --list                   # show configured providers (masked)
+flowgate set-provider-keys --remove gemini          # clear one provider's vars
+flowgate set-provider-keys --path                   # print the resolved file path
+```
+
+Override the file location with `$FLOWGATE_PROVIDER_KEYS_FILE`. Supported providers: `anthropic`, `openai`, `openrouter`, `bedrock`, `gemini`.
+
+---
+
+## v0.2 — two-tier composition
+
+The biggest addition in v0.2 is **capabilities + orchestrators**:
+typed sub-workflows you compose into lifecycle pipelines instead of
+re-authoring every workflow from scratch.
+
+- A **capability** (`cap.<verb>.<name>`) declares a typed
+  `snippet: { inputs, outputs }` contract. It's a composition leaf
+  — it runs cognitive work, deterministic scripts, HITL gates, or
+  external coordination, but never invokes another workflow.
+- An **orchestrator** (`flow.<name>`) declares an `inputs:` entry
+  signature and composes capabilities via `kind: workflow`
+  executors with `use: { inputs, outputs }` bindings. The
+  capability runs in its own scoped blackboard; only declared
+  outputs propagate back to host slots.
+- A **repo manifest** (`flowgate.repo.yaml`) declares a namespace,
+  version, and layout. Operators load any number of repos via the
+  gateway's top-level `repos:` block; every loaded definitionId
+  is namespace-prefixed `<ns>/<id>`.
+
+Two sibling libraries demonstrate the shape:
+
+- [**cognitive-architectures**](https://github.com/matt-cochran/cognitive-architectures) —
+  4 lifecycle orchestrators (`flow.add-feature`,
+  `flow.bugfix-from-error-log`, `flow.safe-refactor`,
+  `flow.triage-issue`) composing 22 reusable capabilities.
+- [**flowgate-meta**](https://github.com/matt-cochran/flowgate-meta) —
+  5 orchestrators: 4 meta-authoring (`flow.author-capability`,
+  `flow.author-flow`, `flow.optimize-capability`,
+  `flow.optimize-flow`) plus `flow.configure-models` — the v0.3
+  guided agents.yaml setup flow. Self-bootstrapping authoring loop.
+
+Operators load both with a single top-level block:
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+repos:
+  - path: /repos/cognitive-architectures
+  - path: /repos/flowgate-meta
+```
+
+Validation runs at load (`mcp-flowgate check`). The validation
+cloud V1–V23 catches verb misuse, slot reachability, type
+consistency, missing snippet contracts, anonymous shadowing, and
+more — bad configs fail at startup with named violations.
+
+Spec: [docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md](docs/superpowers/specs/2026-05-26-capability-orchestrator-design.md).
 
 ---
 
@@ -202,9 +297,9 @@ states:
         actor: agent                      # chain stops — LLM decides here
 ```
 
-The model calls `workflow.start`. The runtime chains through lint →
-test → build automatically and returns the response at
-`ready_to_deploy`. Three executor calls, zero LLM round trips. The
+The model calls `flowgate.command({ definitionId: "deploy_pipeline", input: {...} })`.
+The runtime chains through lint → test → build automatically and
+returns the response at `ready_to_deploy`. Three executor calls, zero LLM round trips. The
 response includes a `chain` trace of what happened and `guidance`
 telling the model what to think about next.
 
@@ -237,7 +332,7 @@ The response surfaces these as a `guidance` object. The model arrives
 at a decision point with pre-shaped instructions — not just prefilled
 arguments, but context for *how to reason* about the choice.
 
-`goal` and `guidance` are indexed by `gateway.search`, so they
+`goal` and `guidance` are indexed by `flowgate.query({query})`, so they
 improve discoverability as well as runtime decisions.
 
 ---
@@ -252,7 +347,7 @@ from a mechanical driver (the same pattern
 **Turn 1 — the model searches, not scans.**
 
 ```jsonc
-→ gateway.search { "query": "publish content" }
+→ flowgate.query { "query": "publish content" }
 
 ← { "items": [
       { "id": "workflow:content_publish",
@@ -265,7 +360,7 @@ One hit. Not 50 tool definitions — one search result with a title.
 **Turn 2 — start the workflow. Note the prefilled link.**
 
 ```jsonc
-→ workflow.start {
+→ flowgate.command {
     "definitionId": "content_publish",
     "input": { "topic": "Q2 launch", "audience": "enterprise" } }
 
@@ -273,7 +368,7 @@ One hit. Not 50 tool definitions — one search result with a title.
     "result":   { "status": "started" },
     "links": [
       { "rel":    "create_outline",
-        "method": "workflow.submit",
+        "method": "flowgate.command",
         "args": {
           "workflowId":      "wf_8f3a",
           "expectedVersion": 0,
@@ -288,9 +383,9 @@ link.
 **Turns 3–5 — the model walks the links forward.**
 
 ```
-workflow.submit(create_outline)   → state="outlined",       link → write_draft
-workflow.submit(write_draft)      → state="drafted",        link → run_brand_review
-workflow.submit(run_brand_review) → state="brand_reviewed", link → request_approval
+flowgate.command(create_outline)   → state="outlined",       link → write_draft
+flowgate.command(write_draft)      → state="drafted",        link → run_brand_review
+flowgate.command(run_brand_review) → state="brand_reviewed", link → request_approval
 ```
 
 Each response advances state and offers only the legal next moves.
@@ -298,7 +393,7 @@ Each response advances state and offers only the legal next moves.
 **Turn 6 — governance stops the model cold.**
 
 ```jsonc
-→ workflow.submit { "transition": "request_approval", ... }
+→ flowgate.command { "transition": "request_approval", ... }
 
 ← { "workflow": { "state": "awaiting_approval" },
     "links": [
@@ -325,6 +420,204 @@ model has no path to skip the gate.
 | [`expense-approval/`](examples/expense-approval/) | Multi-tenant: two-tier approval, quorum evidence, idempotent payment. |
 | [`tdd/`](examples/tdd/) | Discipline: enforced red → green → refactor with cheat detection. [Dogfooded in CI](examples/tdd/dogfood-drive.py). |
 | [`deploy-pipeline/`](examples/deploy-pipeline/) | Deterministic chaining: lint → test → build auto-execute; LLM only sees the deploy decision. |
+| [`authoring-workflow.yaml`](examples/authoring-workflow.yaml) | Meta: the LLM authors new workflows and skill fragments, gated by structural analysis, dry-run, and the `guidance_acknowledged` rubric check. |
+
+---
+
+## Coding-agent recipe (commodity LLM ≥ frontier model)
+
+See [`RESEARCH.md`](RESEARCH.md) for the full thesis: with a deterministic
+gateway, a cheap or open-weight model can match or beat a frontier model
+on real software-engineering work. The architecture is six Flowgate
+states (planning → retrieving → editing → verifying → critiquing →
+human_review), each backed by a guidance skill fragment, plus three
+**external** tools that plug in via Flowgate's existing `connections:`
+block. The Flowgate runtime stays unchanged.
+
+### Three external tools (run as separate processes)
+
+| Tool | Transport | Purpose |
+|------|-----------|---------|
+| **`scip-mcp`** *(community / write-your-own)* | MCP server | SCIP symbol queries, call/import graphs, CODEOWNERS lookup, test coverage mapping. Wraps the [SCIP indexers](https://github.com/sourcegraph/scip) for whichever languages your repos use. |
+| **`constrained-edit`** *(write-your-own — small)* | CLI | Accept typed edit operations on stdin, validate paths against `constraints.forbiddenPaths`, apply atomically, emit unified diff on stdout. ~200 lines in your language of choice. |
+| **`verifier-harness-mcp`** *(write-your-own)* | MCP server | Orchestrate containerised build → lint → fail-to-pass → pass-to-pass → coverage delta → mutation → security stages. Returns per-stage `{passed, artifacts}`. Wraps whatever build system your repo uses. |
+
+Why external? Process isolation (a crashing linter doesn't crash the
+workflow runtime), language freedom (each tool can be written in
+whatever fits the domain), independent versioning (the verifier can
+iterate without Flowgate releases), and a real security boundary
+(a compromised editor tool cannot write transition records).
+
+### Wiring it up
+
+Once the three tools exist, declare them as connections and reference
+them from the workflow:
+
+```yaml
+connections:
+  codebase_graph:
+    type: mcp
+    transport: { kind: streamable_http, url: "http://localhost:7100/mcp" }
+  verifier_harness:
+    type: mcp
+    transport: { kind: streamable_http, url: "http://localhost:7200/mcp" }
+  constrained_edit:
+    type: cli
+    command: ["constrained-edit"]
+
+workflows:
+  swe_agent:
+    initialState: planning
+    states:
+      retrieving:
+        executor: { kind: mcp, connection: codebase_graph, tool: assemble_evidence_pack }
+      editing:
+        executor: { kind: cli, connection: constrained_edit }
+      verifying:
+        executor: { kind: mcp, connection: verifier_harness, tool: run_harness }
+      # …critiquing, human_review states with the standard skills+guards…
+```
+
+The complete workflow YAML, the five skill fragments, and the
+escalation guard expressions (cheap-first routing, retry budget,
+risk-based human gating) live in [`RESEARCH.md`](RESEARCH.md) §"Reference
+workflow (Flowgate YAML)". Copy-paste runnable.
+
+### Setup checklist
+
+1. **Pick or build the three external tools.** None ship with Flowgate.
+   Build them in the language and runtime that fit your codebase. The
+   SCIP server is the only one with substantive prior art; the other
+   two are intentionally small.
+2. **Run them locally** on the ports your config references. For a CI
+   integration, run them as sidecar containers in the same pod.
+3. **Author the SWE-agent YAML** under `examples/swe-agent.yaml` (or
+   wherever your config tree puts it) following the
+   [`RESEARCH.md`](RESEARCH.md) reference.
+4. **Author the five guidance skills** (`plan.specify.change-request`,
+   `diagnose.codebase.search`, `implement.edit.constrained`,
+   `review.code.adversarial`, `review.code.final-approval`) — markdown
+   blobs with `verb` and `lifecycle` per [SPEC §5](SPEC.md).
+5. **Wire the LLM client** to call `flowgate.command({ definitionId: "swe_agent", input: {...} })`
+   with the incoming ticket, then drive the returned HATEOAS links
+   until completion. The LLM sees only the two Flowgate tools at any
+   time; the workflow's state surfaces the next legal moves.
+
+### What you get
+
+- **Audit log of every coding session** — `tail -f audit.log | jq …`
+  gives you the SWE-agent scorecard (resolved rate, cost per fix,
+  retry count, etc.) per [SPEC §20.3](SPEC.md).
+- **Cheap-first routing as guard expressions** — escalate to a more
+  capable model only when `retryCount`, `risk`, or verifier failure
+  evidence justifies it. The LLM client reads the audit log to decide
+  which tier to use next.
+- **Human-in-the-loop for high-risk changes** — any change touching
+  auth, secrets, schemas, or cross-repo contracts routes to a
+  `human_review` state via a simple guard on `$.context.risk`.
+
+The point: you're not buying Flowgate to run a coding agent. You're
+buying the gateway your existing coding agent infrastructure needs to
+become governable, replayable, and cheap.
+
+---
+
+## Curated scripts: deterministic actions, hash-pinned
+
+Skills tell the LLM what to think. Scripts tell the workflow what to
+do — deterministically, with no model involvement. A `scripts:` block
+declares a library of curated script bodies that workflows invoke
+through the `script` executor:
+
+```yaml
+scripts:
+  build.cargo.release:
+    verb: build
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo build --release --locked "$@"
+
+workflows:
+  ci:
+    states:
+      building:
+        transitions:
+          done:
+            target: testing
+            executor: { kind: script, subject: build.cargo.release }
+```
+
+Each script is **content-identified by hash** — workflows reference
+them by subject, and the runtime materializes the body from the
+workflow's pinned snapshot (SPEC §8.2 invariant). Editing the script
+body after `flowgate.command({definitionId})` (workflow start) is
+invisible to in-flight instances. An
+audit replay can pull the exact body that ran by hash from cold
+storage.
+
+External bodies work too: a script can declare `uri: file://...` +
+`hash: sha256:...` to source from disk, with load-time hash
+verification. Hash drift fails the load with `SCRIPT_HASH_MISMATCH`.
+
+For destructive scripts (deploys, migrations), pair the `script`
+executor with a `script_acknowledged` guard — the workflow refuses to
+run until an operator has called `flowgate.query({ subject: "..." })`
+on the current body (review-before-execute, hash-flip-invalidated).
+
+The curated library lives in the sibling
+[`cognitive-architectures`](https://github.com/matt-cochran/cognitive-architectures)
+repo with its own `scripts/` directory — copy-paste-ready scripts for
+the common verbs (build/test/deploy/format/lint/install/verify/run).
+
+## The TUI agent — commodity models outperform frontier
+
+The `flowgate-tui` binary (also installed as `flowgate`) walks a
+workflow end-to-end through a **deterministic graph-walking interpreter**.
+Where conventional agent loops let one orchestrator-LLM accumulate the
+full conversation, the interpreter spawns **isolated sub-agent sessions**
+per workflow state. Each sub-agent sees only its scoped guidance + the
+blackboard at its phase — no accumulated context from previous phases.
+
+```bash
+flowgate walk \
+  --workflow swe_agent \
+  --input '{"issue": "Add timeout to RegistryExecutor"}' \
+  --agent planning=anthropic/claude-sonnet-4 \
+  --agent retrieval=openrouter/qwen-2.5-coder-7b \
+  --agent editing=openrouter/qwen-2.5-coder-7b \
+  --agent critique=anthropic/claude-opus-4 \
+  --max-sub-agent-seconds 120 \
+  --max-sub-agent-steps 20
+```
+
+What the interpreter does:
+
+- **States with `delegate:`** spawn an isolated session running the
+  named agent config. Returns when the sub-agent calls
+  `flowgate.command` with a transition (advancing the workflow) or
+  hits its timeout / step limit.
+- **States with a single non-deterministic actionable link** auto-advance
+  without any LLM involvement. No tokens spent on decisions that
+  guards can make.
+- **States with multiple links remaining** pick the first
+  non-`escalate` link. The critic + retry cycle on the next workflow
+  iteration corrects wrong picks automatically.
+- **Sub-agent timeouts** retry up to 3 times, then submit the
+  `escalate` transition if one is declared, else propagate.
+
+`--max-sub-agent-seconds` and `--max-sub-agent-steps` are **required by
+design** — an unbounded sub-agent is a foot-gun. The TUI rejects
+startup if either is missing.
+
+The result: a Qwen 7B editor directed by Sonnet-grade planning and
+reviewed by an Opus-grade critic costs a fraction of running Opus for
+the whole session — and produces better results because each model does
+only the task it's best at, with only the context it needs.
+
+See [`docs/TUI-AGENT.md`](docs/TUI-AGENT.md) for the full algorithm,
+sub-agent lifecycle, and the cognitive-architecture thesis.
 
 ---
 
@@ -332,7 +625,7 @@ model has no path to skip the gate.
 
 **Use it when** you have multiple tools and any of these matter:
 fewer tokens in the model's context, audit, retries, approval gates,
-schema validation, or multi-step workflows. The seven-tool surface
+schema validation, or multi-step workflows. The ten-tool surface
 scales to hundreds of capabilities. `proxy.import` means you don't
 rewrite tool definitions you already have.
 

@@ -19,16 +19,22 @@ async fn human_executor_emits_approval_requested() {
             id: "wf_test".into(),
             definition_id: "demo".into(),
             definition_version: "1.0.0".into(),
+            definition: json!({"initialState": "awaiting_approval", "states": {}}),
             state: "awaiting_approval".into(),
             version: 0,
             input: json!({}),
             context: json!({}),
             started_at: chrono::Utc::now(),
+            trace_id: None,
+            run_id: None,
+            cancelled_at: None,
+            cancelled_reason: None,
         },
         transition: Some("request_approval".into()),
         arguments: json!({}),
         executor_config: json!({ "kind": "human", "queue": "engineering-approvals" }),
         idempotency_key: None,
+        correlation_id: None,
     };
 
     exec.execute(request)

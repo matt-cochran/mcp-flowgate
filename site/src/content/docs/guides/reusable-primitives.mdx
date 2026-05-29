@@ -1,0 +1,173 @@
+---
+title: "Everything a repo can ship"
+description: "Skills, scripts, capabilities, orchestrators, connections, lexicon — what a resource repo can package, how the pieces compose, and why bundling them in one repo is the point."
+---
+
+A workflow that needs three skills, two scripts, an MCP connection, and an HITL gate is a workflow that needs all five to ship together. If the skills live in your gateway config and the scripts live in your internal git repo and the connection lives in some operator's runbook and the HITL gate is a one-off `kind: human` declaration nobody else has seen, you've built a workflow nobody else can adopt.
+
+That's the model v0.1 leaned on. The v0.2 multi-repo loader replaces it. A resource repo packages all the primitives a workflow needs in one place. Operators consume the whole bundle with one `repos:` entry.
+
+This page is the tour: what a repo can ship, how the primitives compose, and why bundling matters.
+
+## The six primitives
+
+Six artifact kinds, six purposes, all loadable from a single repo:
+
+| Primitive | What it is | Where it lives in a repo | Loaded into config block |
+|---|---|---|---|
+| **Skill** | Guidance fragment the LLM reads on demand. Verb + subject + body. | `skills/*.yaml` | `skills:` |
+| **Script** | Deterministic shell/binary action. Verb + subject + body or uri+hash. | `scripts-library/*.yaml` | `scripts:` |
+| **Capability** (v0.2) | Typed sub-workflow with snippet contract. Composition leaf. | `capabilities/*.yaml` | `workflows:` (as `cap.*` ids) |
+| **Orchestrator** (v0.2) | Lifecycle workflow composing capabilities via `use:` bindings. | `orchestrators/*.yaml` | `workflows:` (as `flow.*` ids) |
+| **Connection** | MCP server / CLI / REST endpoint declaration. | `connections/*.yaml` | `connections:` |
+| **Lexicon entry** | Persistent vocabulary term (definition + governance). | Currently config-only; repo-level lexicon is v0.7 work. | `lexicon:` |
+
+A repo's `flowgate.repo.yaml` manifest declares which of these layouts it uses. Repos can ship any subset — a connections-only repo, a skills-only repo, a full SWE library. The manifest's `layout:` block points each tier at a directory:
+
+```yaml
+# repos/swe-core/flowgate.repo.yaml
+schema: flowgate.repo/v1
+name: swe-core
+namespace: swe
+version: 0.6.0
+layout:
+  capabilities:  capabilities
+  orchestrators: orchestrators
+  skills:        skills
+  scripts:       scripts-library
+  connections:   connections
+```
+
+Missing tiers (no directory at that path) are silently skipped. See [Multi-repo loading](/guides/multi-repo-loading/) for the loading semantics.
+
+## The composition tree
+
+These primitives compose top-down. An orchestrator at the top; capabilities under it; skills, scripts, connections under those.
+
+```
+flow.add-feature                            ← orchestrator (lifecycle)
+    │
+    ├──> cap.plan.draft                     ← capability (composition leaf)
+    │       └──> skills: [plan.specify.change-request]    ← skill (LLM guidance)
+    │
+    ├──> cap.plan.vet
+    │       └──> skills: [compose.plan.vet]
+    │
+    ├──> cap.implement.tdd-loop
+    │       └──> skills: [implement.tdd.discipline]
+    │
+    ├──> cap.verify.workspace-green
+    │       └──> kind: script + subject: verify.workspace.green   ← script
+    │
+    ├──> cap.review.adversarial
+    │       └──> skills: [review.code.adversarial]
+    │
+    └──> cap.coordinate.pr-open
+            └──> kind: mcp + connection: github_mcp     ← connection
+```
+
+The orchestrator never references a skill or a script directly. It invokes capabilities. The capabilities reference skills (for cognitive caps) or scripts (for deterministic caps) or connections (for coordination caps). That's the layered model.
+
+## Why bundling matters
+
+Three concrete cases.
+
+### Single-source updates
+
+A team improves `cap.review.adversarial` — better rubric, additional check for security issues. The improvement lives in one file in one repo. Every orchestrator that composes that cap (in cognitive-architectures, `flow.add-feature`, `flow.bugfix-from-error-log`, and `flow.safe-refactor` all do) picks up the improvement on `git pull`. No copy-paste drift between three workflows that each carry their own version of "review the diff."
+
+If the cap's snippet contract changes — a new required input, a renamed enum value — every dependent orchestrator surfaces a load-time error with the exact mismatch. You can't ship the cap update without also updating its callers. The dependency graph is enforced by the type system, not by author discipline.
+
+### Closed dependency graphs
+
+A repo ships `cap.coordinate.pr-open` that needs the `github_mcp` connection. The same repo ships a reference `connections/github-mcp.yaml` that declares the connection contract. Operators loading the repo see both — the cap that needs the connection AND a working example of the connection it expects. They wire up their own GitHub MCP server (with their token, their host, whatever) and point the connection name at it. The repo doesn't ship a network configuration; it ships the *shape* of what the operator needs to provide.
+
+This is the difference between "here's a cap, figure out what it expects" and "here's a cap, here's exactly the connection contract it needs, plug in your specifics." The bundling is what makes the cap actually adoptable.
+
+### Vocabulary consistency
+
+A repo ships skills that reference the lexicon entry `evidence-pack`. Every workflow in the repo uses the term in the same sense. The operator's gateway gets the term defined once (whether from the operator's own config or from a future repo-level lexicon block), and every cap, orchestrator, and skill in the repo speaks the same vocabulary.
+
+Without bundling, every workflow that needs a term has to redefine it inline ("for the purposes of this workflow, an evidence pack means...") and the vocabulary drifts. The lexicon primitive (see [Lexicon](/reference/lexicon/)) makes this a runtime concern; bundling the workflows that USE the term with the operator's config that DEFINES the term makes the dependency explicit.
+
+## The cross-namespace story
+
+A repo's loaded definitions get prefixed `<namespace>/<id>`. Internal references within the repo use bare names and resolve to the repo's own namespace; cross-namespace references must be fully qualified.
+
+The fall-through resolution rule applies uniformly across primitives:
+
+| Reference kind | Resolution order |
+|---|---|
+| `kind: workflow + definitionId: cap.X` | Try `<my-namespace>/cap.X` first; then bare `cap.X`. Unresolved → V22 error. |
+| `kind: script + subject: X.y` | Try `<my-namespace>/X.y` first; then bare `X.y`. |
+| `skills: [X.y]` (in workflow body) | Try `<my-namespace>/X.y` first; then bare `X.y`. |
+| `connection: foo` (in executor) | Bare name only; connections aren't namespaced in v0.2. |
+
+The bare-name-first pattern means a repo's internal composition stays clean — `cap.plan.draft` invoking `cap.plan.vet` writes them as bare names; both resolve to the repo's own namespace at load. To compose across repos, fully qualify: `definitionId: other/cap.special-vet`.
+
+## A repo's `flowgate.repo.yaml` in full
+
+The manifest is short — six required fields plus the layout block:
+
+```yaml
+# flowgate.repo.yaml
+schema: flowgate.repo/v1            # pinned; new repo schemas use new constants
+name: swe-core                       # repo identifier (lowercase kebab)
+namespace: swe                       # prefix every loaded id gets
+version: 0.6.0                       # repo version; surfaces in `flowgate.query({subject})`
+description: |                       # surfaces in `flowgate.query({subject})` and operator-facing diagnostics
+  Core SWE capabilities + lifecycle orchestrators for plan-driven
+  feature delivery, bugfix-from-error-log, and safe-refactor.
+layout:                              # all fields optional; defaults match the directory names
+  capabilities:  capabilities
+  orchestrators: orchestrators
+  skills:        skills
+  scripts:       scripts-library
+  connections:   connections
+```
+
+Validation rules V19 (manifest schema), V20 (namespace uniqueness across repos), V21 (no duplicate ids within a repo) fire at load. See [Validation rules](/reference/validation-rules/) for the full V1–V23 catalog.
+
+## Two reference libraries to read
+
+Two repos ship as v0.2's first content. They're worth reading as worked examples of the bundling story:
+
+- **[cognitive-architectures](https://github.com/matt-cochran/cognitive-architectures)** — 22 capabilities + 4 lifecycle orchestrators (`flow.add-feature`, `flow.bugfix-from-error-log`, `flow.safe-refactor`, `flow.triage-issue`) + 18 skills + 11 scripts. The dependency tree above is from this library.
+
+- **[flowgate-meta](https://github.com/matt-cochran/flowgate-meta)** — 10 capabilities + 4 meta-authoring orchestrators (`flow.author-capability`, `flow.author-flow`, `flow.optimize-capability`, `flow.optimize-flow`) + 6 skills + 2 scripts. Self-bootstrapping authoring loop.
+
+Operators load both alongside each other:
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+repos:
+  - path: ~/repos/cognitive-architectures
+  - path: ~/repos/flowgate-meta
+overrides:
+  - cognitive/cap.review.adversarial      # use cognitive's richer version
+  - cognitive/cap.coordinate.pr-open      # rather than flowgate-meta's stub shadows
+```
+
+The `overrides:` block makes the shadow selection explicit. See [Multi-repo loading](/guides/multi-repo-loading/#collision-rules-v19v23) for V23's anonymous-shadowing protection.
+
+## When to ship as a repo vs as config
+
+You don't always need a repo. The tradeoff:
+
+| Path | When |
+|---|---|
+| Inline in gateway config | Tools or workflows that are highly specific to your codebase. Two or three skills, one or two workflows. The whole config fits in a 200-line file. |
+| `include:` files | The config is getting long. You want logical grouping (one file per workflow, one for skills, one for connections) but everything's still local to your gateway. |
+| Resource repo (`repos:` block) | The library is going to be reused — across multiple gateways, multiple teams, or multiple operators. You want namespace isolation, hash-pinned versioning, and the V19–V23 collision protection. |
+
+The migration is monotone: inline config → `include:` files → repo. You can always add a `repos:` entry without disturbing existing `skills:` / `scripts:` / `workflows:` blocks. The two paths compose into the same registry.
+
+## What's next
+
+- [How skills work](/guides/skills/) — operational rundown for the skill primitive.
+- [How scripts work](/guides/scripts/) — operational rundown for the script primitive.
+- [Capabilities and orchestrators](/guides/capabilities-and-orchestrators/) — the v0.2 composition tier.
+- [Multi-repo loading](/guides/multi-repo-loading/) — repo manifest, namespace prefixing, V19–V23.
+- [Connections](/guides/connections/) — wiring MCP, CLI, and REST endpoints.
+- [Lexicon](/reference/lexicon/) — the persistent-vocabulary primitive.

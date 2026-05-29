@@ -10,7 +10,11 @@ description = "Typify-generated Rust types for the mcp-flowgate gateway config a
 [lib]
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regress = "0.11"

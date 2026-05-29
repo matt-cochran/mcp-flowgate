@@ -1,0 +1,118 @@
+---
+title: "The TUI"
+description: "flowgate is a terminal agent runtime that uses mcp-flowgate as its sole MCP server. It walks workflows interactively, routes per-state work to specialised sub-agents, and gives you a transparent view of what the model is doing."
+---
+
+The gateway runs fine without the TUI. You wire it into Claude Desktop, Zed, Cursor, or any MCP host, and the model drives workflows from there. That's the usual production shape.
+
+But there's a class of work where you want to watch the workflow as it runs, route different cognitive steps to different models, and rerun pieces interactively. For that, install the `flowgate` TUI.
+
+## When to reach for it
+
+- **You're authoring workflows.** Walk through them yourself before handing the YAML to a model. See where states stall, where guards trip, where the slot table reads what you intended.
+- **You want sub-agent routing per state.** A `plan.draft` state benefits from a frontier model; a `verify.workspace.green` state needs nothing more than the runtime invoking a script. The TUI's `delegate:` interpreter spawns an isolated sub-agent per cognitive state — different models for different jobs.
+- **You don't have an MCP host wired up.** The TUI uses the gateway directly. No editor integration required to try a workflow end-to-end.
+
+If you just want governed tool calls from an LLM that already has an MCP host, you don't need this. Stay in production mode.
+
+## Install
+
+`flowgate` ships separately from `mcp-flowgate` so the gateway stays light. See [Installation](/installation/#optional-install-the-tui) for the cargo command and binary discovery rules.
+
+After install, the TUI auto-discovers the `mcp-flowgate` binary. Override with `MCP_FLOWGATE_PATH` if you've put it somewhere unusual. Provider API keys can come from shell-rc exports or from [`flowgate set-provider-keys`](/reference/set-provider-keys/), which writes them to a mode-0600 file the agent loads at startup.
+
+## The four modes
+
+`flowgate --help` lists them. In quick:
+
+| Mode | What it does | When you'd use it |
+|------|--------------|-------------------|
+| **TUI** (default) | Interactive terminal with the agent. Spawned mcp-flowgate is the only tool surface. | Day-to-day exploration, debugging a workflow, demos. |
+| **Headless** | Single prompt, no UI. | Scripts, CI checks, "run this exact thing and print the output." |
+| **Walk** | Drive a specific workflow to terminal via the deterministic interpreter. Routes each state's cognitive work to the named sub-agent. | Worked end-to-end test of a real lifecycle workflow. The acceptance loop for new workflow authoring. |
+| **Doctor** | Pre-flight checks. Are the binaries on PATH? Does the config resolve? Are the agent API keys set? Do the script `file://` URIs point at real files? | Run this once before walk; it catches the environment problems that otherwise surface mid-workflow. |
+| **ACP** | Agent Communication Protocol server for editor integration. | Wiring `flowgate` into an editor that speaks ACP. |
+
+The plain `flowgate` invocation drops you into the TUI. Everything else needs a subcommand.
+
+## Sub-agent routing via `delegate:`
+
+The interesting feature unique to the TUI is per-state sub-agent routing. Spec §21 reserves a `delegate:` field on workflow states. The runtime treats it as a pass-through string — it doesn't act on it. The TUI's interpreter reads it and, when it enters a state with `delegate: planning`, spawns a fresh sub-agent process configured for the `planning` role.
+
+A typical workflow YAML:
+
+```yaml
+states:
+  drafting_plan:
+    delegate: planning
+    transitions:
+      draft:
+        target: vetting
+        actor: agent
+        executor: { kind: noop }
+
+  vetting:
+    delegate: review
+    transitions:
+      vet:
+        target: implementing
+        actor: agent
+        executor: { kind: noop }
+```
+
+You tell the TUI which provider/model backs each delegate name:
+
+```bash
+flowgate walk \
+    --workflow cognitive/flow.add-feature \
+    --input '{"feature_brief": "Add /status endpoint"}' \
+    --agent planning=anthropic/claude-opus-4-7 \
+    --agent review=anthropic/claude-sonnet-4-6 \
+    --max-sub-agent-seconds 300
+```
+
+`drafting_plan` runs with Opus; `vetting` runs with Sonnet; the in-between transitions (no `delegate:`) auto-advance through the deterministic chain. Each sub-agent gets its own conversation, its own audit trail (linked to the parent workflow via correlation id), and its own timeout. When it returns, its output projects into the workflow's blackboard. The next state picks up.
+
+The same workflow, run through Claude Desktop's MCP integration, drives every state with whichever single model that host has connected. The `delegate:` field is silently surfaced and ignored. That's intentional — workflows author once, run anywhere; only the TUI honours the multi-agent decomposition.
+
+## Safety rails on sub-agents
+
+The Walk subcommand requires you to declare your tolerance for orphan sub-agents:
+
+- `--max-sub-agent-seconds` — hard wall-clock cap per sub-agent. No default. The flag is mandatory so an operator can't accidentally launch a sub-agent with no upper bound on how long it runs.
+- `--max-sub-agent-steps` — advisory cap on tool calls per sub-agent. Currently logged for observability; will become enforced once the underlying agent framework exposes a per-step hook.
+- `--max-blackboard-bytes` — warning threshold for the serialised blackboard size passed to each sub-agent. Defaults to 16 KiB. Exceeding it logs a warning; it doesn't block the spawn. Use it to catch context bloat.
+
+A runaway sub-agent gets cut off at the wall-clock cap. If you declared an `escalate` transition on the parent workflow's state, the runtime takes it on timeout. Without one, the workflow ends in a `failed` terminal state.
+
+## Try it in 30 seconds
+
+```bash
+flowgate doctor --config gateway.yaml --workflow cognitive/flow.triage-issue --agent triager=anthropic/claude-sonnet-4-6
+
+# Pre-flight checks pass? Now run the workflow:
+flowgate walk \
+    --workflow cognitive/flow.triage-issue \
+    --input '{"issue": {"title": "Login button broken", "body": "..."}}' \
+    --agent triager=anthropic/claude-sonnet-4-6 \
+    --max-sub-agent-seconds 120
+```
+
+The TUI prints each state as the interpreter walks it, the sub-agent's tool calls as they fire, and the projected slot writes as they land in the workflow's blackboard. When the workflow reaches a terminal state, you see the final context and the audit trail summary.
+
+## Logs
+
+The TUI writes detailed logs (one file per session) to:
+
+- `$FLOWGATE_LOG_DIR` if you set it
+- `~/.cache/flowgate/logs/` on Linux
+- `~/Library/Caches/flowgate/logs/` on macOS
+- The platform's cache dir on Windows
+
+Each log carries the full sub-agent transcripts, the MCP tool calls between sub-agent and gateway, and the workflow's transition records. When something goes weird mid-run, the log is the first place to look.
+
+## What the TUI is, in one sentence
+
+`flowgate` is the deterministic interpreter from SPEC §21 wrapped in a terminal UI: it drives workflows through real sub-agents while preserving the same HATEOAS link surface that a production MCP host sees.
+
+See [Skills, workflows, and cognitive architectures](/guides/skills-and-architectures/) for the cognitive layer that makes routing-by-state worth doing. See [Capabilities and orchestrators](/guides/capabilities-and-orchestrators/) for the v0.2 composition model the meta-orchestrators ride on.

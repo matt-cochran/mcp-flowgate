@@ -237,3 +237,66 @@ async fn discovery_include_filter_respected() {
     assert!(all.iter().all(|i| i.kind == DiscoveryKind::Workflow));
     assert!(all.iter().any(|i| i.id == "demo"));
 }
+
+#[tokio::test]
+async fn guidance_excluded_from_default_search_but_describable() {
+    // SPEC §12: guidance fragments are fetched by known subject via
+    // `gateway.describe`, not searched. They must stay in the index (so
+    // describe can find them) but must NOT appear as ranked search hits
+    // when the caller hasn't explicitly asked for `kind=guidance`.
+    let cfg = json!({
+        "version": "1.0.0",
+        "skills": {
+            "review.style.house-voice": { "verb": "review", "lifecycle": "stable", "body": "Lead with the reader's problem." }
+        },
+        "workflows": {
+            "demo": { "initialState": "s", "states": { "s": { "terminal": true } } }
+        }
+    });
+    let idx = InMemoryDiscoveryIndex::from_config(&cfg);
+
+    // Untargeted search: guidance must not surface.
+    let hits = idx
+        .search(SearchRequest {
+            query: String::new(),
+            kind: None,
+            limit: 20,
+        })
+        .await
+        .unwrap();
+    assert!(
+        hits.iter().all(|h| h.item.kind != DiscoveryKind::Guidance),
+        "default search must hide guidance; got: {:?}",
+        hits.iter().map(|h| h.item.id.as_str()).collect::<Vec<_>>()
+    );
+
+    // Targeted search with kind=guidance must surface them.
+    let targeted = idx
+        .search(SearchRequest {
+            query: String::new(),
+            kind: Some(DiscoveryKind::Guidance),
+            limit: 20,
+        })
+        .await
+        .unwrap();
+    assert!(
+        targeted
+            .iter()
+            .any(|h| h.item.id == "review.style.house-voice"),
+        "explicit kind=guidance search must include the fragment"
+    );
+
+    // Describe must always find it regardless of kind filtering.
+    let described = idx.describe("review.style.house-voice").await.unwrap();
+    assert!(
+        described.is_some(),
+        "describe must always resolve a declared subject"
+    );
+
+    // list(None) must also exclude guidance.
+    let listed = idx.list(None).await.unwrap();
+    assert!(
+        listed.iter().all(|i| i.kind != DiscoveryKind::Guidance),
+        "default list must hide guidance"
+    );
+}

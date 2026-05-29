@@ -1,8 +1,9 @@
 # LLM Link-Following Fidelity Report
 
-**Status: open — experiment design ready, runs pending.**
+**Status: open research question — experiment design ready, runs pending.**
 
-The architecture of mcp-flowgate assumes LLMs can reliably:
+This is an empirical question, not a production blocker. The
+architecture of mcp-flowgate assumes LLMs can reliably:
 
 1. Read a `links` array from a response
 2. Pick the correct link based on `rel` and context
@@ -14,8 +15,8 @@ The architecture of mcp-flowgate assumes LLMs can reliably:
 
 The mechanical driver (`examples/tdd/dogfood-drive.py`) proves the
 gateway returns correct bytes. Whether live LLMs follow links
-reliably is a separate empirical question that this report exists
-to answer.
+reliably across providers and model tiers is a model-evaluation
+question, distinct from gateway correctness.
 
 ## Experiment design
 
@@ -61,15 +62,19 @@ link-following ability from host-specific tool-use formatting.
 
 ## Why this matters
 
-This is the single biggest gap between "interesting design" and
-"production-ready system." If all three models follow links reliably,
-the architecture is model-agnostic. If only the strongest reasoning
-model can, that's a documentable dependency. Either result is useful.
+If all three models follow links reliably, the architecture is
+model-agnostic. If only the strongest reasoning model can, that's a
+documentable model-tier dependency — operators pick a tier that
+matches their workflow's complexity. Either result is useful and
+neither blocks shipping the gateway, which is correct by construction
+regardless of which model drives it.
 
 ## Next steps
 
 Run the experiment, fill in the results, replace the README's
-"we won't claim it for you" language with a link to this report.
+"we won't claim it for you" language with concrete per-model numbers.
 
-Until then, this document exists as a placeholder so the gap is
-visible rather than hidden.
+Until then, this document tracks the open research question. It is
+**not** a blocker on production-readiness of mcp-flowgate itself —
+the gateway returns correct HATEOAS bytes; the question is which
+models will follow them.

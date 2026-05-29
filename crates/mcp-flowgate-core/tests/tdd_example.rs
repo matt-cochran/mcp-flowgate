@@ -67,6 +67,7 @@ impl Executor for ScriptedRunner {
                 "json":     { "passed": next.passed, "count": next.count, "output": "(scripted)" },
             }),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }
@@ -85,6 +86,7 @@ impl Executor for InertNoop {
         Ok(ExecuteResult {
             output: json!({}),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }
@@ -127,6 +129,8 @@ async fn start(runtime: &WorkflowRuntime) -> (String, u64, Value) {
                 "runner_path": "/dev/null",
             }),
             principal: Principal::anonymous(),
+            trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -143,6 +147,9 @@ async fn submit(runtime: &WorkflowRuntime, id: &str, version: u64, transition: &
             transition: transition.to_string(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
+            trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap()

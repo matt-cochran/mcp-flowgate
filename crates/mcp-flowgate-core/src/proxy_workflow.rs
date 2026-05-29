@@ -72,6 +72,7 @@ fn compile_proxy_workflow_from_exposures(exposures: &[Value]) -> Option<Value> {
     }
 
     Some(json!({
+        "version": "0",
         "description": "Generated null-op workflow for configurable proxy exposures.",
         "initialState": DEFAULT_PROXY_STATE,
         "states": {

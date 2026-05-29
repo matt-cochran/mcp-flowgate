@@ -7,7 +7,9 @@
 
 use std::sync::Arc;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 
 use mcp_flowgate_core::audit::{AuditEvent, AuditSink, MemoryAuditSink, NullAuditSink};
 use mcp_flowgate_core::model::WorkflowInstance;
@@ -27,11 +29,16 @@ fn bench_in_memory_store(c: &mut Criterion) {
                     id: format!("wf_{}", black_box(rand::random::<u64>())),
                     definition_id: "test".to_string(),
                     definition_version: "1.0.0".to_string(),
+                    definition: json!({"initialState": "running", "states": {}}),
                     state: "running".to_string(),
                     version: 1,
                     input: json!({"key": "value"}),
                     context: json!({"count": 0}),
                     started_at: chrono::Utc::now(),
+                    trace_id: None,
+                    run_id: None,
+                    cancelled_at: None,
+                    cancelled_reason: None,
                 };
                 (store, instance)
             },
@@ -53,11 +60,16 @@ fn bench_sqlite_store(c: &mut Criterion) {
                 id: format!("wf_{}", black_box(rand::random::<u64>())),
                 definition_id: "test".to_string(),
                 definition_version: "1.0.0".to_string(),
+                definition: json!({"initialState": "running", "states": {}}),
                 state: "running".to_string(),
                 version: 1,
                 input: json!({"key": "value"}),
                 context: json!({"count": 0}),
                 started_at: chrono::Utc::now(),
+                trace_id: None,
+                run_id: None,
+                cancelled_at: None,
+                cancelled_reason: None,
             },
             |instance| {
                 rt.block_on(store.create(instance)).unwrap();

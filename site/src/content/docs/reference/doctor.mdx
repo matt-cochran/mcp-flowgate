@@ -1,0 +1,135 @@
+---
+title: "flowgate doctor"
+description: "Pre-flight checks before walking a workflow. Reference for every check, its codes, and what to do when it fails."
+---
+
+`flowgate doctor` runs a battery of pre-flight checks against your gateway config and agents.yaml. It exits 0 if every check passes; 1 otherwise. Run it before `flowgate walk` to catch config issues before the workflow starts.
+
+## Usage
+
+```bash
+flowgate doctor --config flowgate.yaml --workflow swe_agent --agent planning=anthropic/claude-sonnet-4-6
+```
+
+All flags optional. `--config` defaults to `$FLOWGATE_CONFIG`. Omit `--workflow` to skip workflow-declared checks. Omit `--agent` to skip API key checks for legacy CLI-flag agents. Pass `--refresh-agents` to re-probe every `agents.yaml` binding against its provider's `/v1/models` endpoint and cache the result (see "agents.yaml live-probe cache" below).
+
+## What gets checked
+
+Doctor runs nine checks in order, each reporting a pass, fail, or skip. A fail stops the check sequence and returns exit code 1.
+
+### `mcp-flowgate binary` — Can `flowgate` find the gateway binary?
+
+Doctor attempts to locate the `mcp-flowgate` binary on `$PATH` (or the path set in `$MCP_FLOWGATE_PATH`). This binary is the server that executes your workflows.
+
+- **Pass:** The binary is located and executable.
+- **Fail code:** `MCP_FLOWGATE_NOT_FOUND`
+- **Operator action:** Install the binary with `cargo install mcp-flowgate` or set `$MCP_FLOWGATE_PATH` to its absolute path.
+
+### `config file` — Does the gateway YAML exist?
+
+Doctor locates the gateway config file, passed via `--config` or `$FLOWGATE_CONFIG` environment variable. If neither is set, this check is skipped and all downstream checks that depend on the config are also skipped.
+
+- **Pass:** The file exists and is readable.
+- **Fail code:** `CONFIG_NOT_FOUND`
+- **Skip condition:** No `--config` flag and `$FLOWGATE_CONFIG` not set.
+- **Operator action:** Create the file, or pass `--config <PATH>` or set `$FLOWGATE_CONFIG=<PATH>`.
+
+### `config parses + resolves` — Does the gateway YAML parse as valid YAML and resolve as a valid flowgate config?
+
+Doctor loads and parses the YAML, then runs the same `resolve()` that the gateway runs at load time. This catches structural errors (missing fields, wrong types) and reference errors (undefined skills, broken imports).
+
+- **Pass:** The config parsed and resolved. Details include the counts of workflows, skills, and scripts defined.
+- **Fail code:** `CONFIG_INVALID`
+- **Operator action:** The error message names the offending line and field. Fix the YAML syntax or resolve the missing reference.
+
+### `workflow declared` — Does `--workflow X` match a declared workflow in the config?
+
+If you pass `--workflow`, doctor checks that the workflow exists in the config's `workflows:` map. If you omit `--workflow`, this check is skipped.
+
+- **Pass:** The workflow is found in the config.
+- **Fail code:** `WORKFLOW_NOT_DECLARED`
+- **Skip condition:** No `--workflow` argument.
+- **Operator action:** Pass a workflow that exists in the config, or add the workflow to the config. Doctor lists all available workflows in the failure detail.
+
+### `agent API keys` (legacy `--agent` flags) — Each declared agent's provider env var present?
+
+If you pass `--agent name=provider/model` flags (the v0.2 pattern), doctor checks that each provider's API key environment variable is set. For `anthropic`, that's `$ANTHROPIC_API_KEY`. For `openai`, `$OPENAI_API_KEY`. For `ollama`, `$OLLAMA_HOST`.
+
+Each flag is checked individually. If you pass multiple `--agent` flags, you get one check per flag.
+
+- **Pass:** The provider's env var is set.
+- **Fail code:** `AGENT_SPEC_INVALID` (malformed `--agent` flag) or `MISSING_API_KEY` (env var not set).
+- **Skip condition:** No `--agent` arguments.
+- **Operator action:** Set the env var, or migrate to `agents.yaml` (which consolidates all agent bindings). See [Agent configuration](/guides/agent-config/#migrating-from---agent-flags).
+
+### `agents.yaml` — File present and parses?
+
+Doctor loads the `agents.yaml` file using the same loader that `flowgate walk` uses at runtime. It tries first the project file (`.flowgate/agents.yaml`), then the user file (`~/.config/flowgate/agents.yaml`).
+
+- **Pass:** The file parsed successfully. Details include binding counts and whether strict_specificity is enabled.
+- **Fail code:** `AGENTS_YAML_PARSE_FAILED`
+- **Skip condition:** No project or user file exists (not an error — workflow runs can still use legacy `--agent` flags or rely entirely on defaults).
+- **Operator action:** The error names the offending line + key. Fix the YAML syntax or check the [Closed enums](/guides/agent-config/#closed-enums) to ensure you're using valid affinity, tier, and provider names.
+
+### `agents.yaml shadow` — When both project and user files exist, which one wins?
+
+If both `.flowgate/agents.yaml` and `~/.config/flowgate/agents.yaml` are present, doctor reports that the project file shadows the user file. This is informational (always passes) but surfaces the surprise so you don't silently ignore a user file you thought was in use.
+
+- **Status:** Always passes (informational).
+- **Operator action:** If you intended the user file to apply, remove the project file. If you intended the project file, acknowledge the shadow and proceed.
+
+### `agents.yaml live-probe cache` + `agents.yaml probe age` — Are the bindings in your `agents.yaml` still valid against their providers' current model listings?
+
+`agents.yaml` is parsed at workflow load and the primary bindings get an eager auth preflight, but the resolver does NOT call `/v1/models` on every walk — that would be both slow and rate-limit-noisy. The probe cache fills the gap: `flowgate doctor --refresh-agents` re-probes every distinct `(provider, model)` pair declared in your `agents.yaml`, classifies each one (`Ok`, `ModelNotListed`, `AuthFailed`, `Unreachable`, `NoCredential`, `Skipped`), and writes the results to `~/.cache/flowgate/agents-last-probe.json` (or platform equivalent). Subsequent doctor runs read the cache and surface:
+
+- one `probe age` check summarizing how many hours/days since the last refresh, and
+- one per-binding `probe: <provider>/<model>` check showing the cached verdict.
+
+The probe age check fails with `CACHE_STALE` when the cache is older than 7 days. The per-binding checks fail with `PROBE_MODEL_NOT_LISTED` if the provider's catalog no longer includes your model id — the strongest signal that you need to rotate the binding.
+
+- **Pass:** Cache exists, age under 7d, every binding's last probe returned `Ok`.
+- **Skip condition:** No `agents.yaml`, OR no cache exists yet (run `flowgate doctor --refresh-agents` to populate).
+- **Fail codes:** `CACHE_STALE` (cache age >7d), `PROBE_MODEL_NOT_LISTED` (provider dropped the model), `PROBE_AUTH_FAILED` (credentials no longer work for the listing endpoint), `PROBE_UNREACHABLE` (network/server issue), `PROBE_NO_CREDENTIAL` (provider's API key env var was unset at probe time), `CACHE_WRITE_FAILED` / `CACHE_READ_FAILED`.
+- **Operator action:** Re-run `flowgate doctor --refresh-agents` weekly (e.g., as a cron / CI job). When a `PROBE_MODEL_NOT_LISTED` fires, swap the named model in `agents.yaml` and re-probe. Local providers (`ollama`, `lmstudio`) and `custom` always report `Skipped` — there's no listing convention to probe against.
+
+### `workflow delegates` — Each `delegate:` state in the workflow resolves through the resolver?
+
+For each state in the workflow that contains a `delegate:` field, doctor runs the agent resolver's walk to determine which `agents.yaml` override list (or `default`) matches. This surfaces specificity downgrades and resolution exhaustion before the workflow starts.
+
+- **Pass:** All delegates resolved to explicit overrides, OR they resolved but some fell through to `default` (with details named so you can verify intent).
+- **Fail code:** `WORKFLOW_DELEGATE_UNRESOLVED`
+- **Skip condition:** Workflow has no states with `delegate:` fields, or no `--workflow` was passed.
+- **Operator action:** Add the missing affinity or tier override to `agents.yaml`, or remove the delegate from the workflow. See [Sparse overrides](/guides/agent-config/#sparse-overrides) for the specificity walk rules.
+
+### `script file:// URIs` — External script bodies fetchable?
+
+For workflows whose `scripts:` block uses `uri: file://` (not inline `body:`), doctor checks that each file path exists on disk.
+
+- **Pass:** All script files are present.
+- **Fail code:** `SCRIPT_URI_MISSING`
+- **Operator action:** Create the missing file, or inline the script body in the config instead of referencing it. Verify relative paths resolve from your current working directory when `flowgate walk` runs.
+
+## Reading the output
+
+Pass = `✓`. Fail = `✗ <CODE>` with the offending detail. Skip = `−` with the reason. Example:
+
+```
+✓ mcp-flowgate binary              /usr/local/bin/mcp-flowgate
+✓ config file                      flowgate.yaml
+✓ config parses + resolves         3 workflows, 12 skills, 5 scripts
+✓ workflow declared                swe_agent
+✓ agent: planning                  ANTHROPIC_API_KEY set
+✓ agents.yaml                      loaded .flowgate/agents.yaml (1 default binding(s), 2 override(s))
+✓ agents.yaml shadow               project (.flowgate/agents.yaml) shadows user (~/.config/flowgate/agents.yaml) — user's bindings are NOT in effect
+✓ workflow delegates               3 delegate(s) resolved to explicit overrides
+✓ script file:// URIs              5 script(s) verified
+
+doctor: all checks passed.
+```
+
+Total failure count is the binary's exit code: 0 failures = exit 0, 1 failure = exit 1, etc.
+
+## See also
+
+- [`agents.yaml`](/guides/agent-config/) — the config doctor's agents.yaml checks validate.
+- [Validation rules](/reference/validation-rules/) — what `mcp-flowgate check` catches at config load.

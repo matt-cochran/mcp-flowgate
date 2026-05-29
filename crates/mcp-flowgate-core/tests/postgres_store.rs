@@ -31,11 +31,20 @@ fn make_instance(id: &str, version: u64, state: &str) -> WorkflowInstance {
         id: id.to_string(),
         definition_id: "test_def".to_string(),
         definition_version: "1.0.0".to_string(),
+        definition: json!({
+            "version": "1.0.0",
+            "initialState": "running",
+            "states": { "running": {}, "completed": { "terminal": true } }
+        }),
         state: state.to_string(),
         version,
         input: json!({"key": "value"}),
         context: json!({"count": 0}),
         started_at: chrono::Utc::now(),
+        trace_id: None,
+        run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     }
 }
 

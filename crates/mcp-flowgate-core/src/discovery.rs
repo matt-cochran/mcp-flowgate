@@ -21,6 +21,16 @@ pub enum DiscoveryKind {
     Workflow,
     Capability,
     Connection,
+    /// A reusable guidance fragment ("skill"). The lookup id is the fragment's
+    /// `subject`; `gateway.describe(subject)` returns its `verb` + `body`.
+    Guidance,
+    /// SPEC §22 — a curated, hash-pinned script body invokable by a workflow's
+    /// `script` executor. The lookup id is the script's `subject`;
+    /// `gateway.describe(subject)` returns its `verb` + `body` (the executable
+    /// content). Distinct from `Guidance` because scripts have stricter
+    /// hash normalization (whitespace matters in shell) and a separate verb
+    /// vocabulary (build/test/deploy/... vs triage/diagnose/plan/...).
+    Script,
 }
 
 impl DiscoveryKind {
@@ -29,9 +39,267 @@ impl DiscoveryKind {
             DiscoveryKind::Workflow => "workflow",
             DiscoveryKind::Capability => "capability",
             DiscoveryKind::Connection => "connection",
+            DiscoveryKind::Guidance => "guidance",
+            DiscoveryKind::Script => "script",
         }
     }
 }
+
+/// SPEC §5.4.1 — the eight closed cognitive-operation verbs that may tag a
+/// guidance fragment. This is a closed enum on purpose: no `Other(String)`
+/// escape variant, no `#[serde(other)]`. Authoring a new verb requires a
+/// deliberate spec amendment, not a config-time string. Unknown verbs fail
+/// config-load with `INVALID_VERB` (see [`Verb::from_token`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verb {
+    /// Classify, prioritize, route.
+    Triage,
+    /// Find root cause.
+    Diagnose,
+    /// Design approach before acting.
+    Plan,
+    /// Produce / generate the artifact.
+    Implement,
+    /// Evaluate against criteria.
+    Review,
+    /// Restructure preserving behavior.
+    Refactor,
+    /// Build understanding (self-explain or teach others).
+    Explain,
+    /// Assemble parts into a whole.
+    Compose,
+    /// SPEC §5.4.1 — Gather context from sources (web, local, docs).
+    /// Distinct from `diagnose` (root-cause) — `research` is open-ended
+    /// information-gathering; `diagnose` answers a specific "why" question.
+    Research,
+    /// SPEC §5.4.1 — Condense. Distinct from `explain` (which builds
+    /// understanding via expansion) — `summarize` compresses what is
+    /// already understood.
+    Summarize,
+}
+
+impl Verb {
+    /// The closed set of allowed verb tokens, in spec order. Returned as
+    /// `&'static [&'static str]` so error messages can list them verbatim
+    /// without per-call allocation.
+    pub const ALL_TOKENS: &'static [&'static str] = &[
+        "triage",
+        "diagnose",
+        "plan",
+        "implement",
+        "review",
+        "refactor",
+        "explain",
+        "compose",
+        "research",
+        "summarize",
+    ];
+
+    pub fn as_token(self) -> &'static str {
+        match self {
+            Verb::Triage => "triage",
+            Verb::Diagnose => "diagnose",
+            Verb::Plan => "plan",
+            Verb::Implement => "implement",
+            Verb::Review => "review",
+            Verb::Refactor => "refactor",
+            Verb::Explain => "explain",
+            Verb::Compose => "compose",
+            Verb::Research => "research",
+            Verb::Summarize => "summarize",
+        }
+    }
+
+    /// Parse a verb token, case-sensitively. Returns `None` for any string not
+    /// in the closed set. Whitespace, uppercase, hyphen, dot, or any other
+    /// deviation rejects.
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "triage" => Some(Verb::Triage),
+            "diagnose" => Some(Verb::Diagnose),
+            "plan" => Some(Verb::Plan),
+            "implement" => Some(Verb::Implement),
+            "review" => Some(Verb::Review),
+            "refactor" => Some(Verb::Refactor),
+            "explain" => Some(Verb::Explain),
+            "compose" => Some(Verb::Compose),
+            "research" => Some(Verb::Research),
+            "summarize" => Some(Verb::Summarize),
+            _ => None,
+        }
+    }
+}
+
+/// SPEC §5.3 — required lifecycle marker on every guidance fragment. Closed
+/// enum; no silent default. A fragment without `lifecycle` fails config-load
+/// with `MISSING_LIFECYCLE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lifecycle {
+    Experimental,
+    Stable,
+    Deprecated,
+}
+
+impl Lifecycle {
+    pub const ALL_TOKENS: &'static [&'static str] = &["experimental", "stable", "deprecated"];
+
+    pub fn as_token(self) -> &'static str {
+        match self {
+            Lifecycle::Experimental => "experimental",
+            Lifecycle::Stable => "stable",
+            Lifecycle::Deprecated => "deprecated",
+        }
+    }
+
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "experimental" => Some(Lifecycle::Experimental),
+            "stable" => Some(Lifecycle::Stable),
+            "deprecated" => Some(Lifecycle::Deprecated),
+            _ => None,
+        }
+    }
+}
+
+/// SPEC §5.4.2 — the blessed top-level segments for guidance fragment
+/// subjects. A subject's first dotted segment MUST be one of these, or the
+/// config produces an `INVALID_SUBJECT_ROOT` diagnostic (error under
+/// `strict_namespacing: true`, warning otherwise).
+///
+/// The list combines:
+/// - Six domain-themed roots (`authoring`, `debug`, `deploy`, `import`,
+///   `lifecycle`, `review`) that group guidance by topic regardless of
+///   which verb is appropriate.
+/// - Eight verb-mirror roots — one per closed verb in [`Verb::ALL_TOKENS`] —
+///   so authors can group guidance by the cognitive operation it primes
+///   (e.g. `implement.edit.constrained`, `diagnose.codebase.search`).
+///
+/// Two roots (`plan` and `review`) appear in BOTH categories; they are
+/// listed once. Total: 12 blessed roots.
+pub const BLESSED_SUBJECT_ROOTS: &[&str] = &[
+    // Domain-themed (groups guidance by topic).
+    "authoring",
+    "debug",
+    "deploy",
+    "import",
+    "lifecycle",
+    // Verb-mirror (groups guidance by cognitive operation).
+    "triage",
+    "diagnose",
+    "plan", // also a verb
+    "implement",
+    "review", // also a verb
+    "refactor",
+    "explain",
+    "compose",
+    // SPEC §5.4.1 expansion (v0.3) — verb-mirror roots for the
+    // reconnaissance + condensation verbs.
+    "research",
+    "summarize",
+];
+
+/// SPEC §22.3 — the eight closed action verbs that may tag a curated script.
+/// Distinct from [`Verb`] (cognitive verbs) because scripts perform actions,
+/// not cognition: a Bash script doesn't `triage` or `explain`, it builds,
+/// tests, deploys, etc. Closed enum on purpose; new verbs require a spec
+/// amendment. Unknown verbs fail config-load with `INVALID_SCRIPT_VERB`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScriptVerb {
+    /// Compile, package, generate artifacts.
+    Build,
+    /// Exercise the system against assertions (unit / integration / e2e).
+    Test,
+    /// Promote artifacts to an environment.
+    Deploy,
+    /// Apply style transformations (write changes; not check).
+    Format,
+    /// Inspect for static issues (read-only; report don't fix).
+    Lint,
+    /// Provision dependencies, toolchains, runtimes.
+    Install,
+    /// Confirm an externally-asserted property (hash match, signature, contract).
+    Verify,
+    /// Catch-all for runnable operations that don't fit the above (smoke
+    /// runs, ad-hoc helpers). Use sparingly — prefer a more specific verb.
+    Run,
+    /// SPEC §22.3 expansion (v0.3) — read-only local introspection.
+    /// System state, dep trees, symbol exports, env. Distinct from `lint`
+    /// (binary pass/fail on issues) and `run` (loses semantic info).
+    Inspect,
+    /// SPEC §22.3 expansion (v0.3) — content discovery: codebase grep,
+    /// web search, doc search. Distinct from `fetch` (known resource by
+    /// id) and `inspect` (system state, not content).
+    Search,
+    /// SPEC §22.3 expansion (v0.3) — retrieve a specific known resource
+    /// by URL or path. Distinct from `search` (discovery vs known
+    /// retrieval).
+    Fetch,
+    /// SPEC §22.3 expansion (v0.3) — graded compliance / security /
+    /// quality scan. Emits structured findings. Distinct from `lint`
+    /// (binary pass/fail) — `audit` is a report.
+    Audit,
+}
+
+impl ScriptVerb {
+    pub const ALL_TOKENS: &'static [&'static str] = &[
+        "build", "test", "deploy", "format", "lint", "install", "verify", "run", "inspect",
+        "search", "fetch", "audit",
+    ];
+
+    pub fn as_token(self) -> &'static str {
+        match self {
+            ScriptVerb::Build => "build",
+            ScriptVerb::Test => "test",
+            ScriptVerb::Deploy => "deploy",
+            ScriptVerb::Format => "format",
+            ScriptVerb::Lint => "lint",
+            ScriptVerb::Install => "install",
+            ScriptVerb::Verify => "verify",
+            ScriptVerb::Run => "run",
+            ScriptVerb::Inspect => "inspect",
+            ScriptVerb::Search => "search",
+            ScriptVerb::Fetch => "fetch",
+            ScriptVerb::Audit => "audit",
+        }
+    }
+
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "build" => Some(ScriptVerb::Build),
+            "test" => Some(ScriptVerb::Test),
+            "deploy" => Some(ScriptVerb::Deploy),
+            "format" => Some(ScriptVerb::Format),
+            "lint" => Some(ScriptVerb::Lint),
+            "install" => Some(ScriptVerb::Install),
+            "verify" => Some(ScriptVerb::Verify),
+            "run" => Some(ScriptVerb::Run),
+            "inspect" => Some(ScriptVerb::Inspect),
+            "search" => Some(ScriptVerb::Search),
+            "fetch" => Some(ScriptVerb::Fetch),
+            "audit" => Some(ScriptVerb::Audit),
+            _ => None,
+        }
+    }
+}
+
+/// SPEC §22.4 — blessed top-level segments for script subjects. Mirrors
+/// [`BLESSED_SUBJECT_ROOTS`] but the vocabulary is action-flavored. Combines
+/// the eight [`ScriptVerb`] tokens as verb-mirror roots with three
+/// domain-themed extensions (`release`, `migrate`, `ci`) for common
+/// operational categories. `strict_namespacing: true` (default) rejects
+/// unblessed roots with `INVALID_SCRIPT_SUBJECT_ROOT`; lenient mode warns
+/// with the closest-blessed-root suggestion.
+pub const BLESSED_SCRIPT_ROOTS: &[&str] = &[
+    // Verb-mirror (action category).
+    "build", "test", "deploy", "format", "lint", "install", "verify", "run",
+    // SPEC §22.3 expansion (v0.3) — verb-mirror roots for the
+    // reconnaissance + graded-findings verbs.
+    "inspect", "search", "fetch", "audit", // Domain-themed (operational category).
+    "release", "migrate", "ci",
+];
 
 /// A single thing that can be discovered: a workflow, a proxy capability, or
 /// a configured connection. Everything carries enough metadata to score it
@@ -60,6 +328,20 @@ pub struct DiscoveryItem {
     /// HATEOAS templates for what to do with this item.
     #[serde(default)]
     pub links: Vec<DiscoveryLink>,
+    /// Guidance fragments only: the fragment's space-free `verb` (`apply`,
+    /// `check`, ...). `None` for non-guidance items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verb: Option<String>,
+    /// Guidance fragments only: the fragment's static markdown body returned
+    /// by `gateway.describe`. `None` for non-guidance items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// SPEC §5.3 — fragment provenance. Examples: `config` (declared inline
+    /// in workflow YAML), `git+https://github.com/org/repo@sha`. Used by the
+    /// `gateway.skills.search` `source` filter (§17.6). `None` for
+    /// non-guidance items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// A pre-built HATEOAS link attached to a `DiscoveryItem`. These are
@@ -114,7 +396,7 @@ fn default_home() -> Value {
             {
                 "rel": "search",
                 "title": "Search workflows and capabilities",
-                "method": "gateway.search",
+                "method": "flowgate.query",
                 "args": { "query": "" },
                 "inputSchema": {
                     "type": "object",
@@ -130,13 +412,13 @@ fn default_home() -> Value {
             {
                 "rel": "list_workflows",
                 "title": "List configured workflows",
-                "method": "gateway.search",
+                "method": "flowgate.query",
                 "args": { "query": "", "kind": "workflow" }
             },
             {
                 "rel": "list_capabilities",
                 "title": "List proxy capabilities",
-                "method": "gateway.search",
+                "method": "flowgate.query",
                 "args": { "query": "", "kind": "capability" }
             }
         ]
@@ -189,10 +471,18 @@ impl DiscoveryIndex for InMemoryDiscoveryIndex {
         let terms = tokenize(&request.query);
         let want_all = terms.is_empty();
 
+        // Guidance fragments are looked up by known subject via
+        // `gateway.describe` — they're not the answer to "what can I do?".
+        // They stay in the index (so describe can find them) but are
+        // excluded from search unless the caller asks for them explicitly
+        // via `kind=guidance`.
         let mut hits: Vec<SearchHit> = self
             .docs
             .iter()
-            .filter(|d| request.kind.map(|k| k == d.kind).unwrap_or(true))
+            .filter(|d| match request.kind {
+                Some(k) => k == d.kind,
+                None => d.kind != DiscoveryKind::Guidance,
+            })
             .filter_map(|d| {
                 let score = score_doc(d, &terms);
                 if want_all || score > 0.0 {
@@ -223,7 +513,10 @@ impl DiscoveryIndex for InMemoryDiscoveryIndex {
         Ok(self
             .docs
             .iter()
-            .filter(|d| kind.map(|k| k == d.kind).unwrap_or(true))
+            .filter(|d| match kind {
+                Some(k) => k == d.kind,
+                None => d.kind != DiscoveryKind::Guidance,
+            })
             .cloned()
             .collect())
     }

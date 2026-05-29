@@ -1,0 +1,77 @@
+---
+title: "Validation rules V1–V23"
+description: "Catalog of every validation rule the v0.2 runtime enforces. V1–V16 + V19–V23 fire at config load; V17–V18 fire at runtime."
+---
+
+The two-tier composition model adds 23 named validation rules to the gateway. V1–V16 and V19–V23 fire at config load (`mcp-flowgate check` surfaces them all); V17–V18 fire at runtime as audit events.
+
+A CI parity scanner (`scripts/check-validation-parity.sh`) enforces that every rule has at least one accepts test AND one rejects test, by naming convention. The full catalog:
+
+## Capability tier (`cap.*`)
+
+| Rule | Check | Tier | Outcome | Detection |
+|---|---|---|---|---|
+| V1 | `verb:` is one of the 24 cap-verb tokens | cap | error | load |
+| V2 | `definitionId` matches `cap.<verb>.<name>` and verb segment agrees with declared `verb:` field | cap | error | load |
+| V3 | `snippet:` block present | cap | error | load |
+| V4 | `snippet:` block has BOTH `inputs:` AND `outputs:` keys (may be `{}`) | cap | error | load |
+| V5 | Each input/output entry is JSON-schema-shaped | cap | error | load |
+| V6 | Primary-executor verb-shape: cognitive→mcp/noop, deterministic→script/mcp, gate→human actor, coordinate→mcp | cap | error | load |
+| V10 | Capability MAY NOT invoke another workflow via `kind: workflow` | cap | error | load |
+| V17 | Output value matches declared `snippet.outputs` schema | cap | runtime audit event `cap.output.schema_violation`; executor returns `SchemaViolation` | runtime |
+| V18 | Capability abnormal termination → `cap.terminated` audit event with `error_kind` + `parent_correlation_id`, no partial output projection | cap | runtime audit event | runtime |
+
+## Orchestrator tier (`flow.*`)
+
+| Rule | Check | Tier | Outcome | Detection |
+|---|---|---|---|---|
+| V7 | `definitionId` matches `flow.<name>` | flow | error | load |
+| V8 | `snippet:` block ABSENT (orchestrators are entry points, not composable snippets) | flow | error | load |
+| V9 | `verb:` field ABSENT | flow | error | load |
+| V11 | Orchestrator MAY NOT invoke another orchestrator via `kind: workflow` | flow | error | load |
+
+## Cross-tier (both `cap.*` and `flow.*`)
+
+| Rule | Check | Outcome | Detection |
+|---|---|---|---|
+| V12 | `kind: workflow` executor targeting `cap.*` without `use:` block | error | load |
+| V13 | `use:.inputs` paths resolve to slot table (Check A — reachability) | error | load |
+| V14 | `use:.outputs` writes to a slot already typed differently (Check B — type consistency) | error | load |
+| V15 | `expects_contract_hash` matches the loaded capability's actual hash | error | load |
+| V16 | `use:` block omits `expects_contract_hash` for a `stable`-lifecycle target | error | load |
+
+## Multi-repo loading
+
+| Rule | Check | Outcome | Detection |
+|---|---|---|---|
+| V19 | Repo manifest declares `schema: flowgate.repo/v1` | error | load |
+| V20 | Two repos declare the same `namespace:` | error | load |
+| V21 | A single repo defines the same `definitionId` in two files | error | load |
+| V22 | A `kind: workflow` reference is unprefixed and the resolved (namespace-prefixed) id doesn't exist in any loaded repo | error | load |
+| V23 | Host config shadows a repo-provided id without listing it in top-level `overrides:` | error | load |
+
+## Running the cloud
+
+```bash
+mcp-flowgate check --config gateway.yaml
+```
+
+Errors abort startup. Warnings print but allow startup. Each error names the rule code that fired, the workflow / state / transition that triggered it, and the expected shape — paste-fixable without spelunking.
+
+For the rule-by-rule semantics with worked examples, see:
+
+- [Capabilities and orchestrators](/guides/capabilities-and-orchestrators/) — V1–V14 in context.
+- [Multi-repo loading](/guides/multi-repo-loading/) — V19–V23 in context.
+- [Cap verbs](/reference/cap-verbs/) — V1 + V6 details.
+
+## CI parity
+
+Adding a new validation rule? The parity scanner forbids one-sided coverage:
+
+```bash
+bash scripts/check-validation-parity.sh
+```
+
+For every rule V1–V23, the scanner asserts there's at least one `fn vN_accepts_*` test AND at least one `fn vN_rejects_*` test in either `crates/mcp-flowgate-core/tests/` or `crates/mcp-flowgate-executors/tests/`. CI runs this before `cargo test --workspace`, so missing coverage fails the build with a named gap list.
+
+If you're adding V24, you add the rule, the validator, an accepts test (`fn v24_accepts_<topic>`), and a rejects test (`fn v24_rejects_<topic>`) — and the scanner stops complaining.

@@ -40,7 +40,11 @@ pub fn merge_output(
         })
         .collect();
 
-    let obj = context.as_object_mut().unwrap();
+    // Invariant: the `is_object()` guard above already proved this is
+    // an object — the `as_object_mut()` cannot return None here.
+    let obj = context
+        .as_object_mut()
+        .expect("invariant: context.is_object() checked above");
     for (k, v) in pending {
         obj.insert(k, v);
     }
@@ -73,7 +77,12 @@ pub fn resolve_value(
         }
 
         Value::Object(obj) if obj.len() == 1 => {
-            let (op, args) = obj.iter().next().unwrap();
+            // Invariant: the `len() == 1` match guard above guarantees
+            // iter().next() yields Some.
+            let (op, args) = obj
+                .iter()
+                .next()
+                .expect("invariant: obj.len() == 1 checked in match guard");
             match op.as_str() {
                 "set" => args.clone(),
 
@@ -199,6 +208,15 @@ pub fn read_expr(value: &Value, expr: &str) -> Option<Value> {
 
 /// Reads any of the supported expression roots against the relevant scopes.
 /// Used by the CLI executor and similar places that need late-bound values.
+///
+/// SPEC §24 — supports bracket-wildcard **array projection** via `[*]`.
+/// `$.output.branches[*].field` resolves `branches` to an array (under the
+/// `$.output` root) and plucks `field` from each element, returning a JSON
+/// array of plucked values in original order. `[*]` against a non-array
+/// returns `None` (consistent with the existing unresolved-path contract).
+/// Multiple `[*]` in the same path are NOT supported in v1 — only the
+/// first wildcard expands; subsequent literal segments treat the projected
+/// array's elements as individual roots.
 pub fn read_in_scopes(
     expr: &str,
     arguments: &Value,
@@ -207,29 +225,57 @@ pub fn read_in_scopes(
     executor_output: Option<&Value>,
 ) -> Option<Value> {
     if let Some(path) = expr.strip_prefix("$.arguments.") {
-        return arguments
-            .pointer(&format!("/{}", path.replace('.', "/")))
-            .cloned();
+        return resolve_path_with_projection(arguments, path);
     }
     if let Some(path) = expr.strip_prefix("$.context.") {
-        return context
-            .pointer(&format!("/{}", path.replace('.', "/")))
-            .cloned();
+        return resolve_path_with_projection(context, path);
     }
     if let Some(path) = expr.strip_prefix("$.workflow.input.") {
-        return workflow_input
-            .pointer(&format!("/{}", path.replace('.', "/")))
-            .cloned();
+        return resolve_path_with_projection(workflow_input, path);
     }
     if let Some(out) = executor_output {
         if expr == "$.output" || expr == "$" {
             return Some(out.clone());
         }
         if let Some(path) = expr.strip_prefix("$.output.") {
-            return out
-                .pointer(&format!("/{}", path.replace('.', "/")))
-                .cloned();
+            return resolve_path_with_projection(out, path);
         }
     }
     None
+}
+
+/// Resolve a dot-separated path against `root`, with `[*]` projection
+/// support. Falls back to plain JSON Pointer when no `[*]` is present.
+fn resolve_path_with_projection(root: &Value, path: &str) -> Option<Value> {
+    // No wildcard → plain JSON Pointer (legacy path).
+    if !path.contains("[*]") {
+        return root
+            .pointer(&format!("/{}", path.replace('.', "/")))
+            .cloned();
+    }
+    // Split on FIRST `[*]`. Prefix is the array root; suffix (if any) is
+    // plucked from each element. `prefix` may be empty when path starts
+    // with `[*]` (e.g. raw `[*].x` against a Vec root — unusual).
+    let (prefix, suffix_after) = path.split_once("[*]")?;
+    let prefix_clean = prefix.trim_end_matches('.');
+    let array = if prefix_clean.is_empty() {
+        root.clone()
+    } else {
+        root.pointer(&format!("/{}", prefix_clean.replace('.', "/")))
+            .cloned()?
+    };
+    let arr = array.as_array()?;
+    let suffix = suffix_after.trim_start_matches('.');
+    let projected: Vec<Value> = arr
+        .iter()
+        .map(|element| {
+            if suffix.is_empty() {
+                element.clone()
+            } else {
+                // Recurse: support nested `[*]` in the suffix.
+                resolve_path_with_projection(element, suffix).unwrap_or(Value::Null)
+            }
+        })
+        .collect();
+    Some(Value::Array(projected))
 }

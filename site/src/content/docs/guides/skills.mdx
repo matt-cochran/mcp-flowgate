@@ -1,0 +1,206 @@
+---
+title: "How skills work"
+description: "A skill is a focused guidance fragment with a verb, a subject, and a body. Workflows reference them by subject; the gateway surfaces them to the model on demand; in-flight instances see a frozen snapshot. Here's the operational rundown."
+---
+
+The conceptual story for skills lives in [Skills, workflows, and cognitive architectures](/guides/skills-and-architectures/) — what a skill IS, why the three-layer model matters, when you'd reach for one. This page is the operational rundown: where skills live, how they load, how the gateway surfaces them, and the snapshot invariant that keeps in-flight workflows stable.
+
+## Anatomy
+
+A skill is four fields under a subject key:
+
+```yaml
+skills:
+  review.code.adversarial:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Adversarial patch review
+
+      Attack the candidate patch: missed edge cases, hidden regressions,
+      policy violations, security issues. Cite each finding with
+      file:line and a counterexample. Return verdict: accept | retry | escalate.
+```
+
+| Field | Required | What it does |
+|---|---|---|
+| `verb` | yes | One of the 10 cognitive verbs ([reference](/reference/cognitive-verbs/)). Closed enum. |
+| `lifecycle` | yes | `experimental` \| `stable` \| `deprecated`. Governs the deprecation conventions you ship under. |
+| `body` | yes | The Markdown guidance the model reads. Aim for 100–400 words; one mental model per skill. |
+| `source` | no | Where the skill came from (`config`, `ingest`, repo provenance). Auto-set by ingest paths; manual entries default to `config`. |
+| `hash` | no | If present, must equal `sha256(normalize_for_hash(body))`. Hash drift is `HASH_MISMATCH` at load. |
+
+The **subject** (the key — `review.code.adversarial` above) is a dotted namespace. At least two segments, lowercase kebab. The first segment must be a blessed root from the cognitive subject roots set; under strict namespacing (default), unblessed roots fail load with `INVALID_SUBJECT_ROOT`. See [Cognitive verbs](/reference/cognitive-verbs/#subject-namespaces) for the full root list.
+
+## Where skills live
+
+Two places, and they compose.
+
+### Inline in the gateway config
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+
+skills:
+  review.code.adversarial:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Adversarial patch review ...
+```
+
+This is the simplest path. One file, no repo manifest, you ship and own the skill yourself. Good for skills that are highly specific to your codebase or your team's vocabulary.
+
+### From a repo's `skills/` directory
+
+A resource repo with a `flowgate.repo.yaml` manifest can ship a `skills/` directory whose `*.yaml` files load into the gateway's skills registry. Each loaded subject is namespace-prefixed `<repo-namespace>/<subject>`:
+
+```yaml
+# repos/cognitive-architectures/flowgate.repo.yaml
+schema: flowgate.repo/v1
+name: cognitive-architectures
+namespace: cognitive
+version: 0.6.0
+layout:
+  skills: skills          # ← skills/*.yaml load from here
+```
+
+```yaml
+# repos/cognitive-architectures/skills/review.code.adversarial.yaml
+skills:
+  review.code.adversarial:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Adversarial patch review ...
+```
+
+When the operator wires this repo into their gateway config…
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+repos:
+  - path: ~/repos/cognitive-architectures
+```
+
+…the skill lands in the registry under `cognitive/review.code.adversarial`. Two repos can ship skills with the same bare subject without colliding — the namespace prefix disambiguates.
+
+See [Multi-repo loading](/guides/multi-repo-loading/) for the full repo loading semantics. Both inline and repo-loaded skills compose into the same registry; you can have one repo provide `review.code.adversarial` and another provide `review.code.style-only` and your gateway sees both.
+
+## How a workflow surfaces them
+
+A workflow names the skills it wants surfaced:
+
+```yaml
+workflows:
+  review-pipeline:
+    initialState: critiquing
+    skills: [review.code.adversarial, review.code.final-approval]
+    states:
+      critiquing:
+        skills: [review.code.adversarial]       # state-scoped surfacing
+        transitions: { ... }
+```
+
+`skills:` can sit at three scopes:
+
+| Scope | Surfaces to | When you'd use it |
+|---|---|---|
+| Workflow-level | Every state in the workflow | "This whole workflow is review work; every state benefits from the rubric." |
+| State-level | Just that state | "The critiquing state needs the adversarial rubric; the next state doesn't." |
+| Transition-level | Just when that transition is the current decision | "Only when the model is about to fire `escalate`, surface the escalation rubric." |
+
+The model gets the subjects (the menu), not the bodies (the meal). When it decides a particular skill is relevant, it calls `flowgate.query({subject})` to fetch the body. Progressive disclosure — the model pulls one mental model at a time, only when it's about to use it.
+
+### Cross-namespace references from repo-loaded workflows
+
+A workflow loaded from a repo references skills by bare subject. The runtime resolves them against:
+
+1. The workflow's own namespace prefix first — `cognitive/review.code.adversarial`.
+2. Then the bare subject — `review.code.adversarial`.
+
+So a workflow shipped by `cognitive-architectures` writes `skills: [review.code.adversarial]` and lands the namespaced version automatically. To reference a skill from a different namespace, fully qualify it: `skills: [internal/review.compliance.strict]`.
+
+The lookup is the same fall-through pattern [Multi-repo loading](/guides/multi-repo-loading/#cross-namespace-references) describes for `kind: workflow` references.
+
+## How the model finds them
+
+The [two MCP tools](/reference/tools/) are how the model discovers and reads skills:
+
+### `flowgate.query` with `query` searches them
+
+The search index includes every loaded skill alongside capabilities and workflows. Each skill contributes its subject, verb, source, and body to the index. A query like `"adversarial review"` ranks `review.code.adversarial` highly because the term hits the subject + verb + body together.
+
+The model can filter by kind (`flowgate.query({ query: "review", kind: "skill" })`). Closed-enum verbs make the filter deterministic — no fuzzy matching across "review" vs "evaluate" vs "critique."
+
+### `flowgate.query` with `subject` returns the body
+
+```json
+{
+  "name": "flowgate.query",
+  "arguments": { "subject": "cognitive/review.code.adversarial" }
+}
+```
+
+returns the verb, body, hash, and source. The model reads the body, applies the guidance, and acts. The describe call is what the workflow's `skills:` ref *anticipates* the model making — you list the subjects the workflow expects the model to need; the model fetches each body once when it actually decides it needs it.
+
+## Snapshot stamping (`_skillsLibrary`)
+
+This is the SPEC §8.2 invariant that keeps in-flight workflows stable.
+
+When `flowgate.command({definitionId})` creates an instance, the runtime stamps a `_skillsLibrary` onto the instance's definition snapshot — a copy of every skill referenced anywhere in the workflow, with body, hash, and verb included. The instance carries this for its entire lifetime. Subsequent `flowgate.query({workflowId})` (get) and `flowgate.command({workflowId, transition})` (submit) calls read from the stamp; they never re-query the live `skills:` config.
+
+What that buys you:
+
+- **Mid-flight edits don't leak.** An operator hot-reloads the config with an updated `review.code.adversarial` body. In-flight instances of the review pipeline keep seeing the original body until they terminate. Fresh instances pick up the new one. No flicker, no half-evaluated workflows.
+- **Hot-reload safety.** SIGHUP-triggered config reload (`config.reloaded` audit event) swaps the live registry atomically. Instances mid-transition are unaffected.
+- **Reproducibility.** Replay a workflow's audit log a year later, and `_skillsLibrary` tells you exactly what guidance the model was looking at. The skill body in your repo today might say something different.
+
+The cost is per-instance storage — the snapshot duplicates skill bodies into every instance that references them. For typical 100–400-word skills and dozens-not-thousands of in-flight instances, this is cheap. If your skill library is enormous, see [Going to production](/guides/production/) for the snapshot-size monitoring you'd want.
+
+## Hash drift detection
+
+If a skill ships with an explicit `hash:` field, the runtime computes `sha256(normalize_for_hash(body))` at load and refuses to start if they don't match. Useful when:
+
+- You vendor a skill from another repo and want to assert it hasn't drifted (you ship the body + a hash you generated; the load fails loudly if either changes without the other).
+- A skill body is being edited collaboratively and you want CI to catch desync between the body and a manifest that references its hash.
+
+The normalization (whitespace collapse, trailing-newline trim) is stable across releases. Read-side and write-side parity is enforced by cross-impl test.
+
+## The `guidance_acknowledged` guard pattern
+
+A capability or transition can require the model to have *fetched* a skill body before firing:
+
+```yaml
+states:
+  about_to_review:
+    transitions:
+      submit_verdict:
+        target: done
+        guards:
+          - kind: guidance_acknowledged
+            subject: review.code.adversarial
+```
+
+This passes only if the model called `flowgate.query({subject: "review.code.adversarial", workflowId: "..."})` on this workflow AND the recorded body hash matches the current snapshot's hash. Hash flip → acknowledgment expires → the model has to re-read.
+
+Use this when the guidance is load-bearing — when you want the runtime to enforce "you read the rubric before you submitted the verdict." Don't sprinkle it on every transition; it adds friction. Reach for it on the transitions where skipping the rubric would cost something real.
+
+## Authoring discipline
+
+Some practical conventions that emerge from real use:
+
+- **One mental model per skill.** If you find yourself writing `# Section 1`, `# Section 2` headings, split. The model loads skills one at a time; each one should be the smallest coherent thing it could think about.
+- **100–400 words.** Long enough to encode actual discipline; short enough that the body cost isn't a tax on every snapshot-stamped instance.
+- **Cite the trap.** Skill bodies are at their best when they name a specific failure mode. "The temptation here is to..." or "Anti-pattern:" lines do more for model behavior than abstract principles.
+- **Bounded scope.** `review.code.adversarial` is good. `review.code.everything-you-need-to-know` is too broad — split into the actual sub-disciplines.
+- **Lifecycle honestly.** Mark experimental skills `experimental` — operators see this in `flowgate.query({subject})` describe responses and treat them accordingly. Promoting to `stable` is a commitment.
+
+## What's next
+
+- [Skills, workflows, and cognitive architectures](/guides/skills-and-architectures/) — the conceptual layered model.
+- [Cognitive verbs](/reference/cognitive-verbs/) — the 10-verb cloud and blessed subject roots.
+- [How scripts work](/guides/scripts/) — the deterministic peer to skills.
+- [How everything composes](/guides/reusable-primitives/) — the full repo author tour.

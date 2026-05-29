@@ -65,7 +65,7 @@ The expression has access to three scopes:
 |-------|-----------|
 | `$.arguments.*` | The caller's transition arguments |
 | `$.context.*` | The workflow's accumulated context |
-| `$.workflow.input.*` | The input passed to `workflow.start` |
+| `$.workflow.input.*` | The input passed to `flowgate.command({definitionId})` (start) |
 
 **Operators:** `==`, `!=` for any same-typed values. `<`, `<=`, `>`, `>=` for numbers. `starts_with`, `contains` for strings.
 

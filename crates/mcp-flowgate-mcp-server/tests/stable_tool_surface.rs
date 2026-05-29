@@ -1,10 +1,10 @@
-//! Invariant 9 from INIT-1 §17:
+//! Invariant 9 from INIT-1 §17 (updated to SPEC §32):
 //! "MCP-facing tools remain stable."
 //!
-//! No matter what's in the gateway config, the rmcp tool list is exactly
-//! `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain`.
-//! All capability surfacing happens through HATEOAS links inside response
-//! payloads, never through new MCP tools.
+//! The §32 redesign collapses the 10-tool surface to exactly two tools:
+//! `flowgate.query` and `flowgate.command`. The invariant is preserved:
+//! the surface is stable across configs — all workflow and discovery
+//! operations are reached by varying args, not the tool name.
 
 use mcp_flowgate_mcp_server::{tool_definitions, STABLE_TOOL_NAMES};
 
@@ -16,17 +16,13 @@ fn tool_list_matches_stable_names_exactly() {
 }
 
 #[test]
-fn stable_tool_names_are_the_documented_seven() {
+fn stable_tool_names_are_the_documented_two() {
     assert_eq!(
         STABLE_TOOL_NAMES,
         &[
-            "gateway.home",
-            "gateway.search",
-            "gateway.describe",
-            "workflow.start",
-            "workflow.get",
-            "workflow.submit",
-            "workflow.explain",
+            // SPEC §32 — two-tool surface.
+            "flowgate.query",
+            "flowgate.command",
         ]
     );
 }

@@ -58,7 +58,7 @@ Three states, three transitions. The model starts in `drafting`, submits a draft
 
 ## How state machines run
 
-**`initialState`** is where `workflow.start` lands you. The response includes links to every transition available from that state.
+**`initialState`** is where `flowgate.command({definitionId})` lands you. The response includes links to every transition available from that state.
 
 **Terminal states** have no outgoing transitions (or set `terminal: true` explicitly). When the workflow reaches a terminal state, the response has `result.status: "completed"` and an empty `links` array.
 
@@ -73,7 +73,7 @@ The model never sees the full state machine. It sees the current state and the l
 
 ## Optimistic locking
 
-Every workflow response includes a `version` number. Every `workflow.submit` requires an `expectedVersion`. If someone else advanced the workflow between your read and your write, your version is stale and the submit is rejected with `STALE_WORKFLOW_VERSION`.
+Every workflow response includes a `version` number. Every `flowgate.command({workflowId, transition, expectedVersion})` requires that `expectedVersion`. If someone else advanced the workflow between your read and your write, your version is stale and the submit is rejected with `STALE_WORKFLOW_VERSION`.
 
 This prevents race conditions when multiple actors (model, human, system) operate on the same workflow. The rejection response includes the current state and links, so recovery is straightforward -- re-read, re-decide, re-submit.
 
@@ -91,7 +91,7 @@ This prevents race conditions when multiple actors (model, human, system) operat
     "message": "Expected version 2 but current is 3."
   },
   "links": [
-    { "rel": "approve", "method": "workflow.submit",
+    { "rel": "approve", "method": "flowgate.command",
       "args": { "workflowId": "wf_3f8b...", "expectedVersion": 3, "transition": "approve" } }
   ]
 }
@@ -101,7 +101,7 @@ The model doesn't need to understand version numbers intellectually. It just pas
 
 ## The response wire format
 
-Every `workflow.start`, `workflow.submit`, and `workflow.get` returns the same shape:
+Every `flowgate.command({definitionId})` (start), `flowgate.command({workflowId, transition})` (submit), and `flowgate.query({workflowId})` (get) returns the same shape:
 
 ```json
 {
@@ -130,7 +130,7 @@ Every `workflow.start`, `workflow.submit`, and `workflow.get` returns the same s
     {
       "rel": "deploy",
       "title": "Deploy to environment",
-      "method": "workflow.submit",
+      "method": "flowgate.command",
       "actor": "agent",
       "args": {
         "workflowId": "wf_3f8b...",
@@ -141,7 +141,7 @@ Every `workflow.start`, `workflow.submit`, and `workflow.get` returns the same s
     {
       "rel": "abort",
       "title": "Abort deployment",
-      "method": "workflow.submit",
+      "method": "flowgate.command",
       "actor": "agent",
       "args": {
         "workflowId": "wf_3f8b...",
@@ -187,7 +187,7 @@ The left side is the key in `context`. The right side is a path expression that 
 | `$.output.*` | The executor's result (only available in output) |
 | `$.arguments.*` | The caller's transition arguments |
 | `$.context.*` | The workflow's accumulated context |
-| `$.workflow.input.*` | The input passed to `workflow.start` |
+| `$.workflow.input.*` | The input passed to `flowgate.command({definitionId})` |
 
 You can also use operators for computed values:
 
@@ -361,9 +361,9 @@ workflows:
         terminal: true
 ```
 
-When you call `workflow.start`, the runtime chains through `lint`, `test`, and `build` automatically (all three are `actor: deterministic`). The model's first response is at `ready_to_deploy` with the full context from all three steps. It sees two links: deploy or abort. The deploy link has `artifact` and `env` prefilled.
+When you call `flowgate.command({definitionId: "deploy_pipeline", input: {...}})`, the runtime chains through `lint`, `test`, and `build` automatically (all three are `actor: deterministic`). The model's first response is at `ready_to_deploy` with the full context from all three steps. It sees two links: deploy or abort. The deploy link has `artifact` and `env` prefilled.
 
-The model calls `workflow.start` once and gets back the entire pipeline's results in a single round trip. It only has to make one decision: deploy or abort.
+The model calls `flowgate.command` once and gets back the entire pipeline's results in a single round trip. It only has to make one decision: deploy or abort.
 
 ## Workflow-level timeout
 

@@ -10,6 +10,9 @@ description = "Default executors for mcp-flowgate (cli, rest, mcp, human, workfl
 [lib]
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 mcp-flowgate-core = { workspace = true }
 anyhow = { workspace = true }
@@ -19,10 +22,16 @@ reqwest = { workspace = true }
 rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+# SPEC §22 — script executor materializes the snapshot's stamped body to
+# a per-invocation temp file (chmod 0700) before exec.
+tempfile = "3"
+# SPEC §24 — ParallelExecutor's defensive snapshot-hash assert (F1).
+sha2 = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }

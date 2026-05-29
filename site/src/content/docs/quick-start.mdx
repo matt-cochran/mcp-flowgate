@@ -1,9 +1,9 @@
 ---
 title: "Quick start"
-description: "Create a minimal config, wire mcp-flowgate into your MCP host, and see the seven tools in action — all in about 30 seconds."
+description: "Create a minimal config, wire mcp-flowgate into your MCP host, and see the two tools in action — all in about 30 seconds."
 ---
 
-You're going to create one capability, connect it to your MCP host, and watch the model discover and call it through mcp-flowgate's seven tools. The whole thing takes about 30 seconds.
+You're going to create one capability, connect it to your MCP host, and watch the model discover and call it through mcp-flowgate's two tools. The whole thing takes about 30 seconds.
 
 ## 1. Create a config file
 
@@ -30,14 +30,15 @@ mcp-flowgate is now running as an MCP server over stdio, waiting for a host to c
 
 ## 3. Wire it into your MCP host
 
-### Claude Desktop
+The fastest path — let the TUI generate the config files for you:
 
-Edit your Claude Desktop config file:
+```bash
+flowgate mcp init --cursor --claude-desktop
+```
 
-- **Linux:** `~/.config/Claude/claude_desktop_config.json`
-- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+That writes `.mcp.json` (Claude Code, Continue, Cline), `.cursor/mcp.json`, and a `claude_desktop_config.json` snippet. Zed needs a slightly different setup; the [editor guide](/guides/editors/) covers all of them in depth, plus the ACP path (Zed today) where the editor drives workflows directly rather than calling tools.
 
-Add mcp-flowgate as a server:
+If you'd rather hand-author the config — say, for Claude Desktop on macOS — the file lives at `~/Library/Application Support/Claude/claude_desktop_config.json` and the shape is:
 
 ```json
 {
@@ -50,33 +51,24 @@ Add mcp-flowgate as a server:
 }
 ```
 
-Replace both paths with the actual locations on your machine. Use absolute paths -- relative paths won't resolve correctly when the host launches the process.
-
-### Zed
-
-Add it to `~/.config/zed/settings.json` under the `"language_models"` key. See the [`examples/zed-gateway/`](https://github.com/matt-cochran/mcp-flowgate/tree/main/examples/zed-gateway) directory for a working example.
+Absolute paths — relative paths won't resolve when the host launches the process.
 
 ## 4. Restart your host
 
-Restart Claude Desktop (or Zed). Seven tools appear in the model's tool list:
+Restart Claude Desktop (or Zed). Two tools appear in the model's tool list:
 
-- `gateway.home` -- entry point, lists top-level links
-- `gateway.search` -- keyword search across all capabilities
-- `gateway.describe` -- full schema and details for a specific capability
-- `workflow.start` -- begin executing a capability
-- `workflow.get` -- check workflow state
-- `workflow.submit` -- advance a workflow with input
-- `workflow.explain` -- describe what a workflow does before running it
+- `flowgate.query` -- all reads: browse, search, describe, get workflow state, look up lexicon
+- `flowgate.command` -- all writes: start workflows, fire transitions, define lexicon entries
 
-That's it. Seven tools, always. Whether you have one capability or five hundred behind them.
+That's it. Two tools, always. Whether you have one capability or five hundred behind them.
 
 ## 5. Try it
 
 Ask the model to "echo hello world." It will:
 
-1. Call `gateway.search` with a query like "echo"
+1. Call `flowgate.query` with `{ "query": "echo" }` to search
 2. Find `hello.echo` in the results
-3. Call `workflow.start` to execute it
+3. Call `flowgate.command` with `{ "definitionId": "proxy_default", "input": { "capability": "hello.echo" } }` to execute it
 4. Get the response back
 
 You didn't teach the model about `hello.echo`. It found the capability through search, followed the links in the response to act on it, and the gateway handled schema validation and audit along the way.
@@ -90,6 +82,6 @@ Even with this minimal example, you got a few things for free:
 - **Audit** -- every step (the search, the workflow start, the execution) emitted structured JSON events. You have a complete trace of what happened.
 - **HATEOAS links** -- every response included links telling the model what it could do next. No guessing, no memorized tool catalogs.
 
-That was one tool with a `noop` executor. The interesting part is what happens when you add real executors -- MCP servers, CLI commands, REST APIs -- and the model's tool list stays at seven.
+That was one tool with a `noop` executor. The interesting part is what happens when you add real executors -- MCP servers, CLI commands, REST APIs -- and the model's tool list stays at ten.
 
-Next up: learn how [discovery and search](/docs/guides/discovery) work, or jump straight to [governance](/docs/guides/governance) to add guards and approval gates.
+Next up: learn how [discovery and search](/docs/guides/discovery) work, jump straight to [governance](/docs/guides/governance) to add guards and approval gates, or try [composing a small cognitive architecture from scratch](/guides/composing-an-architecture/) to see skills and workflows in action.

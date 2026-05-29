@@ -2,7 +2,8 @@ version: "1.0.0"
 
 audit:
     sink: file
-    path: ~/.local/share/flowgate/audit.jsonl
+    path: ~/.local/share/flowgate/audit-logs
+    rotation: daily
 
 store:
     kind: file

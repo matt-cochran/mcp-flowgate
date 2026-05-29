@@ -57,11 +57,16 @@ async fn inspect_workflow_shows_state() {
         id: "wf_test".into(),
         definition_id: "demo".into(),
         definition_version: "1.0.0".into(),
+        definition: json!({"initialState": "running", "states": {}}),
         state: "running".into(),
         version: 3,
         input: json!({"key": "value"}),
         context: json!({"count": 42}),
         started_at: chrono::Utc::now(),
+        trace_id: None,
+        run_id: None,
+        cancelled_at: None,
+        cancelled_reason: None,
     };
 
     store.create(instance).await.unwrap();

@@ -179,6 +179,10 @@ pub async fn execute_with_reliability(
                 arguments: arguments.clone(),
                 executor_config: exec_cfg.clone(),
                 idempotency_key: idempotency_key.clone(),
+                // SPEC §24 — thread the parent correlation_id through so
+                // fan-out executors (kind: parallel) can emit per-branch
+                // audit events that link back to the parent transition.
+                correlation_id: Some(correlation_id.to_string()),
             };
 
             let result = match policy.timeout() {

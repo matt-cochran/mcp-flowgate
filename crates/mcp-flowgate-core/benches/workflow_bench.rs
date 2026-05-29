@@ -8,7 +8,9 @@
 
 use std::sync::Arc;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 
 use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
 use mcp_flowgate_core::error::ExecutorError;
@@ -31,6 +33,7 @@ impl Executor for NoopExecutor {
         Ok(ExecuteResult {
             output: json!({"ok": true}),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }
@@ -98,6 +101,7 @@ async fn start_workflow(runtime: &WorkflowRuntime) -> (String, u64) {
             definition_id: "bench".into(),
             input: json!({"key": "value"}),
             principal: Principal::anonymous(),
+            ..Default::default()
         })
         .await
         .expect("start should succeed");
@@ -124,6 +128,7 @@ fn bench_start(c: &mut Criterion) {
                     definition_id: "bench".into(),
                     input: json!({"key": "value"}),
                     principal: Principal::anonymous(),
+                    ..Default::default()
                 })
                 .await
                 .expect("start should succeed");
@@ -151,6 +156,8 @@ fn bench_submit(c: &mut Criterion) {
                     transition: "approve".into(),
                     arguments: json!({"reason": "benchmark"}),
                     principal: Principal::anonymous(),
+                    summary: None,
+                    ..Default::default()
                 })
                 .await
                 .expect("submit should succeed");
@@ -172,6 +179,7 @@ fn bench_get(c: &mut Criterion) {
                 .get(mcp_flowgate_core::model::GetWorkflow {
                     workflow_id: id.clone(),
                     principal: Principal::anonymous(),
+                    ..Default::default()
                 })
                 .await
                 .expect("get should succeed");

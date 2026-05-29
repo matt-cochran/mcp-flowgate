@@ -37,7 +37,7 @@ states:
 
 ## What the model receives
 
-When the model calls `workflow.get` or `workflow.submit` and lands on a state with guidance, the response includes a `guidance` object:
+When the model calls `flowgate.query({workflowId})` (get) or `flowgate.command({workflowId, transition})` (submit) and lands on a state with guidance, the response includes a `guidance` object:
 
 ```json
 {
@@ -72,7 +72,7 @@ They complement each other. Guidance says "here's what matters." Prefill says "h
 
 ## Searchable by design
 
-Both `goal` and `guidance` fields are indexed by `gateway.search`. When a model searches for "risk" or "FMECA" or "remediation," workflows with matching guidance text surface in the results.
+Both `goal` and `guidance` fields are indexed by `flowgate.query({query})` search. When a model searches for "risk" or "FMECA" or "remediation," workflows with matching guidance text surface in the results.
 
 This means your guidance doubles as documentation for discovery. A well-written goal like "Evaluate risk and decide if remediation is needed" helps the model find this workflow when it's looking for risk-related capabilities. You don't need to duplicate that information in tags or descriptions -- though you can if you want redundancy.
 

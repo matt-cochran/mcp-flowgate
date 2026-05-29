@@ -87,7 +87,7 @@ impl WorkflowStore for SqliteWorkflowStore {
         let json = serde_json::to_string(&instance)?;
         let inst = instance.clone();
         tokio::task::spawn_blocking(move || -> anyhow::Result<WorkflowInstance> {
-            let conn = conn.lock().unwrap();
+            let conn = conn.lock().expect("LOCK_POISONED: sqlite connection");
             let rows = conn.execute(
                 "INSERT INTO workflows (id, version, instance) VALUES (?1, ?2, ?3)",
                 params![inst.id, inst.version as i64, json],
@@ -109,7 +109,7 @@ impl WorkflowStore for SqliteWorkflowStore {
         let conn = self.conn.clone();
         let id = workflow_id.to_string();
         tokio::task::spawn_blocking(move || -> anyhow::Result<WorkflowInstance> {
-            let conn = conn.lock().unwrap();
+            let conn = conn.lock().expect("LOCK_POISONED: sqlite connection");
             let mut stmt = conn.prepare("SELECT instance FROM workflows WHERE id = ?1")?;
             let json: String =
                 stmt.query_row(params![id], |row| row.get(0))
@@ -134,7 +134,7 @@ impl WorkflowStore for SqliteWorkflowStore {
         let json = serde_json::to_string(&instance)?;
         let inst = instance.clone();
         tokio::task::spawn_blocking(move || -> anyhow::Result<WorkflowInstance> {
-            let mut conn = conn.lock().unwrap();
+            let mut conn = conn.lock().expect("LOCK_POISONED: sqlite connection");
             let tx = conn.transaction()?;
             // Confirm the row exists.
             let exists: bool = tx

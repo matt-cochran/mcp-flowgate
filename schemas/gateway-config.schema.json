@@ -32,7 +32,51 @@
     },
     "audit": { "$ref": "#/$defs/auditConfig" },
     "discovery": { "$ref": "#/$defs/discoveryConfig" },
-    "store": { "$ref": "#/$defs/storeConfig" }
+    "store": { "$ref": "#/$defs/storeConfig" },
+    "lexicon": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/lexiconEntry" },
+      "default": {},
+      "description": "Curated ubiquitous-language vocabulary (SPEC §30). Each key is the canonical term; each value carries a one-sentence `definition_short`, an optional multi-paragraph `definition_long`, optional surface-form `aliases`, an optional DDD `bounded_context`, optional `refs` to related terms, and a `governance` marker (default `human-only`). At config load the full block is snapshot-stamped onto every workflow definition (`_lexiconLibrary`). Same-bounded-context alias collisions fail at load."
+    },
+    "embeddings": {
+      "$ref": "#/$defs/embeddingsConfig"
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/skillFragment" },
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "default": {},
+      "description": "Guidance fragment library. Each entry is keyed by its `subject` (the gateway.describe lookup handle) and carries a space-free `verb` + a static markdown `body`. Subjects and verbs are constrained at config load to lowercase kebab — malformed descriptors are unrepresentable (SPEC §5.4)."
+    },
+    "scripts": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/scriptFragment" },
+      "default": {},
+      "description": "Curated script library (SPEC §22). Peer to `skills`: where skills tell an LLM what to think, scripts tell a workflow what to do deterministically. Each entry has a `verb` from the closed ScriptVerb set (build/test/deploy/format/lint/install/verify/run), a `lifecycle`, and either an inline `body` OR an external `uri` + required `hash`. Invoked via the `script` executor kind."
+    },
+    "repos": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Directory containing a `flowgate.repo.yaml` manifest. Accepts absolute, relative (resolved against the host config's directory), or `~/`-prefixed paths."
+          }
+        }
+      },
+      "description": "Declared resource repos (SPEC §9). Each repo is loaded via its `flowgate.repo.yaml` manifest; every loaded definitionId is namespace-prefixed `<namespace>/<id>` before being merged into the gateway registry. Two repos sharing a namespace fail at load (V20)."
+    },
+    "overrides": {
+      "type": "array",
+      "default": [],
+      "items": { "type": "string" },
+      "description": "Fully-qualified definitionIds (`<namespace>/<id>`) that the host config explicitly shadows after a repo has provided them (SPEC §9.4). Anonymous shadowing — defining `<namespace>/<id>` locally without listing it here — fails at load (V23). Listing an id that no repo provides is also an error (stale override)."
+    }
   },
   "$defs": {
     "connection": {
@@ -236,11 +280,88 @@
         "reliability": { "$ref": "#/$defs/reliabilityPolicy" }
       }
     },
+    "skillFragment": {
+      "type": "object",
+      "required": ["verb", "body"],
+      "additionalProperties": false,
+      "properties": {
+        "verb": {
+          "type": "string",
+          "enum": [
+            "triage", "diagnose", "plan", "implement", "review", "refactor", "explain", "compose",
+            "research", "summarize"
+          ],
+          "description": "Cognitive verb — closed enum per SPEC §5.4.1. Surfaced alongside the subject so the model reads the ref as `\"{verb} {subject}\"`. Adding a verb is a spec amendment (SPEC §23.7)."
+        },
+        "body": {
+          "type": "string",
+          "description": "Static markdown body. Referenced fragments are never templated (SPEC §5.3) — they cache once for the workflow's life."
+        }
+      }
+    },
+    "skillRefs": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+      "default": [],
+      "description": "References to entries in the top-level `skills:` library. Surfaced in the response's `guidance.refs` whenever this scope is active."
+    },
+    "scriptFragment": {
+      "type": "object",
+      "required": ["verb", "lifecycle"],
+      "additionalProperties": false,
+      "description": "SPEC §22 — a curated script. Either inline `body` OR external `uri`+`hash` (XOR enforced at config load).",
+      "properties": {
+        "verb": {
+          "type": "string",
+          "enum": [
+            "build", "test", "deploy", "format", "lint", "install", "verify", "run",
+            "inspect", "search", "fetch", "audit"
+          ],
+          "description": "Action verb — what category of operation this script performs. Closed enum per SPEC §22.3."
+        },
+        "lifecycle": {
+          "type": "string",
+          "enum": ["experimental", "stable", "deprecated"],
+          "description": "Maturity marker. Mirrors skill lifecycle semantics."
+        },
+        "source": {
+          "type": "string",
+          "description": "Provenance. Examples: `cognitive-architectures@v0.1.0`, `<repo>/scripts/local`."
+        },
+        "body": {
+          "type": "string",
+          "description": "Inline script body (literal text). Mutually exclusive with `uri`. Hash is computed at load time; if `hash` is also provided, mismatch is SCRIPT_HASH_MISMATCH."
+        },
+        "uri": {
+          "type": "string",
+          "description": "External script body location. v1 supports `file://` only (resolved relative to the config file). `hash` is required when `uri` is set."
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Content-identity hash: `sha256:` + 64 lowercase hex chars. Required when `uri` is set; optional when `body` is inline (computed otherwise)."
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["body"],
+          "not": { "required": ["uri"] }
+        },
+        {
+          "required": ["uri", "hash"],
+          "not": { "required": ["body"] }
+        }
+      ]
+    },
     "workflowDefinition": {
       "type": "object",
       "required": ["initialState", "states"],
       "additionalProperties": false,
       "properties": {
+        "version": {
+          "type": "string",
+          "description": "Definition version discriminator; an ISO 'as-of' date is the recommended convention."
+        },
         "description": { "type": "string" },
         "tags": {
           "type": "array",
@@ -257,6 +378,29 @@
           "type": "array",
           "items": { "type": "string" },
           "default": []
+        },
+        "snippet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputs", "outputs"],
+          "properties": {
+            "inputs":  { "type": "object", "additionalProperties": { "type": "object" } },
+            "outputs": { "type": "object", "additionalProperties": { "type": "object" } }
+          },
+          "description": "SPEC §5.1 — typed I/O contract for a capability workflow. `inputs` and `outputs` are objects keyed by name with JSON-schema-fragment values. Required on `cap.*` workflows (V3); forbidden on orchestrators (V8, PR3)."
+        },
+        "verb": {
+          "type": "string",
+          "description": "SPEC §4 — capability verb from the 24-token CapVerb cloud (PR3 will enforce the closed enum). Required on `cap.*` workflows for verb-shape checks; absent on orchestrators."
+        },
+        "inputs": {
+          "type": "object",
+          "description": "SPEC §7 — orchestrator entry signature, used to seed the slot table for cross-workflow type checks. Distinct from a capability's `snippet.inputs`."
+        },
+        "lifecycle": {
+          "type": "string",
+          "default": "experimental",
+          "description": "SPEC §6.2 — workflow lifecycle. Capabilities default to `experimental`; declaring `stable` is what makes `expects_contract_hash` mandatory on callers (V16, PR3)."
         },
         "initialState": { "type": "string" },
         "initialContext": {
@@ -283,6 +427,28 @@
           "description": "How transition links are filtered for this workflow's responses. `byGuards` runs each transition's guards silently against the current state and only returns links for those that would pass. `all` returns every legal-by-state transition."
         },
         "inputSchema": { "$ref": "#/$defs/jsonSchema" },
+        "blackboard": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "object" }
+          ],
+          "default": [],
+          "description": "Declared context slots — either a list of slot names, or a map of slot name to a JSON-schema fragment. Optional; absent means no declared slots."
+        },
+        "skills": { "$ref": "#/$defs/skillRefs" },
+        "_skillsLibrary": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["verb", "body"],
+            "additionalProperties": false,
+            "properties": {
+              "verb": { "type": "string" },
+              "body": { "type": "string" }
+            }
+          },
+          "description": "Runtime-stamped — do NOT author. Resolve writes this as a `{ subject: { verb, body } }` slice of the top-level `skills:` map, scoped to the subjects this workflow references. SPEC §8.2: the snapshot carries resolved fragment bodies so an in-flight instance never depends on the live config — editing the top-level `skills:` block cannot mutate what running instances see."
+        },
         "states": {
           "type": "object",
           "minProperties": 1,
@@ -303,8 +469,14 @@
           "type": "string",
           "description": "Behavioral instructions for the LLM in this phase. Returned in the workflow response as guidance."
         },
+        "delegate": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Agent config name for sub-agent delegation. Pass-through field — surfaced verbatim at the top level of every workflow response. The TUI interpreter spawns an isolated sub-agent session using this name (resolved against `--agent name=provider/model` CLI args). The gateway itself never reads or validates the name."
+        },
         "terminal": { "type": "boolean", "default": false },
         "onEnter": { "$ref": "#/$defs/action" },
+        "skills": { "$ref": "#/$defs/skillRefs" },
         "linkFilter": {
           "type": "string",
           "enum": ["all", "byGuards"],
@@ -340,6 +512,7 @@
         "output": { "$ref": "#/$defs/outputMapping" },
         "evidence": { "$ref": "#/$defs/evidenceRequirement" },
         "reliability": { "$ref": "#/$defs/reliabilityPolicy" },
+        "skills": { "$ref": "#/$defs/skillRefs" },
         "prefill": {
           "type": "object",
           "additionalProperties": true,
@@ -389,22 +562,205 @@
       "properties": {
         "kind": {
           "type": "string",
-          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop"]
+          "examples": ["mcp", "cli", "rest", "human", "workflow", "noop", "script", "parallel", "pipeline"]
         },
         "connection": { "type": "string" },
         "capability": { "type": "string" },
+        "subject": {
+          "type": "string",
+          "description": "Script subject (SPEC §22) when `kind: script`. Names a curated entry in the top-level `scripts:` block; the runtime materializes the body from the workflow's pinned snapshot at execute time."
+        },
         "idempotencyKey": {
           "oneOf": [
             { "type": "boolean" },
             { "type": "string" }
           ],
           "description": "If `true`, an idempotency key is auto-derived from workflowId + transition + correlationId — same key across retries and fallback candidates so downstream dedup works. If a string, it's used as a literal template; supported tokens: {workflowId}, {transition}, {correlationId}."
+        },
+        "branches": {
+          "description": "SPEC §24 (kind: parallel only) — fan-out branches. Either a literal array of executor configs OR a `{for_each: <path>, do: <executor>}` template for dynamic per-element fan-out. Each literal branch / each `do:` template is itself a valid `executor` config (recursive).",
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/executor" } },
+            { "$ref": "#/$defs/parallelForEach" }
+          ]
+        },
+        "join": {
+          "description": "SPEC §24.2 (kind: parallel only) — join condition. `all` (default), `any`, `{at_least: K}` (K positive), `{percent: P}` (P in 0..=100), or `{expression: \"<expr>\"}` evaluated post-completion against the aggregated {branches, summary, ok_count, failed_count, cancelled_count, n} value.",
+          "oneOf": [
+            { "type": "string", "enum": ["all", "any"] },
+            { "$ref": "#/$defs/parallelAtLeast" },
+            { "$ref": "#/$defs/parallelPercent" },
+            { "$ref": "#/$defs/parallelExpression" }
+          ]
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "SPEC §24 (kind: parallel only) — semaphore cap on simultaneous in-flight branches. REQUIRED when `branches.len() >= 10` (DOS poka-yoke); optional below that."
+        },
+        "on_branch_failure": {
+          "type": "string",
+          "enum": ["bail", "continue"],
+          "default": "bail",
+          "description": "SPEC §24.2 (kind: parallel only) — `bail` (default) cancels in-flight siblings on first failure; `continue` drains all branches and computes verdict per join condition."
+        },
+        "total_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "SPEC §24.2 (kind: parallel only) — wall-clock cap on the whole fan-out. On expiry, in-flight branches are cancelled and the executor returns Timeout."
+        },
+        "max_recursion_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "SPEC §24.8 (kind: parallel only) — cap on nested parallel-of-parallels depth. Default 3 (catches authoring bugs); override for deliberately deep nesting."
+        },
+        "use": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "SPEC §6.1 (kind: workflow only) — typed use-binding for capability invocations. `inputs` resolves to the capability's `snippet.inputs` schema; `outputs` projects declared capability outputs back to host context slots. Required when targeting a `cap.*` definitionId (V12).",
+          "properties": {
+            "inputs":  { "type": "object" },
+            "outputs": {
+              "type": "object",
+              "description": "Map of host JSON path (`$.context.<slot>`) to capability output name. Only the listed outputs propagate; capability-internal slots stay scoped to the child blackboard.",
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "expects_contract_hash": {
+          "type": "string",
+          "description": "SPEC §6.2 (kind: workflow only) — optional pin on the target capability's `snippet`-derived contract hash. Mismatch is V15 (PR3). Required when targeting a `stable`-lifecycle capability (V16, PR3)."
+        },
+        "_snippetOutputs": {
+          "type": "object",
+          "description": "Runtime-stamped — do NOT author. Resolve embeds the target capability's `snippet.outputs` schema here so the runtime executor can validate without a DefinitionStore lookup."
         }
       },
       "oneOf": [
         { "required": ["kind"] },
         { "required": ["capability"] }
       ]
+    },
+    "parallelForEach": {
+      "type": "object",
+      "required": ["for_each", "do"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — dynamic `branches` form. `for_each` is a path expression resolving to a JSON array against the workflow's `$.context`, `$.workflow.input`, or `$.arguments`. `do` is an executor template; `$.branch.value` and `$.branch.index` are substituted per element. Optional `where:` filter drops elements before fan-out.",
+      "properties": {
+        "for_each": {
+          "type": "string",
+          "description": "Path expression — `$.context.queries`, `$.workflow.input.aspects`, etc. — that resolves to a JSON array."
+        },
+        "do": {
+          "$ref": "#/$defs/executor",
+          "description": "Per-branch executor template. `$.branch.value` and `$.branch.index` are substituted per array element."
+        },
+        "where": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pre-fan-out predicate. Each element of `for_each` is evaluated with `$.value` and `$.index` as the operand surface (same binary-comparison syntax as `expr` guards / `join.expression`). Falsy elements are dropped BEFORE branches spawn. `$.branch.index` inside `do:` templates still substitutes the ORIGINAL source-array index for matched elements."
+        }
+      }
+    },
+    "parallelAtLeast": {
+      "type": "object",
+      "required": ["at_least"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — quorum join condition. Executor succeeds iff at least `at_least` branches succeed.",
+      "properties": {
+        "at_least": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Minimum number of branches that must succeed for the parallel executor to return Ok."
+        }
+      }
+    },
+    "slotConstraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "SPEC §28 — declarative slot constraints evaluated at write time. JSON Schema primitives (regex, min/max, length, enum) belong in the slot's `type:` field; §28 covers only what JSON Schema cannot express. Multiple constraint kinds on one slot compose conjunctively.",
+      "properties": {
+        "path_allowlist": {
+          "type": "object",
+          "required": ["allow"],
+          "additionalProperties": false,
+          "description": "Slot value is an array of strings; every element must match an `allow:` glob and no `deny:` glob.",
+          "properties": {
+            "allow": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Gitignore-syntax glob patterns. At least one required — empty allowlist is misconfiguration."
+            },
+            "deny": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Optional. Applied within `allow:` — any element matching a deny glob fails even if it also matches an allow glob."
+            }
+          }
+        },
+        "subset_of": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dynamic reference path (e.g. `$.context.declared_features`) resolving to an array. The constrained slot's elements must all appear in that referenced array. Unresolvable reference is fail-fast (not silent-pass)."
+        }
+      }
+    },
+    "parallelPercent": {
+      "type": "object",
+      "required": ["percent"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — percentage-quorum join condition. Threshold computed as ceil(percent * n / 100); vacuous fan-out (n=0) succeeds.",
+      "properties": {
+        "percent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Minimum percent of branches that must succeed (0..=100). Threshold uses ceiling division to avoid silent rounding."
+        }
+      }
+    },
+    "parallelExpression": {
+      "type": "object",
+      "required": ["expression"],
+      "additionalProperties": false,
+      "description": "SPEC §24.2 — operator-supplied expression evaluated post-completion against `{branches, ok_count, failed_count, cancelled_count, n}`. Same binary-comparison surface as `expr` guards. NO early exit — expression cannot observe a still-running branch (structural answer to SPEC §24.8 amendment concern).",
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Either a bare path (`$.ok_count`) checked for truthiness, or a binary expression (`$.ok_count >= 3`, `$.branches[0].output.passed == true`). Operators: literals (string/number/bool/null) and `$.<path>` references."
+        }
+      }
+    },
+    "parallelExecutor": {
+      "type": "object",
+      "required": ["kind", "branches"],
+      "additionalProperties": true,
+      "description": "SPEC §24 — the `parallel` executor (canonical shape). The `executor` $def above accepts these fields too (with additionalProperties: true); this $def documents them for tools that introspect the schema (IDE autocomplete, YAML LSPs).",
+      "properties": {
+        "kind": { "const": "parallel" },
+        "branches": {
+          "oneOf": [
+            { "type": "array", "items": { "$ref": "#/$defs/executor" } },
+            { "$ref": "#/$defs/parallelForEach" }
+          ]
+        },
+        "join": {
+          "oneOf": [
+            { "type": "string", "enum": ["all", "any"] },
+            { "$ref": "#/$defs/parallelAtLeast" },
+            { "$ref": "#/$defs/parallelPercent" },
+            { "$ref": "#/$defs/parallelExpression" }
+          ],
+          "default": "all"
+        },
+        "max_concurrency": { "type": "integer", "minimum": 1 },
+        "on_branch_failure": { "type": "string", "enum": ["bail", "continue"], "default": "bail" },
+        "total_timeout_ms": { "type": "integer", "minimum": 1 },
+        "max_recursion_depth": { "type": "integer", "minimum": 1, "default": 3 }
+      }
     },
     "guard": {
       "type": "object",
@@ -509,7 +865,16 @@
           "enum": ["stdout", "memory", "file", "none"],
           "default": "stdout"
         },
-        "path": { "type": "string" }
+        "path": {
+          "type": "string",
+          "description": "Directory into which rotated log files are written (used when sink=file). Each rotation period creates files named {stamp}-audit.log and {stamp}-transitions.log."
+        },
+        "rotation": {
+          "type": "string",
+          "enum": ["daily", "hourly", "weekly"],
+          "default": "daily",
+          "description": "How often to rotate log files. daily → YYYY-MM-DD stamp; hourly → YYYY-MM-DD-HH stamp; weekly → YYYY-Www stamp."
+        }
       }
     },
     "storeConfig": {
@@ -524,6 +889,72 @@
         "path": { "type": "string" }
       }
     },
-    "jsonSchema": { "type": "object" }
+    "jsonSchema": { "type": "object" },
+    "embeddingsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional Tier 3 semantic embedding backend (SPEC §30.10.10). Defaults to `backend: none` — Tier 3 is disabled and the system operates on Tiers 1/2/4 only. When a backend is configured, embeddings are computed at lexicon write time and stored on entries; at SUBJECT_NEEDS_DEFINITION time, the unknown subject is embedded and compared against stored vectors (cosine ≥ 0.85 threshold).",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["none", "ollama", "openai_compatible"],
+          "default": "none",
+          "description": "Embedding backend to use. `none` (default) disables Tier 3. `ollama` — POST `{model, prompt}` to `url`, parse `embedding` field. `openai_compatible` — POST `{model, input}` to `url`, parse `data[0].embedding`."
+        },
+        "url": {
+          "type": "string",
+          "description": "Required when `backend != none`. The HTTP endpoint to POST embedding requests to. Example: `http://localhost:11434/api/embeddings` for Ollama."
+        },
+        "model": {
+          "type": "string",
+          "description": "Required when `backend != none`. The model name sent in the request body. Example: `nomic-embed-text` for Ollama, `text-embedding-ada-002` for OpenAI."
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Expected dimensionality of the embedding vector. Informational — used by `HttpEmbedder::dimensions()`; does not affect runtime behaviour."
+        },
+        "api_key_env": {
+          "type": "string",
+          "description": "Optional. Environment variable name whose value is sent as `Authorization: Bearer <value>`. Required for OpenAI and other key-gated backends."
+        }
+      }
+    },
+    "lexiconEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definition_short"],
+      "properties": {
+        "definition_short": {
+          "type": "string",
+          "description": "Required. One-sentence summary of the term. The canonical human- and agent-readable label used in search and discovery. (SPEC §30.10.1)"
+        },
+        "definition_long": {
+          "type": "string",
+          "description": "Optional. Multi-paragraph elaboration — examples, nuance, historical context. Not required for the index to function. (SPEC §30.10.1)"
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional. Recognized surface-form variants of the canonical term (e.g. plural, hyphenated, abbreviated forms). Aliases are indexed alongside the canonical term in the combined-form index. Within a bounded_context, no alias may collide with another entry's term or alias. (SPEC §30.10.1)"
+        },
+        "bounded_context": {
+          "type": "string",
+          "description": "DDD bounded context this term belongs to. Cross-context overlap is allowed; within a single context, all terms and aliases must be unique."
+        },
+        "refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Term names of related entries. Used for navigation and discoverability."
+        },
+        "governance": {
+          "type": "string",
+          "enum": ["human-only", "agent-may-propose"],
+          "default": "human-only",
+          "description": "Controls who may write (define) this term. `human-only` (default) — agents are rejected. `agent-may-propose` — agents may propose; a human transition commits. (SPEC §30.6)"
+        }
+      }
+    }
   }
 }

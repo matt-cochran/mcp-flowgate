@@ -1,0 +1,161 @@
+---
+title: "Multi-repo loading"
+description: "Load any number of resource repos via a top-level repos: block. Every loaded definitionId is namespace-prefixed; collisions fail at load; explicit overrides shadow vendored content."
+---
+
+You write a workflow. It does what you need. You copy it to the next project. And the next. By project three you've forked it three different ways and you can't remember which one had the bug fix.
+
+That's the copy-paste model. You stop reusing because reuse means re-coordinating across N forks every time something changes.
+
+v0.2's multi-repo loader replaces it. You publish your workflow library to a git repo. Operators load that repo from their gateway config. Updates are a `git pull` away. Collisions between two repos shipping the same id fail at startup with a named error. Local overrides are explicit and audited.
+
+## The repo manifest
+
+Each resource repo ships a `flowgate.repo.yaml` at its root:
+
+```yaml
+# flowgate.repo.yaml
+schema: flowgate.repo/v1
+name: swe-core
+namespace: swe
+version: 0.6.0
+description: |
+  Core SWE capabilities + lifecycle orchestrators.
+layout:
+  capabilities:  capabilities
+  orchestrators: orchestrators
+  skills:        skills
+  scripts:       scripts-library
+  connections:   connections
+```
+
+The manifest declares:
+
+- **`schema`** — pinned to `flowgate.repo/v1` for v0.2. Forward-incompatible schema bumps will use new constants so older gateways refuse to mis-parse newer repos.
+- **`name`** — the repo's identifier, lowercase kebab. Used in diagnostics and `flowgate.query({subject})` describe.
+- **`namespace`** — the prefix every loaded definitionId gets. Single segment, lowercase kebab. Two repos sharing a namespace fail at load (V20).
+- **`version`** — repo version, semver-shaped by convention. Surfaced via `flowgate.query({subject})`.
+- **`layout`** — per-tier directory locations. All fields optional; defaults match the field names. A repo that doesn't ship one tier (a connections-only repo, say) leaves that field unset and the loader silently skips the missing directory.
+
+## Loading repos
+
+Operators wire repos in via a top-level `repos:` block:
+
+```yaml
+# gateway.yaml
+version: "1.0.0"
+repos:
+  - path: ~/repos/cognitive-architectures
+  - path: ~/repos/flowgate-meta
+  - path: /opt/internal-tools/governance-pack
+```
+
+Paths can be absolute, relative (resolved against the gateway config's directory), or `~/`-prefixed. The loader walks each repo's manifest, globs every `*.yaml` in the declared layout directories, and merges the contents into the gateway's registry — namespace-prefixed.
+
+After loading, `mcp-flowgate check` shows you what landed:
+
+```
+config: gateway.yaml
+workflows (28):
+  - cognitive/cap.coordinate.pr-open
+  - cognitive/cap.diagnose.localize
+  - cognitive/cap.plan.draft
+  ...
+  - cognitive/flow.add-feature
+  - cognitive/flow.bugfix-from-error-log
+  - meta/cap.research.tool-inventory
+  - meta/flow.author-capability
+  ...
+validation: ok
+```
+
+Every id is prefixed `<namespace>/<original-id>`. `cognitive/cap.plan.vet` and `meta/cap.plan.compose-implementation` are distinct ids the registry holds separately.
+
+## Cross-namespace references
+
+Inside a repo-loaded workflow, `kind: workflow` references resolve against the workflow's own namespace by default:
+
+```yaml
+# In repo `cognitive`:
+states:
+  vetting:
+    transitions:
+      vet:
+        executor:
+          kind: workflow
+          definitionId: cap.plan.vet  # → resolves to cognitive/cap.plan.vet
+          use:
+            outputs: { "$.context.verdict": verdict }
+```
+
+When the orchestrator lives in the `cognitive` namespace, the bare `cap.plan.vet` reference auto-prefixes to `cognitive/cap.plan.vet`. To call a capability in a different namespace, fully qualify the reference:
+
+```yaml
+definitionId: meta/cap.audit.mine-transitions
+```
+
+The loader rewrites bare references at load time; the runtime sees only fully-qualified ids. Unresolved references fail at load with V22 (`UNRESOLVED_WORKFLOW_REF`) — better than a "not found" error in the middle of a running workflow.
+
+## Collision rules (V19–V23)
+
+The validation cloud catches the most common multi-repo mistakes:
+
+| Rule | Triggers when | Error code |
+|------|---------------|------------|
+| V19 | Repo manifest declares the wrong `schema:` constant | `flowgate.repo/v1 expected; got ...` |
+| V20 | Two declared repos share a `namespace:` | `DUPLICATE_REPO_NAMESPACE` |
+| V21 | A single repo defines the same id in two files | `DUPLICATE_REPO_DEF` |
+| V22 | Workflow references an id that no loaded repo provides | `UNRESOLVED_WORKFLOW_REF` |
+| V23 | Host config shadows a repo-provided id without listing it in `overrides:` | `ANONYMOUS_OVERRIDE` |
+
+V23 is the supply-chain backdoor closer. If an operator wants to replace a vendored capability with their own version, they declare it explicitly:
+
+```yaml
+version: "1.0.0"
+repos:
+  - path: ~/repos/cognitive-architectures
+overrides:
+  - cognitive/cap.coordinate.pr-open   # explicit shadow declaration
+workflows:
+  cognitive/cap.coordinate.pr-open:
+    # ...operator's customized version...
+```
+
+Defining `cognitive/cap.coordinate.pr-open` in the host config without listing it in `overrides:` fails at load. Listing it without an actual collision (the repo doesn't provide it) also fails (`STALE_OVERRIDE`). Either flavour of accidental drift surfaces at startup.
+
+## What load order means
+
+Load order is deterministic:
+
+1. Each repo's manifest loads in declaration order. V20 catches namespace collisions across repos.
+2. Inside each repo, every layout directory's `*.yaml` files load. V21 catches in-repo duplicates.
+3. Repo definitions land in the registry namespace-prefixed.
+4. The host gateway config's own `workflows:` / `skills:` / `scripts:` / `connections:` blocks load last, on top of the repo content. V23 catches anonymous shadows.
+
+Host `include:` files (the v0.1 modular-config primitive) still load via the original include semantics — they layer on top of the repo content. Existing operators upgrading to v0.2 with `include:`-only configs don't need to change anything; `repos:` is purely additive.
+
+## Try it
+
+The fastest way to see multi-repo loading work is against the two libraries v0.2 ships with:
+
+```bash
+git clone https://github.com/matt-cochran/cognitive-architectures ~/repos/cognitive-architectures
+git clone https://github.com/matt-cochran/flowgate-meta ~/repos/flowgate-meta
+
+cat > gateway.yaml <<'EOF'
+version: "1.0.0"
+repos:
+  - path: ~/repos/cognitive-architectures
+  - path: ~/repos/flowgate-meta
+EOF
+
+mcp-flowgate check --config gateway.yaml
+```
+
+That lists every loaded id — 26 from cognitive-architectures, 14 from flowgate-meta — under their namespace prefixes. Pick one and `mcp-flowgate serve --config gateway.yaml`; the model now sees all 40 through search, none of them in its tool list.
+
+## What's next
+
+- [Capabilities and orchestrators](/guides/capabilities-and-orchestrators/) — the composition model the repos ship.
+- [Self-authoring with flowgate-meta](/guides/self-authoring/) — the four meta-orchestrators that use the framework on itself.
+- [Validation rules](/reference/validation-rules/) — full V1–V23 catalog.

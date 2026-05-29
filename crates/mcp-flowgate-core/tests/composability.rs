@@ -48,6 +48,7 @@ impl Executor for RecordingExecutor {
         Ok(ExecuteResult {
             output: json!({ "ok": true }),
             evidence: vec![],
+            child_workflow_id: None,
         })
     }
 }
@@ -567,6 +568,8 @@ async fn capability_ref_in_workflow_actually_dispatches() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+            trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -580,6 +583,9 @@ async fn capability_ref_in_workflow_actually_dispatches() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
+            trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -702,6 +708,8 @@ async fn capability_ref_emits_full_audit_trail() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
+            trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();
@@ -714,6 +722,9 @@ async fn capability_ref_emits_full_audit_trail() {
             transition: "go".into(),
             arguments: json!({}),
             principal: Principal::anonymous(),
+            summary: None,
+            trace_id: None,
+            run_id: None,
         })
         .await
         .unwrap();

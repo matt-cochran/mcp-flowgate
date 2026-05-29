@@ -1,0 +1,220 @@
+---
+title: "Lexicon (ubiquitous-language primitive)"
+description: "A typed vocabulary store the gateway carries across runs. Workflows reference terms; agents look them up; humans (and optionally agents) extend them. Lexicon reads ride on flowgate.query; writes go through flowgate.command."
+---
+
+You and your team have a shared vocabulary. The "audit log" means a specific thing. So does "evidence pack" and "Tier 1 surface." When you write a workflow that uses one of those terms, you expect the next person reading it to mean the same thing.
+
+The model running that workflow has no such expectation. Every session is amnesia. The term "evidence pack" in a skill body is just two English words to it.
+
+The lexicon primitive (SPEC §30) gives you a persistent vocabulary the gateway carries across runs. Workflows reference terms by name. Agents look them up via `flowgate.query({subject:"lexicon:<term>"})`. Humans (and optionally agents, with permission) extend the vocabulary via `flowgate.command({subject:"lexicon:<term>", definition:{...}})`. Every in-flight workflow gets its lexicon snapshot stamped at start, so a mid-run define doesn't mutate what existing instances see.
+
+## Declaring lexicon
+
+A `lexicon:` block at the gateway config's top level:
+
+```yaml
+# flowgate.yaml
+version: "1.0.0"
+
+lexicon:
+  evidence-pack:
+    definition_short: |
+      The structured set of artefacts a workflow collects to justify a decision.
+    definition_long: |
+      Includes file:line citations, test outputs, links to prior decisions,
+      and audit-log excerpts. Review gates check the pack before approving a change.
+    aliases: ["evidence-packs", "evidence pack", "evidence packs"]
+    bounded_context: governance
+    examples:
+      - "The vet-plan workflow assembles an evidence-pack with at least three independent citations."
+    governance: human-only
+
+  tier-1-surface:
+    definition_short: |
+      An interface backed by a stability commitment in STABILITY.md.
+    definition_long: |
+      Tier 1 surfaces never break across minor versions; deprecations
+      land at major bumps with one cycle of warning.
+    bounded_context: api-design
+    governance: human-only
+```
+
+Each entry has:
+
+- **`definition_short`** — required, one-sentence summary. Used in search previews, inline lexicon embeds, and `--list` output.
+- **`definition_long`** — optional, multi-paragraph detail. Included in full lookup responses.
+- **`aliases`** — optional, recognized surface forms of the canonical term (singular/plural, hyphen/underscore/space variants, abbreviations). A lookup against any alias returns the same entry.
+- **`bounded_context`** — optional, names the subject area. Lets you scope `audit-log` (governance context) distinct from `audit-log` (e-commerce context) in the same gateway.
+- **`examples`** — optional, array of usage strings.
+- **`refs`** — optional, array of cross-links to other term names.
+- **`governance`** — optional, `human-only` (default) or `agent-may-propose`. See below.
+
+Bad entries fail at config load with `INVALID_LEXICON_ENTRY`.
+
+**Alias collision rule:** within a single bounded context, no alias may collide with another entry's term or alias. Violation → `LEXICON_ALIAS_COLLISION` naming both entries.
+
+## Snapshot stamping
+
+Every workflow instance carries a `_lexiconLibrary` snapshot of the entire lexicon at the moment it started. The snapshot is what template substitution reads (`{{$.lexicon.X.definition}}` in skill bodies). A mid-flight `flowgate.command({subject:"lexicon:<term>", definition:{...}})` writes to the gateway's in-memory overlay; in-flight workflows are immune until they restart.
+
+This is the same SPEC §8.2 invariant that pins `_skillsLibrary` and `_scriptsLibrary` per instance. Mid-run config edits never mutate what a running instance sees.
+
+## Governance: human-only vs agent-may-propose
+
+By default, every lexicon entry has `governance: human-only`. An agent calling `flowgate.command({subject:"lexicon:<term>", definition:{...}})` against a `human-only` term gets `LEXICON_DEFINE_REQUIRES_HUMAN`. The workflow has to route through an `actor: human` transition to actually commit.
+
+Switching a term to `governance: agent-may-propose` is the explicit opt-in for "this is sandbox / scratch vocabulary; agents can extend." Useful for grill-me-style discovery sessions where the agent's job is to coin terms collaboratively. Risky to default to it — once a term lands in the lexicon, every downstream workflow inherits its meaning.
+
+**Placeholder-fill bypass (§30.10.5).** When the runtime surfaces a `SUBJECT_NEEDS_DEFINITION` interaction, the `define_new` link it returns is pre-filled with `flowgate.command({subject:"lexicon:<term>", definition:{...}})`. Following this link is NOT subject to the `human-only` governance gate — the guard treats a `PENDING_DEFINITION`-sourced define as a first-write. The result adopts whichever `governance` value the caller provides.
+
+## MCP surface
+
+Lexicon operations dispatch through the two-tool surface (SPEC §32):
+
+| Operation | Call | Returns |
+|---|---|---|
+| Search | `flowgate.query({kind:"lexicon", query, bounded_context?, limit?})` | `{hits: [{term, definition_short, aliases?, bounded_context}]}` |
+| Lookup | `flowgate.query({subject:"lexicon:<term>", bounded_context?})` | `{term, entry}` (entry may be null) |
+| Define | `flowgate.command({subject:"lexicon:<term>", definition:{definition_short, definition_long?, aliases?, refs?, bounded_context?, governance?}})` | `{term, entry, persisted_to: "overlay"}` |
+
+Search and lookup read the union of the config-loaded base + a runtime overlay (overlay wins on collision). Define writes to the overlay only; operators persist by editing `flowgate.yaml` and reloading.
+
+**Writes are gated by `with_lexicon_writes(true)`** on the server (default off for production deployments). Reads are never gated — lexicon search and lookup are always available, same posture as the rest of the discovery surface.
+
+## Embedded definitions in responses
+
+Beyond explicit lookup, definitions for terms **in scope at the call site** are embedded directly in `describe`, `get`, and `explain` response bodies as a `lexicon` field — so the model rarely needs a follow-up lookup:
+
+```json
+{
+  "kind": "guidance",
+  "subject": "plan.specify.change-request",
+  "body": "...",
+  "lexicon": {
+    "acceptance-criteria": "Pass/fail conditions a change must meet…",
+    "blackboard": {
+      "hash": "sha256:…",
+      "lookup_link": { "rel": "lexicon", "method": "flowgate.query", "args": { "subject": "lexicon:blackboard" } }
+    }
+  },
+  "links": []
+}
+```
+
+Short definitions (≤ 200 bytes) inline directly. Longer definitions become a `lookup_link` the model can follow via `flowgate.query({subject:"lexicon:<term>"})`.
+
+## CLI suite
+
+A `flowgate lexicon` CLI subcommand exists as an operator convenience for managing lexicon outside of MCP:
+
+```bash
+flowgate lexicon define <term> "<definition_short>"
+flowgate lexicon list
+flowgate lexicon list --state PENDING_DEFINITION
+flowgate lexicon lookup <term>
+```
+
+Both the CLI path and the `flowgate.command` MCP path emit the same `lexicon.defined` audit event. The CLI is an alternative, not the only path.
+
+## PENDING_DEFINITION placeholders and the SUBJECT_NEEDS_DEFINITION flow
+
+At config load, every subject referenced by the resolved config but not yet defined in the lexicon receives a placeholder entry with `state: PENDING_DEFINITION`. Load succeeds; the placeholder is enumerable.
+
+```bash
+flowgate.query({ kind: "lexicon", state: "PENDING_DEFINITION" })
+# → lists all undefined subjects the doctor is tracking
+```
+
+The doctor reports the placeholder list under `lexicon coverage`, including which workflows reference them.
+
+**Pre-start subject walk.** When `flowgate.command({definitionId})` is called to start a workflow, the runtime walks every reachable subject in the definition. If any subject resolves to a `PENDING_DEFINITION` placeholder, the start is **paused** — the runtime returns a `SUBJECT_NEEDS_DEFINITION` interaction instead of executing:
+
+```json
+{
+  "interaction": {
+    "kind": "SUBJECT_NEEDS_DEFINITION",
+    "unknown_subject": "evidence-foo",
+    "context": { "encountered_in": "workflow:swe_agent state:retrieving", "bounded_context": "swe-agent" },
+    "candidates": [
+      { "term": "evidence-pack", "distance": 2, "match_kind": "fuzzy_close",
+        "definition_preview": "A bundle of facts the editor uses…" }
+    ]
+  },
+  "queued_command": { "method": "flowgate.command", "args": { } },
+  "links": [
+    {
+      "rel": "link_as_alias",
+      "method": "flowgate.command",
+      "args": { "subject": "lexicon:evidence-pack", "definition": { "aliases_add": ["evidence-foo"] } },
+      "hint": "Use this if 'evidence-foo' is a synonym for 'evidence-pack'."
+    },
+    {
+      "rel": "define_new",
+      "method": "flowgate.command",
+      "args": { "subject": "lexicon:evidence-foo", "definition": { "definition_short": "<fill in>", "bounded_context": "swe-agent" } },
+      "hint": "Use this if 'evidence-foo' is a genuinely new concept."
+    },
+    {
+      "rel": "cancel",
+      "method": "flowgate.command",
+      "args": { "intent": "cancel_pending_subject", "unknown_subject": "evidence-foo" },
+      "hint": "Abandon the original command — the subject was a mistake."
+    }
+  ]
+}
+```
+
+The model (or operator) follows one link:
+
+- **`link_as_alias`** — append the unknown subject to an existing entry's aliases list. Audit: `lexicon.alias_added`.
+- **`define_new`** — upgrade the placeholder to a real entry. Audit: `lexicon.defined`.
+- **`cancel`** — drop the placeholder; the original command stays un-executed. Audit: `lexicon.pending_cancelled`.
+
+After resolution, the client retries the original command. The retry passes the subject walk; the snapshot pins; the workflow starts.
+
+## Error codes
+
+| Code | When |
+|---|---|
+| `INVALID_LEXICON_ENTRY` | Load-time: missing `definition_short` / unknown governance / bad refs |
+| `LEXICON_ALIAS_COLLISION` | Load-time: alias collides with another entry's term or alias in the same bounded context |
+| `LEXICON_DEFINE_REQUIRES_HUMAN` | Runtime: agent attempted to define a `human-only` term |
+| `LEXICON_WRITES_DISABLED` | Runtime: define called on a server with `with_lexicon_writes(false)` |
+| `SUBJECT_NEEDS_DEFINITION` | Runtime: a command's reachable subjects include a `PENDING_DEFINITION` placeholder (returned as a structured interaction, not a protocol error) |
+| `INVALID_RESOLUTION` | Runtime: a resolution call targets a subject not currently pending, or the payload is malformed |
+
+## Audit events
+
+| Event | When |
+|---|---|
+| `lexicon.defined` | Successful `flowgate.command({subject:"lexicon:<term>", definition:{...}})` — from MCP or CLI |
+| `lexicon.alias_added` | Successful alias-link resolution: `{ term, alias }` |
+| `lexicon.pending_cancelled` | Cancel resolution: `{ term, cancelled_by }` |
+| `lexicon.subject_unresolved` | `SUBJECT_NEEDS_DEFINITION` surfaced: unknown subject, context, candidates, and (on retry) resolution chosen |
+
+## Template substitution
+
+Inside any skill body or workflow guidance string, `{{$.lexicon.<term>.definition}}` substitutes the snapshot's `definition_short` for that term. Missing term → standard `(unset)` stub.
+
+```yaml
+skills:
+  plan.vet.discipline:
+    body: |
+      When assembling the vet packet, the agent must include:
+      {{$.lexicon.evidence-pack.definition}}
+
+      The pack is what review gates check. See {{$.lexicon.tier-1-surface.definition}}.
+```
+
+The substitution happens at instance-snapshot time. The skill body the agent reads at workflow start carries the resolved definitions inline.
+
+## The accumulation story
+
+The point of the lexicon isn't to declare 100 terms up front. It's to grow vocabulary as your team and the model work together. A `grill-with-docs` workflow runs, the agent encounters "blast radius" in your codebase, asks what it means, you define it once. Every subsequent workflow inherits the definition.
+
+That's the Eric Evans / Domain-Driven Design ubiquitous-language story, automated. Where skills are stateless (vocabulary the model coined in one conversation vanishes in the next), lexicon entries accumulate. The persistent vocabulary IS the multiplier.
+
+## Tier 1 stability commitment
+
+The `flowgate.query` / `flowgate.command` surface for lexicon operations and the `lexicon:` config shape are STABILITY Tier 1 — they don't break across minor versions. The `governance` default (`human-only`) is also Tier 1; flipping the default to `agent-may-propose` is a SPEC bump.

@@ -9,6 +9,10 @@
     "workflow": { "$ref": "#/$defs/workflowSnapshot" },
     "result": { "$ref": "#/$defs/result" },
     "context": { "type": "object" },
+    "summary": {
+      "type": "string",
+      "description": "The optional model-authored summary stored at `context.summary` (SPEC §6.3). Surfaced here so a cold-resuming LLM sees the last narrative without digging through context."
+    },
     "links": {
       "type": "array",
       "items": { "$ref": "#/$defs/link" }
@@ -25,12 +29,31 @@
       "default": [],
       "description": "When deterministic chaining occurred, records each intermediate state the workflow traversed automatically."
     },
+    "delegate": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Pass-through agent-config name (SPEC §21). When present, the TUI interpreter spawns an isolated sub-agent session with this name to drive the current state. The gateway itself never reads or branches on this field — it surfaces whatever was declared on the active state's `delegate` key."
+    },
     "guidance": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "goal": { "type": "string" },
-        "instructions": { "type": "string" }
+        "instructions": { "type": "string" },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["verb", "subject"],
+            "additionalProperties": false,
+            "properties": {
+              "verb": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+              "subject": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+            }
+          },
+          "default": [],
+          "description": "Referenced-tier guidance — a menu of `{verb, subject}` tokens the model can fetch via gateway.describe (SPEC §5.4-§5.5)."
+        }
       },
       "description": "Phase-level guidance for the LLM: what to aim for and how to behave in the current workflow state."
     }
@@ -94,7 +117,26 @@
             "transition": { "type": "string" }
           }
         },
-        "inputSchema": { "type": "object" }
+        "inputSchema": { "type": "object" },
+        "guidance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "refs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["verb", "subject"],
+                "additionalProperties": false,
+                "properties": {
+                  "verb": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+                  "subject": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+                }
+              }
+            }
+          },
+          "description": "Link-scoped guidance — references that surface only when this transition is offered (SPEC §5.5 transition-scope skills)."
+        }
       }
     },
     "evidence": {

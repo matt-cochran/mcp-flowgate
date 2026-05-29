@@ -1,0 +1,246 @@
+---
+title: "Agent configuration (agents.yaml)"
+description: "Set up per-affinity model bindings once, share them across workflows. Closed enums, sparse overrides, eager auth preflight."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`agents.yaml` is how the TUI maps a workflow's `delegate:` states to actual models. One file replaces the v0.2 pattern of repeating `--agent name=provider/model` flags per workflow invocation.
+
+The shape is deliberately small: one mandatory `default:` list, plus sparse overrides keyed by affinity, tier, or both.
+
+## The minimum viable file
+
+```yaml
+# .flowgate/agents.yaml
+version: 1
+default:
+  - provider: { name: anthropic }
+    model: claude-sonnet-4-6
+```
+
+That's enough. Every `delegate:` state in every workflow you run will resolve to Claude Sonnet 4.6. Add overrides as you need them.
+
+## Closed enums
+
+The keys you can use in `overrides:` are fixed. This is deliberate — `agents.yaml` is a contract between operators (who pick models) and workflow authors (who pick affinities). A closed enum keeps that contract testable.
+
+**Affinity (5):**
+- `coding` — code generation / refactoring
+- `reasoning` — multi-step planning, debugging, math
+- `prose` — natural-language writing
+- `web-search` — model that benefits from a search-augmented endpoint (e.g., Perplexity)
+- `recon` — local summarization and codebase navigation
+
+**Tier (3):**
+- `frontier` — the most capable model in the provider's catalog
+- `standard` — the default workhorse model
+- `commoditized` — small/cheap/fast
+
+**Provider (5 + escape hatch):** `anthropic | openai | google | ollama | lmstudio | custom`. `custom` requires an `endpoint:` field.
+
+Enum additions in future flowgate releases are minor-version compatible; removals are major. Workflow authors get a stable contract.
+
+## Sparse overrides
+
+You don't need to define every affinity × tier combination. The resolver walks from most-specific to least:
+
+1. `<affinity>-<tier>` (exact match)
+2. `<affinity>` alone
+3. `<tier>` alone
+4. `default`
+
+Affinity wins the tiebreaker. If a workflow asks for `coding-frontier` and you've defined both `coding` and `frontier` (but not `coding-frontier`), the resolver picks `coding`.
+
+```yaml
+version: 1
+default:
+  - provider: { name: anthropic }
+    model: claude-sonnet-4-6
+overrides:
+  coding-frontier:
+    - provider: { name: anthropic }
+      model: claude-opus-4-7
+      features:
+        extended_thinking: true
+        thinking_budget_tokens: 16000
+  prose:
+    - provider: { name: anthropic }
+      model: claude-haiku-4-5-20251001
+```
+
+## Chain of Responsibility (per list)
+
+Each override is a **list** of bindings. The resolver tries them in order, falling through to the next on *infrastructure* failures (401, 403, 429, 404, network timeouts). It surfaces *content* failures (other 4xx, schema, safety) to the caller.
+
+```yaml
+overrides:
+  coding-frontier:
+    - provider: { name: anthropic }
+      model: claude-opus-4-7
+    - provider: { name: openai }
+      model: gpt-5
+```
+
+If your Anthropic key is rate-limited, the resolver tries OpenAI. If Anthropic returns 400 because of a malformed request, the error surfaces — that's not the kind of failure a fallback can fix.
+
+<Aside type="note">
+In v0.3, the **first** binding from each chosen list is what spawns. Per-list runtime CoR over actual provider failures is wired in v0.3.1 — the resolver's classifier and structured `AgentResolutionExhausted` error are already in place, ready for that release.
+</Aside>
+
+## Eager auth preflight
+
+When `flowgate walk` starts, it probes every distinct primary binding (the first entry in each list, plus the `default`'s first entry) once. If a provider's API key env var is missing or the credentials are rejected, startup fails with the offending binding named.
+
+This means you find out about an expired Anthropic key when you start the walk — not three states in, after the workflow has already done work.
+
+Bypass with `FLOWGATE_SKIP_PREFLIGHT=1` (useful for CI / disconnected dev).
+
+If you'd rather not maintain shell-rc exports for the provider env vars, [`flowgate set-provider-keys`](/reference/set-provider-keys/) writes them to a mode-0600 file the agent loads at startup (existing env still wins).
+
+## Strict mode
+
+If you want the specificity walk to be EXACT only — no fall-through from `coding-frontier` to `coding` — set:
+
+```yaml
+version: 1
+strict_specificity: true
+default:
+  - provider: { name: anthropic }
+    model: claude-sonnet-4-6
+overrides:
+  coding-frontier:
+    - provider: { name: anthropic }
+      model: claude-opus-4-7
+```
+
+In strict mode, a workflow asking for `coding-frontier` matches the exact key or errors at load. A workflow asking for `reasoning-frontier` (no exact match defined) walks to `default` as normal.
+
+## File locations + precedence
+
+1. `--agents-config <PATH>` (or `$FLOWGATE_AGENTS_CONFIG`).
+2. `.flowgate/agents.yaml` in the current working directory (project).
+3. `~/.config/flowgate/agents.yaml` (user — `dirs::config_dir()`).
+4. `--agent name=provider/model` CLI flags (deprecated v0.2 path).
+
+When both project and user files exist, project wins **whole-file** — not slot-level merge. Doctor reports the shadowed user file so the surprise is visible.
+
+If you mix `--agent` flags and an on-disk `agents.yaml`, startup fails with `AmbiguousAgentSource`. Choose one source.
+
+## What `flowgate doctor` reports
+
+- `agents.yaml` — which file is loaded; binding/override counts; strict_specificity status.
+- `agents.yaml shadow` — when both project and user files exist, names the shadowed file.
+- `workflow delegates` — for each `delegate:` state in your workflow, the specificity level chosen. Names any state whose only match is `default` ("verify intent" hint).
+
+## Migrating from `--agent` flags
+
+The v0.2 `--agent planning=anthropic/claude-sonnet-4` form still works, but emits a deprecation warning. To migrate:
+
+```yaml
+# Before:  flowgate walk --workflow X --agent planning=anthropic/claude-sonnet-4-6
+# After:   echo to .flowgate/agents.yaml, then `flowgate walk --workflow X`
+
+version: 1
+default:
+  - provider: { name: anthropic }
+    model: claude-sonnet-4-6
+```
+
+You don't need to name affinities in `default:` — the default catches everything. Adding affinity-specific overrides is purely incremental.
+
+## Feature toggles
+
+Per-provider feature structs use `#[serde(deny_unknown_fields)]`, so typos fail at load with the offending key named. `extended_thinking` on an OpenAI binding fails; `reasoning_effort` on an Anthropic binding fails.
+
+**Anthropic:** `extended_thinking: bool`, `thinking_budget_tokens: u32`.
+**OpenAI:** `reasoning_effort: "low" | "medium" | "high" | "xhigh"`.
+**Google:** `thinking_budget_tokens: u32`.
+
+Toggles are translated at spawn time into aether's effective `ReasoningEffort` and applied to the model session. Mapping:
+
+- **Anthropic** — `extended_thinking: true` with no explicit budget defaults to `High`. A `thinking_budget_tokens` value snaps to the nearest effort level (≤2048 → Low, ≤6144 → Medium, ≤16384 → High, larger → Xhigh), and when set, the explicit budget wins over the boolean.
+- **OpenAI** — `low|medium|high|xhigh` pass straight through. Any other value is dropped with a warning so the typo is visible.
+- **Google** — same budget-to-effort mapping as Anthropic.
+
+Aether-llm normalizes every "think harder" provider knob through the same `ReasoningEffort` enum internally, so the same effort level produces the right shape on each provider's API.
+
+## Migrating from `--agent` flags
+
+Operators upgrading from v0.2 with many `--agent NAME=PROVIDER/MODEL` invocations can convert them in one shot:
+
+```bash
+flowgate migrate-agents-from-cli \
+  --agent default=anthropic/claude-sonnet-4-6 \
+  --agent coding-frontier=openai/gpt-5 \
+  --agent reasoning=anthropic/claude-opus-4-7 \
+  --out .flowgate/agents.yaml
+```
+
+The command writes to `.flowgate/agents.yaml` (override the path with `--out`), atomically via tempfile + rename. Pass `--dry-run` to print the generated YAML to stdout without touching disk — useful for diffing or piping through other tools before commit.
+
+Constraints the migration enforces:
+
+- Each `--agent` name must parse as a valid `<affinity>` | `<tier>` | `<affinity>-<tier>` OR the literal `default`. Names like `planner` or `critic` from older v0.2 workflows fail with the offender list so you can rename them first.
+- Provider names must be one of the closed-enum values (`anthropic`, `openai`, `google`, `ollama`, `lmstudio`). Custom endpoints aren't expressible via the CLI form and need a hand-authored YAML.
+- If no `--agent default=...` is given, the first CLI flag is promoted to `default:` too (the schema requires `default:` to exist).
+- Duplicate names are silently last-wins, matching `walk --agent` semantics.
+- The command refuses to overwrite an existing file at `--out`; move it aside first or use `--dry-run`.
+
+## Validating an agents.yaml by hand
+
+`flowgate validate-agents-config <path>` loads the file through the SAME `AgentsFile::from_path` the resolver uses at workflow start and prints a stable JSON envelope:
+
+```bash
+$ flowgate validate-agents-config .flowgate/agents.yaml
+{"ok":true,"summary":"2 default binding(s), 3 override list(s), strict_specificity=false"}
+
+$ flowgate validate-agents-config bad.yaml
+{"ok":false,"error_kind":"UNKNOWN_OVERRIDE_KEY","detail":"... `vision-frontier` is not a valid <affinity> | <tier> | <affinity>-<tier>; ..."}
+```
+
+The CLI exit code mirrors `ok`: 0 on pass, 1 on fail. `error_kind` is the stable contract — scripts and CI can switch on it. Today's set: `MISSING_DEFAULT`, `EMPTY_DEFAULT`, `MISSING_PROVIDER_MODEL`, `UNKNOWN_OVERRIDE_KEY`, `UNKNOWN_FEATURE_KEY`, `PROVIDER_ENDPOINT_REQUIRED`, `VERSION_MISMATCH`, `YAML_SYNTAX`, `IO`.
+
+This is what `cap.implement.write-agents-config` invokes for the round-trip step — by exposing it as a CLI surface, your own pre-commit hooks and editor integrations can use it too.
+
+## Guided setup with `flow.configure-models`
+
+Hand-authoring `agents.yaml` is fine for two-line files, but as soon as you want per-affinity overrides + CoR fallbacks across multiple providers, the [`flowgate-meta`](https://github.com/matt-cochran/flowgate-meta) repo ships an orchestrator that walks you through it:
+
+```bash
+# After loading flowgate-meta in your gateway config
+flowgate walk --workflow meta/flow.configure-models
+```
+
+The orchestrator runs five stages:
+
+1. **`cap.research.model-inventory`** — probes each provider you name (`anthropic,openai,google,ollama,lmstudio`) for its model catalog. Failures are classified per the same `FailureClass` enum the resolver uses (`Auth401`, `RateLimit429`, `NetworkTimeout`, etc.) so a missing API key surfaces explicitly, not silently.
+2. **`cap.plan.suggest-bindings`** — an agent composes one opinionated plan: a `default:` list, sparse overrides keyed to the affinity-tier pairs your workflows actually reference, plus rationale + assumptions for each non-obvious choice.
+3. **`cap.gate.human-approve-plan`** — HITL gate. Two modes:
+   - `review_plan` (default) — surfaces the plan + rationale + assumptions for your approval. You can hand back an edited plan instead of approving the original.
+   - `auto` — skips the gate. Useful for CI / scripted setup.
+4. **`cap.implement.write-agents-config`** — atomic write (temp file in the target dir → `flowgate validate-agents-config` round-trip → `rename`). A failed round-trip rolls back the temp file rather than replacing a working `agents.yaml` with a broken one.
+5. **`cap.verify.auth-only-smoke-test`** — 1-token completion per binding in the just-written file. **This proves auth, not capability.** Output names the limitation explicitly:
+
+   > Auth verified for the bindings reported above. CAPABILITY NOT TESTED — a model that authenticates may still fail to code, reason, or follow safety constraints in your actual workflows.
+
+   The v0.4 roadmap replaces this with a capability harness that exercises bindings against real workflow tasks. Until then, the smoke test is honest about what it does and doesn't cover.
+
+Inputs:
+
+```bash
+flowgate walk --workflow meta/flow.configure-models --input '{
+  "providers":   "anthropic,openai,google",
+  "delegates":   ["coding-frontier", "reasoning-frontier", "prose-standard"],
+  "mode":        "review_plan",
+  "target_path": ".flowgate/agents.yaml"
+}'
+```
+
+If the round-trip fails or you reject the plan, the orchestrator terminates in `failed` rather than `done` — and your existing `agents.yaml` (if any) is untouched.
+
+## What's next
+
+- The full [validation rules](/reference/validation-rules/) cover every schema check the loader enforces.
+- v0.3.1 wires per-list runtime CoR over actual provider failures + per-provider feature-toggle translation. The classifier, structured `AgentResolutionExhausted`, and typed feature structs are already in place.
+- v0.4 ships `flowgate doctor --refresh-agents` for periodic re-probing of model availability + the capability harness that replaces the auth-only smoke test.

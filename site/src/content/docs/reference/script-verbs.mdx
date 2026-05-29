@@ -1,0 +1,100 @@
+---
+title: "Script verbs and subject namespaces"
+description: "The twelve closed action verbs that tag curated scripts, the 15 blessed subject roots, and how strict_namespacing controls enforcement."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Curated scripts (SPEC §22) are the deterministic peer to skills. Where skills carry one of the eight cognitive verbs (`triage`, `diagnose`, `plan`, ...), scripts carry one of eight **action verbs**. Different vocabulary, because the work is categorically different — a bash script doesn't reason, it acts.
+
+## The twelve verbs
+
+These are a closed enum. Adding a verb requires a spec amendment (SPEC §23.7 sets the criterion). Unknown verbs reject at config load with `INVALID_SCRIPT_VERB`.
+
+| Verb | When |
+|------|------|
+| `build` | Compile, package, generate artifacts. `cargo build`, `npm run build`, `docker build`. |
+| `test` | Exercise the system against assertions. Unit, integration, end-to-end — any test runner whose exit code is the verdict. |
+| `deploy` | Promote artifacts to an environment. `kubectl apply`, `terraform apply`, `cargo publish`. |
+| `format` | Apply style transformations that **write** changes. `cargo fmt`, `prettier --write`, `black`. |
+| `lint` | Inspect for static issues. **Read-only**: reports without rewriting, binary pass/fail. `cargo clippy`, `eslint`, `mypy`. |
+| `install` | Provision dependencies, toolchains, runtimes. `cargo install`, `npm ci`, `apt-get install`. |
+| `verify` | Confirm an externally-asserted property. Hash matches, signatures valid, contract assertions hold. |
+| `run` | Catch-all for runnable operations that don't fit the above. Use sparingly — prefer a more specific verb. |
+| `inspect` *(v0.3)* | Read-only local introspection — system state, dep tree, symbol exports, env. `cargo tree`, `nm`, `env`. Distinct from `lint` (no pass/fail verdict — just data). |
+| `search` *(v0.3)* | Content discovery — codebase grep, web search, doc search. `rg`, search-engine API calls, `grep -r`. Distinct from `fetch` (discovery vs known-resource retrieval). |
+| `fetch` *(v0.3)* | Retrieve a specific known resource by URL or path. `curl`, `wget`, `git clone`. Distinct from `search` (you know what you want, not finding candidates). |
+| `audit` *(v0.3)* | Graded compliance / security / quality scan emitting structured findings. `cargo audit`, `semgrep`, `snyk`. Distinct from `lint` (graded report vs binary verdict). |
+
+The `format`/`lint` split matters: a `format` script writes; a `lint` script doesn't. Workflows can guard a `format` script behind acknowledgment while letting `lint` run freely.
+
+### When to pick which (the closest-neighbor confusions)
+
+| When you're tempted to use… | Use this instead if… |
+|---|---|
+| `lint` | …you're gathering data (dep tree, symbol list, env dump) with no pass/fail verdict → **`inspect`** |
+| `lint` | …the output is a graded findings report (severity, count, file) not a binary pass/fail → **`audit`** |
+| `run` | …the script is read-only data-gathering → **`inspect`** |
+| `run` | …the script is searching for unknown matches → **`search`** |
+| `run` | …the script is retrieving a known resource by id → **`fetch`** |
+| `search` | …you already know the resource's URL/path and just need to pull it → **`fetch`** |
+| `fetch` | …you're looking for candidates, not retrieving a known one → **`search`** |
+
+## Why closed?
+
+Closed enums let `flowgate.query({kind:"script", query:"build"})` filter cleanly without synonym matching. They also force authors to pick — `compile.cargo.release` versus `build.cargo.release` is a debate; with the closed enum there's no debate, it's `build`. Less bike-shedding, more shipping.
+
+## Subject namespaces
+
+Script subjects follow the same shape as skill subjects: dotted, lowercase-kebab segments, at least two segments deep. `build.cargo.release`, `test.pytest.coverage`, `deploy.production.rollout`.
+
+The first segment must be a blessed root. The current set has 15 entries:
+
+| Category | Roots |
+|----------|-------|
+| Verb-mirror (action category) | `build`, `test`, `deploy`, `format`, `lint`, `install`, `verify`, `run`, `inspect` *(v0.3)*, `search` *(v0.3)*, `fetch` *(v0.3)*, `audit` *(v0.3)* |
+| Domain-themed (operational category) | `release`, `migrate`, `ci` |
+
+The verb-mirror roots make `subject.split('.')[0]` a coarse-grained type tag — `build.cargo.release` is a build-shaped script regardless of which subsystem it builds. The domain-themed roots cover operational scripts whose verb varies by context (a `release.*` script might `build` one artifact and `deploy` another).
+
+## strict_namespacing
+
+```yaml
+flowgate:
+  strict_namespacing: true   # default
+```
+
+`true` (default): an unblessed root rejects at config load with `INVALID_SCRIPT_SUBJECT_ROOT`. The error message lists the blessed set so the operator sees the valid alternatives.
+
+`false`: unblessed roots produce a `Diagnostic { severity: warn, code: "INVALID_SCRIPT_SUBJECT_ROOT" }` plus a closest-blessed-root suggestion ("did you mean 'build'?"). Config loads. Useful during migration into the script library convention; we don't recommend it as a steady-state.
+
+The flag is **gateway-scoped only** — declaring `flowgate.strict_namespacing` inside a workflow rejects with `CONFIG_FLAG_NOT_RUNTIME_MUTABLE`.
+
+## Error codes for the scripts surface
+
+| Code | When |
+|---|---|
+| `INVALID_SCRIPT_VERB` | `verb` field not in the closed eight |
+| `MISSING_SCRIPT_VERB` | `verb` field absent |
+| `INVALID_SCRIPT_SUBJECT_ROOT` | First subject segment not blessed (strict mode) |
+| `EMPTY_SCRIPT_SUBJECT` | `subject` empty after trim |
+| `MISSING_SCRIPT_LIFECYCLE` | `lifecycle` field absent |
+| `INVALID_SCRIPT_LIFECYCLE` | `lifecycle` not `experimental` / `stable` / `deprecated` |
+| `SCRIPT_BODY_SOURCE_AMBIGUOUS` | Both `body` and `uri` present, or neither |
+| `MISSING_SCRIPT_HASH` | `uri` present without required `hash` |
+| `UNSUPPORTED_SCRIPT_URI_SCHEME` | URI scheme not `file://` (v1) |
+| `INVALID_SCRIPT_HASH_FORMAT` | Hash not `sha256:` + 64 lowercase hex chars |
+| `SCRIPT_HASH_MISMATCH` | Declared hash ≠ computed hash of body |
+| `SCRIPT_NOT_IN_SNAPSHOT` | Executor invoked for subject not in workflow's `_scriptsLibrary` |
+| `INVALID_SCRIPT_INVOCATION` | Executor config missing `subject` field |
+| `SCRIPT_SUBJECT_UNKNOWN` | `script_acknowledged` guard references unknown subject |
+
+<Aside type="note">
+Script body hashing is **stricter** than skill body hashing. Skills collapse internal whitespace before hashing (so a Markdown reflow doesn't break the cache); scripts don't (whitespace is load-bearing in shell). Changing a tab to spaces in a script body WILL invalidate a uri-sourced hash. See [SPEC §22.2](https://github.com/matt-cochran/mcp-flowgate/blob/main/SPEC.md#222-body-source-inline-vs-urihash) for the normalization rule.
+</Aside>
+
+## See also
+
+- [Skills, workflows, and cognitive architectures](/guides/skills-and-architectures/) — the layered model
+- [Cognitive verbs and subject namespaces](/reference/cognitive-verbs/) — the skill-side counterpart
+- [Composing a small architecture from scratch](/guides/composing-an-architecture/) — a worked example

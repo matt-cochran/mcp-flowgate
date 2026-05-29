@@ -1,23 +1,57 @@
 ---
 title: "MCP tools"
-description: "Reference for the seven fixed MCP tools that mcp-flowgate exposes to your model."
+description: "Reference for the two fixed MCP tools that mcp-flowgate exposes to your model: flowgate.query (reads) and flowgate.command (writes)."
 ---
 
-No matter how many capabilities you wire in, the model always sees exactly seven tools. Three for discovery, four for workflows.
+No matter how many capabilities you wire in, the model always sees exactly **two tools**: `flowgate.query` for all reads and `flowgate.command` for all state-changing writes. The split follows CQRS — if it has side effects, it's a command; if it doesn't, it's a query.
 
-## Discovery tools
+The tool name carries nearly no decision weight for the model. What does the work is the `links[]` array every response carries: pre-filled `{ method, args }` objects the model copies verbatim to make the next call. The schema declares what's valid; the response declares what's valid *right now*.
 
-### gateway.home
+---
 
-Returns the full capability catalog. This is the entry point -- the model calls it to see what's available.
+## `flowgate.query`
 
-**Arguments:** None.
+Side-effect-free reads. Covers: catalog browsing (`home`), full-text search, fragment describe, workflow get, workflow explain, and lexicon reads.
+
+**Schema** — all fields optional; the combination of fields present selects the operation:
+
+```json
+{
+  "query":      "string",
+  "kind":       "string",
+  "subject":    "string",
+  "workflowId": "string",
+  "transition": "string",
+  "limit":      "integer"
+}
+```
+
+### Dispatch table
+
+| Args present | Operation |
+|---|---|
+| (none) | `home` — full capability catalog |
+| `query` | `search` — full-text scored results |
+| `subject` only | `describe` — live-config fragment or capability |
+| `subject` + `workflowId` | `describe` — against the instance's pinned snapshot (§8.2) |
+| `workflowId` alone | `get` — current workflow state |
+| `workflowId` + `transition` | `explain` — inspect a transition definition |
+
+`kind` and `limit` are optional modifiers on `search`; they don't change which dispatch row matches. `kind` filters the result set (`workflow`, `skill`, `script`, `capability`, `lexicon`). `limit` caps the result count.
+
+**Audit:** fires only on `describe` calls that include both `subject` AND `workflowId` — i.e., "guidance fetched for use in a running workflow." Browse-time describe (`subject` alone) does not audit.
+
+---
+
+### home
+
+Returns the full capability catalog. Entry point for a cold-start model.
 
 **Example request:**
 
 ```json
 {
-  "name": "gateway.home",
+  "name": "flowgate.query",
   "arguments": {}
 }
 ```
@@ -36,7 +70,7 @@ Returns the full capability catalog. This is the entry point -- the model calls 
       "links": [
         {
           "rel": "start",
-          "method": "workflow.start",
+          "method": "flowgate.command",
           "args": { "definitionId": "deploy_pipeline", "input": {} }
         }
       ]
@@ -50,7 +84,7 @@ Returns the full capability catalog. This is the entry point -- the model calls 
       "links": [
         {
           "rel": "start",
-          "method": "workflow.start",
+          "method": "flowgate.command",
           "args": { "definitionId": "proxy_default", "input": { "capability": "github.list_issues" } }
         }
       ]
@@ -59,44 +93,23 @@ Returns the full capability catalog. This is the entry point -- the model calls 
 }
 ```
 
-Each item includes links telling the model what to do next. The model follows these instead of guessing tool names.
+Each item includes links telling the model what to do next. The model follows these instead of guessing call shapes.
 
 ---
 
-### gateway.search
+### search
 
-Full-text search across all indexed capabilities and workflows.
-
-**Arguments:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | Yes | Search terms |
-
-**Scoring:** Each search term is scored against multiple fields with different weights:
-
-| Field | Weight | What it matches |
-|-------|--------|-----------------|
-| title | 6.0 | Capability or workflow title |
-| id | 5.0 | The capability/workflow identifier |
-| tags | 3.0 | Tags array |
-| aliases | 3.0 | Search synonyms you define in config |
-| description | 2.0 | Description text |
-| text | 1.0 | State names, transition names, guidance text |
-
-**Matching strategy:** For each field, the scorer tries three approaches in order:
-
-1. **Exact** -- the term appears anywhere in the field (full weight)
-2. **Prefix** -- a word in the field starts with the term, minimum 2 characters (70% weight)
-3. **Fuzzy** -- trigram similarity above 0.3 threshold, minimum 4 characters (50% weight, scaled by similarity)
+Full-text search across all indexed capabilities, workflows, skills, scripts, and lexicon entries.
 
 **Example request:**
 
 ```json
 {
-  "name": "gateway.search",
+  "name": "flowgate.query",
   "arguments": {
-    "query": "deploy"
+    "query": "deploy",
+    "kind": "workflow",
+    "limit": 5
   }
 }
 ```
@@ -117,7 +130,7 @@ Full-text search across all indexed capabilities and workflows.
         "links": [
           {
             "rel": "start",
-            "method": "workflow.start",
+            "method": "flowgate.command",
             "args": { "definitionId": "deploy_pipeline", "input": {} }
           }
         ]
@@ -127,27 +140,38 @@ Full-text search across all indexed capabilities and workflows.
 }
 ```
 
-Results are sorted by score (highest first). Each result includes HATEOAS links so the model can act immediately.
+**Scoring weights:**
+
+| Field | Weight | What it matches |
+|-------|--------|-----------------|
+| `title` | 6.0 | Capability or workflow title |
+| `id` | 5.0 | The identifier |
+| `tags` | 3.0 | Tags array |
+| `aliases` | 3.0 | Search synonyms declared in config |
+| `description` | 2.0 | Description text |
+| `text` | 1.0 | State names, transition names, guidance text |
+
+**Lexicon search** — pass `kind: "lexicon"` to restrict to the lexicon:
+
+```json
+{ "query": "evidence", "kind": "lexicon" }
+```
+
+Returns `{ "hits": [{ "term", "definition_short", "aliases", "bounded_context" }] }`.
 
 ---
 
-### gateway.describe
+### describe
 
-Get the full details for a single capability or workflow.
-
-**Arguments:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | Yes | The capability or workflow identifier |
+Returns the full details for a single capability, workflow definition, skill, script, or lexicon entry.
 
 **Example request:**
 
 ```json
 {
-  "name": "gateway.describe",
+  "name": "flowgate.query",
   "arguments": {
-    "id": "github.list_issues"
+    "subject": "github.list_issues"
   }
 }
 ```
@@ -164,99 +188,39 @@ Get the full details for a single capability or workflow.
   "links": [
     {
       "rel": "start",
-      "method": "workflow.start",
+      "method": "flowgate.command",
       "args": { "definitionId": "proxy_default", "input": { "capability": "github.list_issues" } },
       "input_schema": {
         "type": "object",
         "required": ["repo"],
         "properties": {
           "repo": { "type": "string" }
-        },
-        "additionalProperties": false
+        }
       }
     }
   ]
 }
 ```
 
-The response includes the full input schema in the link, so the model knows exactly what arguments to send when starting the workflow.
+**Lexicon lookup** — use the `lexicon:` subject prefix to look up a term:
+
+```json
+{ "subject": "lexicon:evidence-pack" }
+```
+
+Returns `{ "term", "entry" }` where `entry` may be null if the term has no definition yet. A lookup against any registered alias returns the same entry as the canonical term.
 
 ---
 
-## Workflow tools
-
-### workflow.start
-
-Creates a new workflow instance at its initial state.
-
-**Arguments:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `definitionId` | string | Yes | The workflow definition to start |
-| `input` | object | Yes | Input data for the workflow |
-
-**Example request:**
-
-```json
-{
-  "name": "workflow.start",
-  "arguments": {
-    "definitionId": "deploy_pipeline",
-    "input": {
-      "service": "payments",
-      "environment": "staging"
-    }
-  }
-}
-```
-
-**Example response:**
-
-```json
-{
-  "workflowId": "wf_a1b2c3d4e5f6",
-  "definitionId": "deploy_pipeline",
-  "state": "lint",
-  "version": 1,
-  "context": {},
-  "links": [
-    {
-      "rel": "transition",
-      "title": "Run linter",
-      "method": "workflow.submit",
-      "args": {
-        "workflowId": "wf_a1b2c3d4e5f6",
-        "expectedVersion": 1,
-        "transition": "run_lint",
-        "arguments": {}
-      }
-    }
-  ]
-}
-```
-
-The response tells the model what it can do next. Each link is a pre-filled `workflow.submit` call -- the model just has to follow it.
-
-If the initial state has `actor: deterministic` transitions, the runtime chains through them automatically and returns the first state that needs a decision.
-
----
-
-### workflow.get
+### get
 
 Check the current state of a running workflow.
 
-**Arguments:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `workflowId` | string | Yes | The workflow instance ID |
-
 **Example request:**
 
 ```json
 {
-  "name": "workflow.get",
+  "name": "flowgate.query",
   "arguments": {
     "workflowId": "wf_a1b2c3d4e5f6"
   }
@@ -281,7 +245,7 @@ Check the current state of a running workflow.
     {
       "rel": "transition",
       "title": "Deploy to environment",
-      "method": "workflow.submit",
+      "method": "flowgate.command",
       "args": {
         "workflowId": "wf_a1b2c3d4e5f6",
         "expectedVersion": 4,
@@ -292,7 +256,7 @@ Check the current state of a running workflow.
     {
       "rel": "transition",
       "title": "Abort deployment",
-      "method": "workflow.submit",
+      "method": "flowgate.command",
       "args": {
         "workflowId": "wf_a1b2c3d4e5f6",
         "expectedVersion": 4,
@@ -304,28 +268,159 @@ Check the current state of a running workflow.
 }
 ```
 
-The context accumulates data from previous transitions. The links show every legal next move from the current state.
+The context accumulates data from previous transitions. The links show every legal next move.
 
 ---
 
-### workflow.submit
+### explain
 
-Advance a workflow by firing a transition.
+Inspect a workflow definition or a specific transition without starting anything.
 
-**Arguments:**
+**Example request (specific transition):**
 
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `workflowId` | string | Yes | The workflow instance ID |
-| `expectedVersion` | number | Yes | Optimistic lock -- must match the current version |
-| `transition` | string | Yes | The transition to fire |
-| `arguments` | object | Yes | Input arguments for the transition |
+```json
+{
+  "name": "flowgate.query",
+  "arguments": {
+    "workflowId": "wf_a1b2c3d4e5f6",
+    "transition": "deploy"
+  }
+}
+```
+
+**Example response:**
+
+```json
+{
+  "definitionId": "deploy_pipeline",
+  "transition": "deploy",
+  "title": "Deploy to environment",
+  "target": "deployed",
+  "actor": "agent",
+  "guards": [
+    { "kind": "expr", "expr": "$.context.testsPassed == true" }
+  ],
+  "inputSchema": null,
+  "executor": {
+    "kind": "cli",
+    "command": "deploy"
+  }
+}
+```
+
+---
+
+### Subject namespace
+
+The `subject` field admits a colon-prefixed namespace to target specific primitives:
+
+| Prefix | Resolves to |
+|---|---|
+| (none) | guidance fragment, workflow definition, capability, or script — the discovery index resolves by collision-free naming |
+| `lexicon:<term>` | a single lexicon entry |
+| `workflow:<id>` | a workflow definition (explicit form when an unprefixed name would collide) |
+| `script:<subject>` | a curated script body |
+| `skill:<subject>` | a guidance fragment |
+
+Unprefixed subjects keep working for everything except the lexicon. The prefix is required only when you need to defeat a naming collision or explicitly target the lexicon.
+
+---
+
+## `flowgate.command`
+
+State-changing writes. Covers: workflow start, workflow transition submit, and lexicon define (when enabled).
+
+**Schema** — all fields optional; the combination of fields present selects the operation:
+
+```json
+{
+  "definitionId":    "string",
+  "input":           "object",
+  "workflowId":      "string",
+  "expectedVersion": "integer",
+  "transition":      "string",
+  "arguments":       "object",
+  "subject":         "string",
+  "definition":      "object",
+  "summary":         "string",
+  "trace_id":        "string",
+  "run_id":          "string"
+}
+```
+
+### Dispatch table
+
+| Args present | Operation |
+|---|---|
+| `definitionId`, no `workflowId`, no `subject` | `start` — create a new workflow instance |
+| `workflowId` + `transition` + `expectedVersion` | `submit` — fire a transition |
+| `subject` (namespaced) + `definition` | `define` — write a lexicon entry |
+
+`input` and `run_id` are modifiers on `start`. `arguments` and `summary` are modifiers on `submit`. `trace_id` and `run_id` thread through to audit on any operation.
+
+---
+
+### start
+
+Create a new workflow instance at its initial state.
 
 **Example request:**
 
 ```json
 {
-  "name": "workflow.submit",
+  "name": "flowgate.command",
+  "arguments": {
+    "definitionId": "deploy_pipeline",
+    "input": {
+      "service": "payments",
+      "environment": "staging"
+    }
+  }
+}
+```
+
+**Example response:**
+
+```json
+{
+  "workflowId": "wf_a1b2c3d4e5f6",
+  "definitionId": "deploy_pipeline",
+  "state": "lint",
+  "version": 1,
+  "context": {},
+  "links": [
+    {
+      "rel": "transition",
+      "title": "Run linter",
+      "method": "flowgate.command",
+      "args": {
+        "workflowId": "wf_a1b2c3d4e5f6",
+        "expectedVersion": 1,
+        "transition": "run_lint",
+        "arguments": {}
+      }
+    }
+  ]
+}
+```
+
+Each link is a pre-filled `flowgate.command` submit call — the model copies it verbatim.
+
+If the initial state has `actor: deterministic` transitions, the runtime chains through them automatically and returns the first state that needs a decision.
+
+**`run_id` uniqueness:** supply `run_id` to assert uniqueness. If an instance with that `run_id` already exists, the call returns `RUN_ID_ALREADY_RUNNING` (see error shapes below) rather than creating a duplicate. Omit `run_id` to let the runtime mint one.
+
+---
+
+### submit
+
+Advance a workflow by firing a transition.
+
+**Example request:**
+
+```json
+{
+  "name": "flowgate.command",
   "arguments": {
     "workflowId": "wf_a1b2c3d4e5f6",
     "expectedVersion": 4,
@@ -359,119 +454,184 @@ Advance a workflow by firing a transition.
 
 When the workflow reaches a terminal state, `terminal` is `true` and `links` is empty.
 
-**Error responses:**
-
-The gateway rejects submissions with structured error codes:
+**Submit error codes:**
 
 | Code | Meaning |
 |------|---------|
-| `STALE_WORKFLOW_VERSION` | Your `expectedVersion` doesn't match. Someone else advanced the workflow. Fetch the latest state with `workflow.get` and retry. |
-| `ACTOR_MISMATCH` | The transition requires a human principal but the submitter isn't human. |
+| `STALE_WORKFLOW_VERSION` | `expectedVersion` doesn't match. Fetch current state with `flowgate.query({workflowId})` and retry. |
+| `ACTOR_MISMATCH` | Transition requires a human principal but submitter is not human. |
 | `GUARD_REJECTED` | One or more guards rejected the transition. |
-| `INPUT_SCHEMA_VIOLATION` | The arguments don't match the transition's input schema. |
-| `INVALID_TRANSITION` | The transition doesn't exist or isn't valid from the current state. |
-| `EXECUTOR_FAILED` | The transition's executor ran but failed. |
+| `INPUT_SCHEMA_VIOLATION` | Arguments don't match the transition's input schema. |
+| `INVALID_TRANSITION` | Transition doesn't exist or isn't legal from the current state. |
+| `EXECUTOR_FAILED` | Executor ran but failed. |
 
-**Example error response:**
+---
+
+### define
+
+Write a lexicon entry. Requires `with_lexicon_writes(true)` on the server (default off in production deployments).
+
+**Example request:**
 
 ```json
 {
-  "workflowId": "wf_a1b2c3d4e5f6",
-  "state": "ready_to_deploy",
-  "version": 4,
+  "name": "flowgate.command",
+  "arguments": {
+    "subject": "lexicon:evidence-pack",
+    "definition": {
+      "definition_short": "A structured set of artefacts that justify a decision.",
+      "definition_long": "The evidence pack collects file:line citations, test outputs, links to prior decisions, and audit-log excerpts. Review gates check the pack before approving a change.",
+      "aliases": ["evidence-packs", "evidence pack"],
+      "bounded_context": "swe-agent",
+      "governance": "human-only"
+    }
+  }
+}
+```
+
+**Example response:**
+
+```json
+{
+  "term": "evidence-pack",
+  "entry": {
+    "definition_short": "A structured set of artefacts that justify a decision.",
+    "definition_long": "The evidence pack collects file:line citations, test outputs, links to prior decisions, and audit-log excerpts. Review gates check the pack before approving a change.",
+    "aliases": ["evidence-packs", "evidence pack"],
+    "bounded_context": "swe-agent",
+    "governance": "human-only"
+  },
+  "persisted_to": "overlay"
+}
+```
+
+Emits a `lexicon.defined` audit event on success. Defines land in a gateway-lifetime in-memory overlay. Persist them by editing `flowgate.yaml` and reloading.
+
+**Define error codes:**
+
+| Code | Meaning |
+|------|---------|
+| `LEXICON_DEFINE_REQUIRES_HUMAN` | Caller is an agent; term governance is `human-only`. Route through an `actor: human` transition to commit. |
+| `LEXICON_WRITES_DISABLED` | Server was started without lexicon write support. See operator path in the error's `links[]`. |
+| `INVALID_LEXICON_ENTRY` | Definition shape is malformed. |
+| `LEXICON_ALIAS_COLLISION` | An alias collides with another entry's term or alias in the same bounded context. |
+
+---
+
+## Error response shape
+
+Ambiguous argument combinations return a structured error — never an MCP protocol error:
+
+### AMBIGUOUS_INTENT
+
+Fired when conflicting dispatch keys are present (e.g., both `definitionId` and `workflowId`).
+
+```json
+{
   "error": {
-    "code": "STALE_WORKFLOW_VERSION",
-    "message": "Expected workflow version 3, but current version is 4."
+    "code": "AMBIGUOUS_INTENT",
+    "message": "both definitionId and workflowId set; pick one",
+    "hint": "use definitionId to start a new instance, or workflowId+expectedVersion+transition to submit a transition"
+  },
+  "links": [
+    { "rel": "start",  "method": "flowgate.command", "args": { "definitionId": "swe_agent" } },
+    { "rel": "submit", "method": "flowgate.command", "args": { "workflowId": "...", "expectedVersion": 3 } }
+  ]
+}
+```
+
+### LEXICON_WRITES_DISABLED
+
+Fired when `define` is called on a server with lexicon writes off.
+
+```json
+{
+  "error": {
+    "code": "LEXICON_WRITES_DISABLED",
+    "message": "This runtime does not accept lexicon define commands.",
+    "hint": "Operators add lexicon terms via the `flowgate lexicon define` CLI subcommand."
+  },
+  "links": [
+    { "rel": "operator_path", "method": "cli",            "args": { "command": "flowgate lexicon define <term> <definition>" } },
+    { "rel": "lookup",        "method": "flowgate.query", "args": { "subject": "lexicon:<term>" } }
+  ]
+}
+```
+
+The `cli` rel is informational — it names the operator-facing alternative, not a tool the model can call. The `lookup` rel keeps the read path discoverable.
+
+### RUN_ID_ALREADY_RUNNING
+
+Fired when a `start` command supplies a `run_id` that already exists.
+
+```json
+{
+  "error": {
+    "code": "RUN_ID_ALREADY_RUNNING",
+    "message": "An instance already exists with run_id 'r-abc123'.",
+    "hint": "Each run_id is single-use. Fetch the existing instance with the linked get, or retry with a fresh run_id."
+  },
+  "links": [
+    { "rel": "get", "method": "flowgate.query", "args": { "workflowId": "<existing>" } }
+  ]
+}
+```
+
+### SUBJECT_NEEDS_DEFINITION
+
+Fired when a workflow start (or mid-workflow transition) encounters a subject that has no lexicon entry. The runtime pauses the command and returns a structured interaction instead of executing:
+
+```json
+{
+  "interaction": {
+    "kind": "SUBJECT_NEEDS_DEFINITION",
+    "unknown_subject": "evidence-foo",
+    "context": {
+      "encountered_in": "workflow:swe_agent state:retrieving",
+      "bounded_context": "swe-agent"
+    },
+    "candidates": [
+      { "term": "evidence-pack", "distance": 2, "match_kind": "fuzzy_close",
+        "definition_preview": "A bundle of facts the editor uses…" }
+    ]
+  },
+  "queued_command": {
+    "method": "flowgate.command",
+    "args": { }
   },
   "links": [
     {
-      "rel": "self",
-      "method": "workflow.get",
-      "args": { "workflowId": "wf_a1b2c3d4e5f6" }
+      "rel": "link_as_alias",
+      "method": "flowgate.command",
+      "args": { "subject": "lexicon:evidence-pack", "definition": { "aliases_add": ["evidence-foo"] } },
+      "hint": "Use this if 'evidence-foo' is a synonym for 'evidence-pack'."
+    },
+    {
+      "rel": "define_new",
+      "method": "flowgate.command",
+      "args": { "subject": "lexicon:evidence-foo", "definition": { "definition_short": "<fill in>", "bounded_context": "swe-agent" } },
+      "hint": "Use this if 'evidence-foo' is a genuinely new concept."
+    },
+    {
+      "rel": "cancel",
+      "method": "flowgate.command",
+      "args": { "intent": "cancel_pending_subject", "unknown_subject": "evidence-foo" },
+      "hint": "Abandon the original command — the subject was a mistake."
     }
   ]
 }
 ```
 
-Even error responses include links -- typically a `workflow.get` link so the model can recover.
+Follow one link. Resolution updates the live lexicon (or drops the placeholder for `cancel`). The client retries the original command. See [Lexicon](/reference/lexicon/) for the full `PENDING_DEFINITION` / `SUBJECT_NEEDS_DEFINITION` flow.
 
 ---
 
-### workflow.explain
+## HATEOAS contract
 
-Inspect a workflow definition or a specific transition without starting anything.
-
-**Arguments:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `definitionId` | string | Yes | The workflow definition to explain |
-| `transition` | string | No | A specific transition to focus on |
-
-**Example request (full workflow):**
+Every response — success or error — carries a `links[]` array:
 
 ```json
-{
-  "name": "workflow.explain",
-  "arguments": {
-    "definitionId": "deploy_pipeline"
-  }
-}
+{ "rel": "string", "method": "flowgate.query" | "flowgate.command", "args": { ... } }
 ```
 
-**Example response (full workflow):**
-
-```json
-{
-  "definitionId": "deploy_pipeline",
-  "description": "Lint, test, build, and deploy a service.",
-  "initialState": "lint",
-  "states": {
-    "lint": {
-      "transitions": ["run_lint"]
-    },
-    "test": {
-      "transitions": ["run_tests"]
-    },
-    "ready_to_deploy": {
-      "transitions": ["deploy", "abort"]
-    },
-    "deployed": { "terminal": true },
-    "aborted": { "terminal": true }
-  }
-}
-```
-
-**Example request (specific transition):**
-
-```json
-{
-  "name": "workflow.explain",
-  "arguments": {
-    "definitionId": "deploy_pipeline",
-    "transition": "deploy"
-  }
-}
-```
-
-**Example response (specific transition):**
-
-```json
-{
-  "definitionId": "deploy_pipeline",
-  "transition": "deploy",
-  "title": "Deploy to environment",
-  "target": "deployed",
-  "actor": "agent",
-  "guards": [
-    { "kind": "expr", "expr": "$.context.testsPassed == true" }
-  ],
-  "inputSchema": null,
-  "executor": {
-    "kind": "cli",
-    "command": "deploy"
-  }
-}
-```
-
-This is useful for understanding what a workflow does before committing to running it. The model can inspect guards, required inputs, and executor types without side effects.
+The `args` object is pre-filled with the exact shape the next operation needs. Models chain by copying `link.args` verbatim — they never derive the next call from the schema. Static schema declares what's valid; dynamic `links[]` declares what's valid right now.

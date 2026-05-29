@@ -7,3 +7,11 @@ Cargo.lock.bak
 .idea
 site/dist/
 site/.astro/
+
+# Local-only MCP server registrations (per-developer; not part of the repo
+# contract). Each contributor wires their own MCP tooling in `.mcp.json` and
+# Claude Code reads it on startup.
+.mcp.json
+
+# StructureOS scratch directory — backups, scan cache, generated context.
+.structureos/

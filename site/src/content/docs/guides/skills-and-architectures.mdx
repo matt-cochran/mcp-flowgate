@@ -1,0 +1,175 @@
+---
+title: "Skills, workflows, and cognitive architectures"
+description: "Three layers, not one — what each one is, when each kicks in, and why the distinction matters."
+---
+
+## The three layers
+
+Most "agent" tooling collapses everything into one bag: a model, a prompt, some tools. mcp-flowgate splits it into three layers that compose. A **skill** is a small mental model the agent loads when it matters. A **workflow** is a state machine that sequences which mental model to load when. A **cognitive architecture** is the whole assembly — skills, workflow, the agent configs that pick which model plays which role, and the connections that wire in real tools. Each layer has a different author and a different reason to change, and pulling them apart is the point.
+
+## A skill is a mental model
+
+A skill is a single piece of guidance the agent loads to think a specific way: a verb, a subject, a body, a lifecycle. It's not a tool. It's not a prompt template. It's the thing you'd hand a smart junior on day one — "here's how we review code on this team, here's what 'done' looks like, here's the trap to avoid."
+
+```yaml
+skills:
+  review.code.adversarial:
+    verb: review
+    lifecycle: stable
+    body: |
+      # Adversarial patch review
+      Attack the candidate patch: find missed edge cases, hidden regressions,
+      policy violations, security issues. Cite each finding with file:line and
+      a counterexample input. Return verdict: accept | retry | escalate.
+```
+
+The verb (`review`) is one of eight closed cognitive operations — see [Cognitive verbs and subject namespaces](/reference/cognitive-verbs/). The subject (`review.code.adversarial`) is a dotted namespace starting with a blessed root. The body is prose the model reads. The lifecycle (`stable`) tells you whether to trust it in production.
+
+Skills don't ride along in the model's context for free. The gateway surfaces a ref — `{ verb, subject, hash }` — and the model fetches the body via `flowgate.query({subject})` only if it's relevant. This is progressive disclosure: nine skills cost you nine refs (a few hundred bytes), not nine full bodies. The hash invalidates the model's cache the moment you edit the body.
+
+## A workflow is a state machine
+
+A workflow is states, transitions, guards, and the actor on each state. It's what gives an agent a shape — "first plan, then retrieve, then edit, then verify, then critique, then maybe a human signs off." Without it, you have a model with a tool list and a prayer.
+
+The `swe-agent` example workflow chains six states: `intake` → `planning` → `retrieving` → `editing` → `verifying` → `critiquing` → `human_review`. Each state names which agent should drive it (`delegate: planning-agent`), what skills are in scope, and what transitions are legal next. The runtime enforces the shape; the model fills in the work.
+
+Crucially, workflows **reference** skills — they don't contain them. The same `review.code.adversarial` skill that lives on the `critiquing` state of the SWE workflow also slots into a PR-review workflow, a security-audit workflow, or a standalone one-state review loop. Write the skill once. Compose it into as many workflows as it fits.
+
+## An architecture is the whole thing assembled
+
+A cognitive architecture is a bundle: skills + a workflow + agent configs (which model plays which role) + connections (which executors wire in which real tools). It encodes what to think about, when to think it, how to enforce it, and how to audit it.
+
+The SWE-agent architecture, for instance, decides: planning gets a fast cheap model, critique gets the precise expensive one, retrieval calls a SCIP-backed code-graph MCP server, verification runs a deterministic harness, and high-risk patches escalate to a human. None of that is in the skill. None of it is in the workflow alone. It's the composition that makes it an architecture.
+
+## Why three layers, not one?
+
+Different people change different layers:
+
+- **Skill author** is a subject-matter expert. A security reviewer writes `review.code.adversarial`. A staff engineer writes `plan.specify.change-request`. They don't need to know the state machine.
+- **Workflow author** is a process designer. They pick the state machine — TDD versus spec-driven versus straight code-and-ship — and decide which skills surface where. They don't need to write the skills from scratch.
+- **Operator** is the ops/cost tuner. Same workflow, different agent assignment: Sonnet for editing because it's cheap and good enough, Opus for critique because the precision matters. The workflow doesn't change; the bill does.
+- **Curator** ships the bundle. They package a known-good architecture for a use case (`code-review`, `incident-triage`, `content-publish`) and you copy-paste.
+
+Three layers mean each of those people can ship a change without breaking the others.
+
+## The intent layer (indeterminate + determinate)
+
+Skills and scripts together form what SPEC §23 calls the **intent layer**. They're peers, partitioned along determinism:
+
+| Surface | Determinism | What it means |
+|---|---|---|
+| **Skills** | Indeterminate | LLM-driven. The body is guidance; the model interprets. Same skill, different sessions, different outputs. |
+| **Scripts** | Determinate | Deterministic. The body is executable bytes; identical inputs produce identical outputs (modulo time and IO). Hash-pinned for replay. |
+
+Together they express the complete intent vocabulary: indeterminate cognition (skills) + determinate action (scripts) = everything a workflow can intend.
+
+The flip side: connections, capabilities, and executors are NOT intent. They're the **access layer** — typed by `kind` (mcp, cli, rest, script), they tell the gateway *how* to reach something. A `cli` connection to `cargo` doesn't have a verb, because the same connection can serve `build`, `test`, `format`, etc. — the verb belongs to each individual *usage* (the script that invokes the connection), not the declaration.
+
+This split is why only skills and scripts get verbs. Verbing the access layer would conflate transport with intent. Workflows don't get verbs either — they're a meta-layer that *composes* intent into sequences. The rule is locked as a numbered invariant in [SPEC §23.6](https://github.com/matt-cochran/mcp-flowgate/blob/main/SPEC.md#236-the-numbered-invariant).
+
+Practical consequence: when you're modeling a new capability and wondering whether to put a `verb:` on it, ask whether it's expressing intent (skill or script) or providing access (connection, capability, or executor). If access, no verb. If intent, pick the closed-enum verb that fits.
+
+## Compared to flat skills (e.g. mattpocock/skills)
+
+| mattpocock/skills | Flowgate cognitive architectures |
+|---|---|
+| Static markdown files | YAML with runtime semantics (verb, lifecycle, hash, subject namespace) |
+| Model reads raw text | Gateway surfaces via HATEOAS; hash-invalidated cache |
+| No runtime structure | Skills referenced by workflows; workflows compose skills |
+| One mental model per file | One mental model per file, plus the orchestration that uses it |
+
+mattpocock/skills is a great library. The mental models are good. Flowgate's bet is that mental models alone aren't enough — you also need the state machine that decides when to load each one, the audit trail that records what fired, and the governance that keeps the dangerous transitions human-gated. The skills layer is necessary but not sufficient.
+
+## Where to find them
+
+The curated library lives in a sibling repo: [`cognitive-architectures`](https://github.com/matt-cochran/cognitive-architectures). It's the adoption surface — proven Flowgate configurations you copy into your own setup.
+
+The current library contents:
+
+- **9 skills** covering the eight verbs across review, plan, implement, diagnose, debug, deploy, triage, and compose
+- **6 workflows**: `swe-agent`, `pr-review`, `deploy-pipeline`, `tdd`, `triage-router`, `content-publish`
+- **5 agent configs**: reference tier setups for planning, retrieval, editing, critique, and thin-LLM roles
+- **5 connections**: ready-to-wire definitions for StructureOS, GitHub MCP, verifier harness, codebase graph, and constrained-edit
+- **3 composed examples**: `full-swe-pipeline`, `review-only`, `deploy-with-governance` — gateway configs that assemble everything end-to-end
+
+Start with `review-only` if you want the shortest path from clone to running.
+
+## Scripts: the action vocabulary
+
+Skills are guidance for an LLM. They're prose. Their job is to shape what the model thinks about.
+
+Scripts are the peer concept for the workflow engine. Where skills tell the LLM what to think, scripts tell the workflow what to do — deterministically, without any model involvement. A `scripts:` block declares a library of curated script bodies; the `script` executor invokes them by subject.
+
+```yaml
+scripts:
+  build.cargo.release:
+    verb: build
+    lifecycle: stable
+    body: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      cargo build --release --locked "$@"
+
+workflows:
+  ci:
+    states:
+      building:
+        transitions:
+          done:
+            target: testing
+            executor: { kind: script, subject: build.cargo.release }
+```
+
+Scripts get the same treatment skills do:
+
+- **Closed verb enum** — eight action verbs (`build`, `test`, `deploy`, `format`, `lint`, `install`, `verify`, `run`). Different vocabulary from cognitive verbs because a bash script doesn't `triage` or `explain` — it builds, tests, deploys.
+- **Subject namespaces** — dotted, kebab, blessed-root-enforced. `build.cargo.release`, `test.pytest.coverage`, `deploy.production.rollout`.
+- **Hash pinning** — the workflow's instance snapshot stamps the body hash. A future replay can pull the exact code that ran from cold storage by hash. Editing the body after `flowgate.command({definitionId})` (start) is invisible to in-flight instances.
+- **Body source** — either inline `body: |` literal, OR external `uri: file://...` + `hash: sha256:...` (v1 supports `file://` only; remote URIs are planned).
+- **Authoring-time discovery** — `flowgate.query({ kind: "script", query: "build cargo" })` returns refs filterable by verb, subject root, and source.
+- **Acknowledged-before-execute guard** — pair the `script` executor with a `script_acknowledged` guard for destructive scripts. The workflow refuses to run until an operator has called `flowgate.query({subject: "script:<subject>"})` on the current body. Hash flip invalidates the prior ack — editing the script forces re-review.
+
+The point: instead of inlining brittle `command: ["bash", "-c", "..."]` arrays across every workflow, curate a library. Operators replace the library wholesale per environment; workflows reference subjects, not commands.
+
+## Authoring preferences: steering LLM-driven library growth
+
+When an authoring workflow has an LLM generate new scripts (or skills, or workflows), the operator usually has a runtime preference — "default to bash here," "prefer Python for new ML scripts," "PowerShell in the Windows lab." `flowgate.authoring.preferred_script_language` lets you declare that once:
+
+```yaml
+flowgate:
+  authoring:
+    preferred_script_language: bash    # or "python3", "powershell", "node"
+```
+
+Authoring skills then reference the preference via template substitution:
+
+```yaml
+skills:
+  authoring.skill.script-shape:
+    verb: implement
+    lifecycle: stable
+    body: |
+      When writing a new script, default to {{$.flowgate.authoring.preferred_script_language}}
+      unless the task specifically requires a different runtime (cross-platform need,
+      missing interpreter, performance constraint).
+```
+
+The preference is **advisory by construction** — no runtime branch enforces it, no validator rejects a script for ignoring it. The single mechanism is the template substitution at skill-render time, so the LLM sees the operator's choice in its system prompt. When no preference is declared, the template renders as `(preferred_script_language: unset)` and the LLM picks freely.
+
+The full mechanism (snapshot stamping, template root, validation) is documented in [SPEC §23.8](https://github.com/outboundlabs/mcp-flowgate/blob/main/SPEC.md#238-authoring-preferences-advisory). The `cognitive-architectures/skills/authoring.skill.script-shape.yaml` skill is a worked example.
+
+## Parallelism: compressing wall-clock without changing the state machine
+
+Architectures sometimes need to run independent activities concurrently — 50 SCIP queries against a codebase, 20 validation scenarios against a patch, multiple reviewers / critics fanning out across one diff. Sequential execution wastes wall-clock; first-class parallelism doesn't.
+
+The `parallel` executor kind (SPEC §24) fans out N branches **inside a single transition**. Each branch is any executor config (`script`, `mcp`, `cli`, `rest`, `workflow`, even nested `parallel`); the executor aggregates results and the workflow's state machine still sees just one slow-but-normal executor call. CPM "crashing" is the mental model.
+
+The constraint that makes it safe: fan-out happens INSIDE one executor invocation. Branches never touch the workflow store directly; the parent executor returns one aggregated `ExecuteResult`. One version bump, one transition record, one shared correlation_id with per-branch events linked underneath.
+
+Use cases this unlocks: parallel research, parallel validation, parallel PR review, parallel simulation / pressure-testing at multiple abstraction levels, parallelized FMECA exploring potential failure modes. See [Parallel execution](/reference/parallel-execution/) for the full reference.
+
+## Next steps
+
+- [Cognitive verbs and subject namespaces](/reference/cognitive-verbs/) — the closed enum of eight verbs and the blessed roots
+- [Parallel execution](/reference/parallel-execution/) — fan-out / fan-in inside one transition
+- [Composing a small architecture from scratch](/guides/composing-an-architecture/) — build a minimal code-review architecture end-to-end

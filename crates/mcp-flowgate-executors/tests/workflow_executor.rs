@@ -100,11 +100,16 @@ async fn sub_workflow_completes_and_returns_context() {
                 id: "parent_wf".to_string(),
                 definition_id: "parent".to_string(),
                 definition_version: "1.0.0".to_string(),
+                definition: json!({"initialState": "running", "states": {}}),
                 state: "running".to_string(),
                 version: 1,
                 input: json!({}),
                 context: json!({}),
                 started_at: chrono::Utc::now(),
+                trace_id: None,
+                run_id: None,
+                cancelled_at: None,
+                cancelled_reason: None,
             },
             transition: Some("run_sub".to_string()),
             arguments: json!({}),
@@ -113,6 +118,7 @@ async fn sub_workflow_completes_and_returns_context() {
                 "input": {},
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await
         .unwrap();
@@ -140,11 +146,16 @@ async fn sub_workflow_polls_until_terminal() {
                 id: "parent_wf_2".to_string(),
                 definition_id: "parent".to_string(),
                 definition_version: "1.0.0".to_string(),
+                definition: json!({"initialState": "running", "states": {}}),
                 state: "running".to_string(),
                 version: 1,
                 input: json!({}),
                 context: json!({}),
                 started_at: chrono::Utc::now(),
+                trace_id: None,
+                run_id: None,
+                cancelled_at: None,
+                cancelled_reason: None,
             },
             transition: Some("run_sub".to_string()),
             arguments: json!({}),
@@ -157,6 +168,7 @@ async fn sub_workflow_polls_until_terminal() {
                 "timeoutMs": 5_000,
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await
         .unwrap();
@@ -175,11 +187,16 @@ async fn sub_workflow_times_out() {
                 id: "parent_wf_3".to_string(),
                 definition_id: "parent".to_string(),
                 definition_version: "1.0.0".to_string(),
+                definition: json!({"initialState": "running", "states": {}}),
                 state: "running".to_string(),
                 version: 1,
                 input: json!({}),
                 context: json!({}),
                 started_at: chrono::Utc::now(),
+                trace_id: None,
+                run_id: None,
+                cancelled_at: None,
+                cancelled_reason: None,
             },
             transition: Some("run_sub".to_string()),
             arguments: json!({}),
@@ -189,6 +206,7 @@ async fn sub_workflow_times_out() {
                 "timeoutMs": 100,
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await;
 
@@ -211,11 +229,16 @@ async fn sub_workflow_missing_definition_surfaces_as_executor_error() {
                 id: "parent_wf_err".to_string(),
                 definition_id: "parent".to_string(),
                 definition_version: "1.0.0".to_string(),
+                definition: json!({"initialState": "running", "states": {}}),
                 state: "running".to_string(),
                 version: 1,
                 input: json!({}),
                 context: json!({}),
                 started_at: chrono::Utc::now(),
+                trace_id: None,
+                run_id: None,
+                cancelled_at: None,
+                cancelled_reason: None,
             },
             transition: Some("run_sub".to_string()),
             arguments: json!({}),
@@ -224,6 +247,7 @@ async fn sub_workflow_missing_definition_surfaces_as_executor_error() {
                 "input": {},
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await;
 
@@ -248,11 +272,16 @@ async fn sub_workflow_audit_events_emitted() {
                 id: "parent_wf_4".to_string(),
                 definition_id: "parent".to_string(),
                 definition_version: "1.0.0".to_string(),
+                definition: json!({"initialState": "running", "states": {}}),
                 state: "running".to_string(),
                 version: 1,
                 input: json!({}),
                 context: json!({}),
                 started_at: chrono::Utc::now(),
+                trace_id: None,
+                run_id: None,
+                cancelled_at: None,
+                cancelled_reason: None,
             },
             transition: Some("run_sub".to_string()),
             arguments: json!({}),
@@ -261,6 +290,7 @@ async fn sub_workflow_audit_events_emitted() {
                 "input": {},
             }),
             idempotency_key: None,
+            correlation_id: None,
         })
         .await
         .unwrap();

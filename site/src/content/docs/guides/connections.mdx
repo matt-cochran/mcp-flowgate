@@ -132,7 +132,7 @@ The gateway calls `tools/list` on each connection at startup and creates proxy e
 
 **`prefix`** -- prepended to each tool name with a dot separator. Keeps names from colliding when you import from multiple servers.
 
-**`tags`** -- applied to all imported tools. Makes them findable in `gateway.search`.
+**`tags`** -- applied to all imported tools. Makes them findable in `flowgate.query({query})` search.
 
 You can mix imports with explicit declarations. Declared capabilities can carry guards, reliability policies, and audit hooks that imports don't have by default:
 
@@ -387,4 +387,4 @@ proxy:
           text: "$.arguments.text"
 ```
 
-Three connection kinds, three executor kinds, all wired through the same seven tools. The model searches for "deploy" or "notify slack" through `gateway.search` and follows links from there.
+Three connection kinds, three executor kinds, all wired through the same two tools. The model searches for "deploy" or "notify slack" through `flowgate.query({query})` and follows links from there.
