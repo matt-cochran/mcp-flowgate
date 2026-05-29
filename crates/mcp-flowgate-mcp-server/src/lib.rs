@@ -396,11 +396,13 @@ impl FlowgateServer {
                     workflow_id_context,
                 }) = e.downcast_ref::<mcp_flowgate_core::RuntimeError>()
                 {
+                    let merged = self.lexicon_merged_definition();
                     return Ok(subject_needs_definition(
                         unknown_subject,
                         bounded_context.as_deref(),
                         workflow_id_context,
                         &original_args,
+                        Some(&merged),
                     ));
                 }
 

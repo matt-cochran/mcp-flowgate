@@ -1080,8 +1080,10 @@ impl FlowgateServer {
     /// Build a synthetic "workflow definition" carrying the merged
     /// `_lexiconLibrary` so the core `lookup_term` / `search_terms`
     /// helpers (which expect a workflow-definition shape) can be
-    /// reused without duplication.
-    fn lexicon_merged_definition(&self) -> Value {
+    /// reused without duplication. Also used by `dispatch_call` to
+    /// supply the lexicon snapshot for candidate ranking in
+    /// `SUBJECT_NEEDS_DEFINITION` responses.
+    pub(crate) fn lexicon_merged_definition(&self) -> Value {
         let base = self
             .lexicon_base
             .as_object()
@@ -1169,15 +1171,33 @@ pub(crate) fn run_id_already_running(run_id: &str, existing_workflow_id: &str) -
 /// - `define_new`     — add a new first-class lexicon entry.
 /// - `cancel`         — abandon the original command.
 ///
-/// The `candidates` array is intentionally empty here. Task 3.4 (Levenshtein
-/// ranking) and Task 3.9 (semantic ranking) will populate it.
+/// `merged_definition` is the synthetic `{ _lexiconLibrary: … }` value from
+/// `FlowgateServer::lexicon_merged_definition`. It is used to rank Tier 1/2/4
+/// candidates (SPEC §30.10.10.4) — exact canonical, exact alias, Levenshtein
+/// fuzzy ≤ 2. Pass `None` (or an empty object) to receive an empty candidates
+/// array (backward-compatible fallback).
 pub(crate) fn subject_needs_definition(
     unknown_subject: &str,
     bounded_context: Option<&str>,
     workflow_id_context: &str,
     queued_args: &Value,
+    merged_definition: Option<&Value>,
 ) -> Value {
     let lexicon_subject = format!("lexicon:{unknown_subject}");
+
+    // Compute candidates from Tier 1, 2, 4.
+    let candidates: serde_json::Value = match merged_definition {
+        Some(def) => {
+            let ranked = mcp_flowgate_core::lexicon_candidates::rank_candidates_from_definition(
+                unknown_subject,
+                def,
+                bounded_context,
+            );
+            mcp_flowgate_core::lexicon_candidates::candidates_to_json(&ranked)
+        }
+        None => serde_json::Value::Array(vec![]),
+    };
+
     json!({
         "interaction": {
             "kind": "SUBJECT_NEEDS_DEFINITION",
@@ -1186,7 +1206,7 @@ pub(crate) fn subject_needs_definition(
                 "encountered_in": workflow_id_context,
                 "bounded_context": bounded_context
             },
-            "candidates": []
+            "candidates": candidates
         },
         "queued_command": {
             "method": "flowgate.command",

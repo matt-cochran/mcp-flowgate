@@ -42,6 +42,7 @@ pub mod model;
 pub mod ports;
 pub mod proxy_workflow;
 pub mod lexicon;
+pub mod lexicon_candidates;
 pub mod reliability;
 pub mod repo;
 pub mod runtime;
