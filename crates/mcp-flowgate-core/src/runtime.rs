@@ -162,6 +162,19 @@ impl WorkflowRuntime {
         &self.audit
     }
 
+    /// SPEC §30.10 — load a workflow instance by id without triggering
+    /// timeout/cancellation checks. Used by handlers that need to inspect
+    /// the instance's definition snapshot for lexicon embedding (describe,
+    /// get, explain augmentation paths). Not a substitute for `get()` in
+    /// normal workflow operations; that path includes the full timeout and
+    /// cancellation pipeline.
+    pub async fn load_instance(
+        &self,
+        workflow_id: &str,
+    ) -> anyhow::Result<crate::model::WorkflowInstance> {
+        self.store.load(workflow_id).await
+    }
+
     /// T24 — cancel a running workflow. Sets `cancelled_at` +
     /// `cancelled_reason` on the instance (without changing `state`,
     /// so the operator can later recover by reading the original

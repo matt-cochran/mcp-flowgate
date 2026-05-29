@@ -110,6 +110,24 @@ impl FlowgateServer {
                             }
                         ]),
                     );
+                    // SPEC §30.10 — embed lexicon entry for this script's
+                    // subject using the workflow's pinned lexicon snapshot.
+                    if let Ok(instance) = self.runtime.load_instance(workflow_id).await {
+                        let snapshot_lex = instance
+                            .definition
+                            .get("_lexiconLibrary")
+                            .cloned()
+                            .unwrap_or_else(|| json!({}));
+                        let merged = json!({ "_lexiconLibrary": snapshot_lex });
+                        let term = subject_portion_from_skill_key(&id).to_string();
+                        if let Some(lex) = embed_lexicon_for_subjects(
+                            &[term.as_str()],
+                            &merged,
+                            LEXICON_INLINE_BUDGET,
+                        ) {
+                            obj.insert("lexicon".into(), lex);
+                        }
+                    }
                 }
                 return Ok(body);
             }
@@ -153,6 +171,27 @@ impl FlowgateServer {
                             }
                         ]),
                     );
+                    // SPEC §30.10 — embed lexicon entries for this guidance
+                    // subject + its refs using the workflow's pinned snapshot.
+                    if let Ok(instance) = self.runtime.load_instance(workflow_id).await {
+                        let snapshot_lex = instance
+                            .definition
+                            .get("_lexiconLibrary")
+                            .cloned()
+                            .unwrap_or_else(|| json!({}));
+                        let merged = json!({ "_lexiconLibrary": snapshot_lex });
+                        let term = subject_portion_from_skill_key(&id).to_string();
+                        let terms = collect_describe_terms(&term, &merged);
+                        let term_refs: Vec<&str> =
+                            terms.iter().map(String::as_str).collect();
+                        if let Some(lex) = embed_lexicon_for_subjects(
+                            &term_refs,
+                            &merged,
+                            LEXICON_INLINE_BUDGET,
+                        ) {
+                            obj.insert("lexicon".into(), lex);
+                        }
+                    }
                 }
                 return Ok(body);
             }
@@ -188,7 +227,13 @@ impl FlowgateServer {
                     None,
                 )
                 .await;
-                return Ok(json!({
+                // SPEC §30.10 — embed lexicon entry for this guidance
+                // subject + its refs using the live (merged) lexicon.
+                let merged = self.lexicon_merged_definition();
+                let term = subject_portion_from_skill_key(&id).to_string();
+                let terms = collect_describe_terms(&term, &merged);
+                let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+                let mut resp = json!({
                     "kind": "guidance",
                     "subject": item.id,
                     "verb": item.verb.as_deref().unwrap_or_default(),
@@ -197,7 +242,13 @@ impl FlowgateServer {
                         { "rel": "home", "method": "flowgate.query", "args": {} },
                         { "rel": "search", "method": "flowgate.query", "args": { "query": "" } }
                     ]
-                }));
+                });
+                if let Some(lex) =
+                    embed_lexicon_for_subjects(&term_refs, &merged, LEXICON_INLINE_BUDGET)
+                {
+                    resp["lexicon"] = lex;
+                }
+                return Ok(resp);
             }
             // SPEC §22 — non-workflow-context script describe: surface
             // body from the live indexer. (For workflow-context script
@@ -213,7 +264,11 @@ impl FlowgateServer {
                     None,
                 )
                 .await;
-                return Ok(json!({
+                // SPEC §30.10 — embed lexicon entry for this script's
+                // subject using the live (merged) lexicon.
+                let merged = self.lexicon_merged_definition();
+                let term = subject_portion_from_skill_key(&id).to_string();
+                let mut resp = json!({
                     "kind": "script",
                     "subject": item.id,
                     "verb": item.verb.as_deref().unwrap_or_default(),
@@ -222,7 +277,15 @@ impl FlowgateServer {
                         { "rel": "home", "method": "flowgate.query", "args": {} },
                         { "rel": "search", "method": "flowgate.query", "args": { "query": "" } }
                     ]
-                }));
+                });
+                if let Some(lex) = embed_lexicon_for_subjects(
+                    &[term.as_str()],
+                    &merged,
+                    LEXICON_INLINE_BUDGET,
+                ) {
+                    resp["lexicon"] = lex;
+                }
+                return Ok(resp);
             }
         }
 
@@ -454,14 +517,37 @@ impl FlowgateServer {
             .workflow_id
             .ok_or_else(|| anyhow::anyhow!("workflowId is required"))?;
 
-        self.runtime
+        let mut resp = self
+            .runtime
             .get(GetWorkflow {
-                workflow_id,
+                workflow_id: workflow_id.clone(),
                 principal,
                 trace_id: parsed.trace_id,
                 run_id: parsed.run_id,
             })
-            .await
+            .await?;
+
+        // SPEC §30.10 — embed lexicon entries for the current state's skill
+        // subjects. Load the instance snapshot to read _lexiconLibrary and
+        // the current state's skills list. Non-critical: a load failure
+        // (rare) just skips embedding.
+        if let Ok(instance) = self.runtime.load_instance(&workflow_id).await {
+            let snapshot_lex = instance
+                .definition
+                .get("_lexiconLibrary")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let merged = json!({ "_lexiconLibrary": snapshot_lex });
+            let terms = lexicon_terms_for_state(&instance.definition, &instance.state);
+            let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+            if let Some(lex) =
+                embed_lexicon_for_subjects(&term_refs, &merged, LEXICON_INLINE_BUDGET)
+            {
+                resp["lexicon"] = lex;
+            }
+        }
+
+        Ok(resp)
     }
 
     pub(crate) async fn handle_submit(
@@ -503,7 +589,28 @@ impl FlowgateServer {
         let transition = parsed
             .transition
             .ok_or_else(|| anyhow::anyhow!("transition is required"))?;
-        self.runtime.explain(&workflow_id, &transition).await
+        let mut resp = self.runtime.explain(&workflow_id, &transition).await?;
+
+        // SPEC §30.10 — embed lexicon entries for the current state's skill
+        // subjects. The explain response carries `currentState` so we can
+        // identify in-scope skills. Non-critical: load failure skips embedding.
+        if let Ok(instance) = self.runtime.load_instance(&workflow_id).await {
+            let snapshot_lex = instance
+                .definition
+                .get("_lexiconLibrary")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            let merged = json!({ "_lexiconLibrary": snapshot_lex });
+            let terms = lexicon_terms_for_state(&instance.definition, &instance.state);
+            let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+            if let Some(lex) =
+                embed_lexicon_for_subjects(&term_refs, &merged, LEXICON_INLINE_BUDGET)
+            {
+                resp["lexicon"] = lex;
+            }
+        }
+
+        Ok(resp)
     }
 
     // ── SPEC §30 — Lexicon tools ──────────────────────────────────────────
@@ -1245,6 +1352,147 @@ pub(crate) fn subject_needs_definition(
             }
         ]
     })
+}
+
+// ── SPEC §30.10 lexicon-embedding helpers ─────────────────────────────────────
+
+/// SPEC §30.10 — inline budget per entry (bytes of `definition_short`).
+const LEXICON_INLINE_BUDGET: usize = 200;
+
+/// SPEC §30.10 — build the `lexicon` field for describe/get/explain responses.
+///
+/// `terms` is the list of lexicon term names (e.g. `["change-request"]`, NOT
+/// full `verb.subject` keys). For each term:
+///
+/// - Skip `PENDING_DEFINITION` placeholders entirely.
+/// - If `definition_short` fits within `budget` bytes → inline as
+///   `{definition_short: "..."}`.
+/// - Otherwise → compact shape with a `lookup_link` so the caller can fetch
+///   on demand, plus a `hash` for cache-busting:
+///   `{hash: "sha256:...", lookup_link: {rel: "lexicon", method: "flowgate.query", args: {subject: "lexicon:<term>"}}}`.
+///
+/// Returns `None` when no terms have an entry in the lexicon (so callers can
+/// omit the `lexicon` field entirely rather than emitting `lexicon: {}`).
+pub(crate) fn embed_lexicon_for_subjects(
+    terms: &[&str],
+    merged_def: &Value,
+    budget: usize,
+) -> Option<Value> {
+    let lib = merged_def
+        .get("_lexiconLibrary")
+        .and_then(Value::as_object)?;
+
+    let mut out = serde_json::Map::new();
+
+    for &term in terms {
+        let Some(entry) = lib.get(term) else { continue };
+        // Skip placeholders — they have no definition to embed.
+        if entry
+            .get("state")
+            .and_then(Value::as_str)
+            == Some("PENDING_DEFINITION")
+        {
+            continue;
+        }
+        let definition_short = entry
+            .get("definition_short")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if definition_short.len() <= budget {
+            out.insert(
+                term.to_string(),
+                json!({ "definition_short": definition_short }),
+            );
+        } else {
+            // Over budget — emit hash + lookup_link.
+            let hash = mcp_flowgate_core::contract_hash::compute_contract_hash(entry);
+            out.insert(
+                term.to_string(),
+                json!({
+                    "hash": hash,
+                    "lookup_link": {
+                        "rel": "lexicon",
+                        "method": "flowgate.query",
+                        "args": { "subject": format!("lexicon:{term}") }
+                    }
+                }),
+            );
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
+    }
+}
+
+/// Extract the post-first-dot subject portion from a `verb.subject[.etc]` key.
+///
+/// `"plan.change-request"` → `"change-request"`
+/// `"review.style.house-voice"` → `"style.house-voice"`
+/// `"no-dot"` → `"no-dot"` (no dot: return as-is; config validation already
+/// enforces `verb.subject` form for real skill keys)
+fn subject_portion_from_skill_key(key: &str) -> &str {
+    match key.find('.') {
+        Some(idx) => &key[idx + 1..],
+        None => key,
+    }
+}
+
+/// Collect the full set of lexicon terms to embed for a `describe` response.
+///
+/// Starting from `primary_term` (the subject portion of the described id),
+/// walks the entry's `refs` field in the merged lexicon and returns the
+/// combined list: `[primary_term, ref1, ref2, ...]`. Unknown refs are silently
+/// dropped (they'll just be absent from the embedded lexicon). Deduplicates.
+pub(crate) fn collect_describe_terms(primary_term: &str, merged_def: &Value) -> Vec<String> {
+    let mut terms = vec![primary_term.to_string()];
+    let lib = merged_def
+        .get("_lexiconLibrary")
+        .and_then(Value::as_object);
+    if let Some(lib) = lib {
+        if let Some(entry) = lib.get(primary_term) {
+            if let Some(refs) = entry.get("refs").and_then(Value::as_array) {
+                for r in refs {
+                    if let Some(ref_term) = r.as_str() {
+                        if !terms.contains(&ref_term.to_string()) {
+                            terms.push(ref_term.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    terms
+}
+
+/// Collect lexicon term names for the skills referenced in `state_name` of
+/// `definition`. Returns a `Vec<String>` of term names (post-first-dot portion
+/// of each full `verb.subject` skill key). Used by the get and explain
+/// embedding paths to identify which lexicon entries are in scope.
+pub(crate) fn lexicon_terms_for_state(definition: &Value, state_name: &str) -> Vec<String> {
+    let state_path = format!("/states/{}", pointer_escape(state_name));
+    let state_def = match definition.pointer(&state_path) {
+        Some(s) => s,
+        None => return vec![],
+    };
+    let Some(skills) = state_def.get("skills").and_then(Value::as_array) else {
+        return vec![];
+    };
+    skills
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|key| subject_portion_from_skill_key(key).to_string())
+        .collect()
+}
+
+/// Use [`pointer_escape`] from the runtime_links module via the re-exported
+/// helper in mcp_flowgate_core. (The function is `pub(crate)` there so we
+/// replicate the minimal escaping logic here rather than adding a new public
+/// export just for this one-liner.)
+fn pointer_escape(s: &str) -> String {
+    s.replace('~', "~0").replace('/', "~1")
 }
 
 /// Structured AMBIGUOUS_INTENT response body for `flowgate.command` dispatch.
