@@ -482,71 +482,132 @@ Group 2 complete.
 
 ---
 
-## Group 3 — Embedded lexicon + CLI
+## Group 3 — Lexicon discipline (aliases + placeholders + SUBJECT_NEEDS_DEFINITION)
 
-Goal: embed lexicon definitions in describe/get/explain response bodies; ship `flowgate lexicon define` CLI subcommand.
+**Goal (revised post-3.0 design discussion):** Promote the lexicon from "supplementary documentation" to the **schema for the system's vocabulary**. API-level identifiers (subjects in verb-subject pairs) must be registered. Unregistered subjects don't hard-fail config load — they become `PENDING_DEFINITION` placeholders that block any workflow whose reachable surface includes them. When the runtime encounters one, it pauses execution and surfaces a `SUBJECT_NEEDS_DEFINITION` interaction with Levenshtein-ranked candidates + three resolution links (link_as_alias, define_new, cancel). The system learns its own vocabulary as it encounters it.
 
-### Task 3.0: Term-extraction design discussion (operator + implementer)
+**Canonical spec:** SPEC §30.10. Anywhere this section is terse, defer to §30.10.
 
-**Before any code lands in Group 3.** The operator flagged that regex-first-pass is fine for v0.5 but wants to revisit before implementation. Topics to settle in that conversation:
+### Task 3.0: Term-extraction design discussion ✅ COMPLETE
 
-- Identifier regex: liberal (any `[a-z][a-z0-9-]+`) vs. constrained (only terms registered in the snapshot's lexicon)?
-- Match against the lexicon's known terms — intersect at extract time, or pre-filter the regex with a known-term list?
-- Tokenization rules for hyphenated terms (`acceptance-criteria` → one token vs. three)?
-- Caching: per-snapshot-hash vs. per-guidance-body-hash; eviction policy.
-- Denylist for noisy common words.
+Resolved in conversation. Decisions locked into SPEC §30.10:
+- Verbs ride existing closed-enum taxonomies (cognitive-verbs / cap-verbs / script-verbs); only **subjects** are lexicon-registered.
+- Aliases as a first-class lexicon field carry singular/plural and hyphen/underscore/space variants.
+- Unknown subjects → `PENDING_DEFINITION` placeholders at load, blocking execution.
+- Pre-start subject walk; no snapshot pinning without lexical clarity. §8.2 preserved by construction.
+- `SUBJECT_NEEDS_DEFINITION` first-class interaction protocol with Levenshtein candidates + three resolution links.
+- Cancel is a real resolution path (abandons the original command).
 
-Output: a short addendum to §32 OQ3 confirming the chosen approach. **Block Task 3.1 on this conversation.**
-
-### Task 3.1: Term extractor (regex first-pass)
-
-**Files:**
-- Create: `crates/mcp-flowgate-core/src/lexicon_extract.rs` (or extend existing `lexicon.rs`)
-- Add tests inline.
-
-- [ ] **Step 1: Failing tests.** Input: a markdown guidance body referencing `acceptance-criteria`, `blackboard`, and a non-lexicon word `foo`. Expected output: `["acceptance-criteria", "blackboard"]` (only matches against the configured lexicon vocabulary).
-
-- [ ] **Step 2: Implement** per the approach settled in Task 3.0. Default sketch: regex matches identifier-shaped tokens; intersect with the lexicon's known terms (from pinned snapshot); return sorted unique list. Cache per-snapshot-hash.
-
-- [ ] **Step 3: Commit.**
-```bash
-git commit -m "feat(core): lexicon term extractor with snapshot-keyed cache"
-```
-
-### Task 3.2: Embed `lexicon` field in describe/get/explain responses
+### Task 3.1: Lexicon snapshot index + aliases field + collision detection
 
 **Files:**
-- Modify: `crates/mcp-flowgate-mcp-server/src/handlers.rs` (augment `handle_describe`, `handle_get`, `handle_explain` returns)
-- Modify: `crates/mcp-flowgate-core/src/runtime.rs` (or wherever response assembly happens) — pass lexicon definitions through
+- Modify: `crates/mcp-flowgate-core/src/lexicon.rs` (or wherever the snapshot-time lexicon resolution lives)
+- Modify: `schemas/gateway-config.schema.json` (add `aliases` field to lexicon entry schema)
 
-- [ ] **Step 1: Failing test.** Describe a guidance that references `acceptance-criteria`. Assert response has `lexicon: { "acceptance-criteria": "..." }`. Oversized definitions become `lookup_link` per spec.
+- [ ] **Failing tests.** Lexicon entry with `aliases: ["evidence-packs"]`: lookup of the canonical term returns the entry; lookup of the alias returns the same entry. Collision case: two entries with overlapping aliases within the same bounded context fail load with `LEXICON_ALIAS_COLLISION`. Cross-bounded-context overlap is allowed.
 
-- [ ] **Step 2: Implement.** Embed terms inline up to a configurable size (suggest 200 bytes per spec OQ1); over the budget, emit `{ hash, lookup_link: { rel: "lexicon", method: "flowgate.query", args: { subject: "lexicon:<term>" } } }`.
+- [ ] **Implement.** Add `aliases: Option<Vec<String>>` to the lexicon entry struct. At snapshot-pin time, build a single `HashMap<String, &LexiconEntry>` keyed by canonical term + every alias. Implement load-time collision detection within bounded context.
 
-- [ ] **Step 3: Commit.**
-```bash
-git commit -m "feat(mcp-server): embed lexicon field in describe/get/explain responses"
-```
+- [ ] **Commit:** `feat(core): lexicon aliases field + snapshot-time index (SPEC §30.10.1)`
 
-### Task 3.3: `flowgate lexicon define` CLI subcommand
+### Task 3.2: Config-load subject discovery + `PENDING_DEFINITION` placeholders
 
 **Files:**
-- Modify: `crates/mcp-flowgate/src/main.rs` (or appropriate CLI entry — locate by `grep -n "Subcommand" crates/mcp-flowgate/src/`)
-- Reuse: existing lexicon-define handler logic (same code path as MCP dispatch, so the CLI calls it directly without going through the MCP layer)
+- Modify: `crates/mcp-flowgate-core/src/config.rs` (or wherever config-resolve happens) — walk all `<verb>.<subject>` references
+- Modify: `crates/mcp-flowgate-core/src/lexicon.rs` — add `state: LexiconEntryState::PendingDefinition { referenced_in: Vec<Location> }` variant
+- Modify: `crates/mcp-flowgate-tui/src/doctor.rs` — add `lexicon_coverage` check listing pending subjects + blocked workflows
 
-- [ ] **Step 1: Test.** `flowgate lexicon define churn --definition "Loss of paying customer." --bounded-context billing` persists; emit `lexicon.defined` audit; exit 0.
+- [ ] **Failing tests.** A config that references subject `evidence-foo` not in lexicon loads successfully; lexicon snapshot contains a placeholder entry for `evidence-foo`; doctor reports it.
 
-- [ ] **Step 2: Implement** as a thin wrapper invoking the runtime's lexicon path with `Principal::cli` (or equivalent).
+- [ ] **Implement.** Walk script subjects, skill subjects, capability subjects, transition delegate targets, workflow `system`/`subject` metadata. For each not in the lexicon, create a placeholder.
 
-- [ ] **Step 3: Commit.**
-```bash
-git commit -m "feat(cli): flowgate lexicon define subcommand"
-```
+- [ ] **Commit:** `feat(core): PENDING_DEFINITION placeholders for unresolved subjects (SPEC §30.10.3)`
+
+### Task 3.3: Pre-start subject walk + `SUBJECT_NEEDS_DEFINITION` response shape
+
+**Files:**
+- Modify: `crates/mcp-flowgate-core/src/runtime.rs::start` (add the walk before snapshot pin)
+- Modify: `crates/mcp-flowgate-mcp-server/src/handlers.rs` (translate the new runtime error into the structured response)
+- Modify: `crates/mcp-flowgate-core/src/error.rs` (add `SubjectNeedsDefinition` error variant)
+
+- [ ] **Failing test.** Start a workflow whose reachable subjects include an unresolved one. Assert `Ok(structured response)` with `interaction.kind == "SUBJECT_NEEDS_DEFINITION"`, `queued_command` echoing the original args, and a `links` array.
+
+- [ ] **Implement.** Pre-create walk against the workflow definition's reachable subjects. On any `PENDING_DEFINITION` hit, return the structured response. **Do not** create the workflow instance. Same shape applies mid-workflow (later tasks reuse the response builder).
+
+- [ ] **Commit:** `feat(runtime): pre-start subject walk; SUBJECT_NEEDS_DEFINITION interaction (SPEC §30.10.4-5)`
+
+### Task 3.4: Levenshtein candidate ranking
+
+**Files:**
+- Create: `crates/mcp-flowgate-core/src/lexicon_candidates.rs`
+- Integrate from §3.3's response builder.
+
+- [ ] **Failing test.** Unknown subject `evidence-foo` against a lexicon containing `evidence-pack` + `evidence-record` returns candidates with `evidence-pack` at distance 2 (`fuzzy_close`) and `evidence-record` at distance 3 (`fuzzy_loose`). Empty candidates when no entry is within distance 2.
+
+- [ ] **Implement.** For the unknown subject, compute Levenshtein distance against every (canonical-term ∪ aliases) within the bounded context. Top 5 by ascending distance, threshold ≤ 2. Each entry: `{ term, distance, match_kind: fuzzy_close|fuzzy_loose, definition_preview: first-100-chars }`.
+
+- [ ] **Commit:** `feat(core): Levenshtein candidate ranking for SUBJECT_NEEDS_DEFINITION (SPEC §30.10.6)`
+
+### Task 3.5: Resolution handlers — `link_as_alias`, `define_new`, `cancel`
+
+**Files:**
+- Modify: `crates/mcp-flowgate-mcp-server/src/handlers.rs::handle_lexicon_define` (extend to accept `aliases_add` and the resolution intents)
+- Modify: `crates/mcp-flowgate-core/src/runtime.rs` (cancel path: drop placeholder, abandon original command)
+
+- [ ] **Failing tests.** `flowgate.command({ subject: "lexicon:evidence-pack", definition: { aliases_add: ["evidence-foo"] } })` adds the alias and emits `lexicon.alias_added`. `flowgate.command({ subject: "lexicon:evidence-foo", definition: { definition: "..." } })` against a placeholder upgrades it. `flowgate.command({ intent: "cancel_pending_subject", unknown_subject: "evidence-foo" })` drops the placeholder.
+
+- [ ] **Implement.** Each resolution path updates the live (overlay) lexicon and emits a typed audit event per §30.10.7.
+
+- [ ] **Commit:** `feat(mcp-server): SUBJECT_NEEDS_DEFINITION resolution handlers (SPEC §30.10.7)`
+
+### Task 3.6: Embed `lexicon` field in describe/get/explain responses
+
+**Files:**
+- Modify: `crates/mcp-flowgate-mcp-server/src/handlers.rs` (augment describe/get/explain returns)
+- Modify: response assembly to include lexicon for: the response's subject + the lexicon entry's `refs` neighbors.
+
+- [ ] **Failing tests.** Describe a guidance whose subject's lexicon entry references `acceptance-criteria` via `refs`. Assert response has `lexicon: { "subject": "...", "acceptance-criteria": "..." }`. Definitions over 200 bytes become `lookup_link`.
+
+- [ ] **Implement.** Inline up to 200 bytes; oversized → `{ hash, lookup_link: { rel: "lexicon", method: "flowgate.query", args: { subject: "lexicon:<term>" } } }`. Walks the lexicon entry's `refs` for the in-scope set.
+
+- [ ] **Commit:** `feat(mcp-server): embed lexicon field in describe/get/explain (SPEC §30.10)`
+
+### Task 3.7: `flowgate lexicon` CLI subcommand suite
+
+**Files:**
+- Modify: `crates/mcp-flowgate/src/main.rs` or wherever the CLI lives — add `lexicon` subcommand with `define`, `alias`, `cancel`, `list`, `pending` sub-subcommands.
+
+- [ ] **Tests.** Each operator-facing variant:
+  - `flowgate lexicon define churn --definition "..." --bounded-context billing`
+  - `flowgate lexicon alias evidence-pack --add evidence-foo`
+  - `flowgate lexicon cancel evidence-foo`
+  - `flowgate lexicon list [--bounded-context X]`
+  - `flowgate lexicon pending` (list placeholders)
+
+- [ ] **Implement** as thin wrappers calling the runtime path with `Principal::cli`.
+
+- [ ] **Commit:** `feat(cli): flowgate lexicon subcommand suite (SPEC §30.10.7)`
+
+### Task 3.8: Doctor integration — `lexicon coverage` check
+
+**Files:**
+- Modify: `crates/mcp-flowgate-tui/src/doctor.rs`
+
+- [ ] **Tests.** Doctor reports the count of `PENDING_DEFINITION` entries + the list of blocked workflows. Pass if zero pending; warn if any. Exit 0 either way (pending isn't a fatal config error — operators need to resolve them, but the runtime handles the discipline at execution time).
+
+- [ ] **Implement.** New `lexicon coverage` check in the doctor pipeline.
+
+- [ ] **Commit:** `feat(doctor): lexicon coverage check`
 
 ### Group 3 acceptance
 
-- [ ] Describing a guidance with referenced lexicon terms returns inline definitions (or lookup links) in the response.
-- [ ] CLI `flowgate lexicon define <term> --definition "..."` works end-to-end.
+- [ ] Lexicon entries support `aliases`; collisions are caught at load.
+- [ ] Configs with unresolved subjects load with placeholders; doctor reports them.
+- [ ] Starting a workflow with unresolved reachable subjects returns `SUBJECT_NEEDS_DEFINITION` with candidates + 3 resolution links; original command echoed in `queued_command`.
+- [ ] Each resolution path (link_as_alias, define_new, cancel) updates state correctly + emits audit.
+- [ ] After resolution, the original command's retry succeeds.
+- [ ] Describe/get/explain responses include embedded lexicon for subject + `refs` neighbors, inline ≤200 bytes else lookup_link.
+- [ ] `flowgate lexicon {define,alias,cancel,list,pending}` CLI works end-to-end.
 - [ ] `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings` green.
 
 Group 3 complete.
