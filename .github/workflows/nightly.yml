@@ -34,6 +34,13 @@ jobs:
         steps:
             - uses: actions/checkout@v4
 
+            - name: Install system dependencies
+              # libdbus-1-dev is required by libdbus-sys (transitive dep
+              # via aether-auth's OS keyring abstraction on Linux).
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libdbus-1-dev pkg-config
+
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@stable
 
