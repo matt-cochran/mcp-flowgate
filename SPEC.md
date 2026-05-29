@@ -3090,3 +3090,310 @@ One landing PR, sequenced internally so each step compiles green:
 
 Tracked: this section is queued for v0.5. The current 10-tool surface
 remains canonical until v0.5 ships.
+
+
+## 33. In-runtime LLM executor (DRAFT — queued for v0.6)
+
+**Status:** Design draft. Introduces a new `executor: { kind: llm, … }`
+config shape that lets a workflow state dispatch to an LLM directly,
+in-process, with the workflow's current transitions as the model's
+tool surface. Repositions flowgate from "MCP server that an external
+LLM drives" to "runtime that hosts governed LLM execution alongside
+its MCP surface" — without removing the MCP path.
+
+### 33.1 Why
+
+The §32 surface (`flowgate.query` + `flowgate.command`) gives external
+LLM clients (Claude Code, Cursor, custom harnesses) a clean governed
+interface. But when consumed externally, our governance is
+**advisory** — the LLM in the client can:
+
+- Ignore guidance returned by `describe`.
+- Call other MCP tools instead of following HATEOAS links.
+- Skip the workflow entirely.
+- Use its own context rather than our pinned snapshot.
+
+We hand it advice; it does what it wants. When governance matters
+(compliance pipelines, audited automation, deterministic SWE-agent
+loops), advisory-only is a meaningful weakness — operators have asked
+for "the LLM literally cannot do anything except what the workflow
+permits."
+
+Hosting the LLM inside the runtime makes governance **enforced**:
+
+- The tool surface the model sees IS the workflow's available
+  transitions at the current state — nothing more.
+- The context the model sees IS the pinned snapshot + embedded
+  lexicon — never something it brought from outside.
+- Cost / time / step limits are real, not hoped-for.
+- The audit trail is complete because we wrote every line.
+
+The existing infrastructure was designed for this without us realizing
+it. Each piece — typed transitions, guards, blackboard, audit, pinned
+snapshots, lexicon discipline — slots into LLM-execution naturally.
+
+### 33.2 The Executor kind
+
+A new `Executor` impl, `LlmExecutor`, registered in the executor
+registry under `kind: llm`. Same trait as every other executor
+(`crates/mcp-flowgate-core/src/ports.rs::Executor`), so no core
+changes — the integration is plug-in, not architectural.
+
+```yaml
+states:
+  triaging:
+    goal: "Decide whether the issue is a bug, feature request, or noise."
+    transitions:
+      mark_as_bug:
+        target: investigating
+        # ...
+      mark_as_feature:
+        target: backlog
+        # ...
+      close_as_noise:
+        target: closed
+        # ...
+    executor:
+      kind: llm
+      model: anthropic/claude-sonnet-4-6     # or affinity: triage (resolved via agents.yaml)
+      prompt_template: |
+        You are triaging a new issue. The issue body is in
+        $.blackboard.issue_body. Pick exactly one transition.
+      max_iterations: 3
+      max_seconds: 60
+      max_tokens: 2000                        # cost cap
+```
+
+The executor's job at runtime:
+
+1. Read the current state's `goal`, `prompt_template`, and the
+   blackboard slots the prompt references.
+2. Resolve the available transitions at the current state into a tool
+   list. Each transition becomes one tool with a JSON-Schema input
+   matching its `inputSchema` (if any) — defaulting to `{}` for
+   transitions that take no arguments.
+3. Call `aether_llm::Provider::stream_response(context)` with the
+   prompt + tools.
+4. Interpret the streamed response. If the model selects a
+   transition, dispatch it (runs guards, updates blackboard, advances
+   state). If the model emits a final answer without a transition,
+   surface an error — the model was supposed to pick a transition.
+5. Loop until terminal state or `max_iterations` / `max_seconds` /
+   `max_tokens` is reached.
+
+### 33.3 Tool surface = available transitions
+
+Critical invariant: **the LLM's tool list at each turn is exactly the
+set of transitions the workflow allows at the current state.**
+
+- Guards already ran (or will run when the transition is dispatched).
+- A transition whose guards currently reject is omitted from the tool
+  list — the model can't even see it. State-aware tool narrowing,
+  enforced.
+- New states bring new tool lists. The model never sees a tool that
+  doesn't apply to where it is right now.
+
+This is the §32 HATEOAS pattern at the LLM-tool layer: the model
+chooses by picking a link, the runtime executes it, the next state
+produces the next tool list.
+
+### 33.4 Configuration: shared with the TUI via `agents.yaml`
+
+The TUI already resolves `name: provider/model` bindings via
+`agents.yaml` (per the existing affinity / tier resolution at
+`crates/mcp-flowgate-tui/src/agent_resolver/`). The LLM executor reuses
+the same resolver:
+
+```yaml
+executor:
+  kind: llm
+  affinity: triage           # resolved via agents.yaml
+  prompt_template: "..."
+```
+
+This means **one config file** drives both the TUI's sub-agent
+spawning and the runtime's LLM executor. Operators don't configure
+providers twice.
+
+Direct `model:` references (`model: anthropic/claude-sonnet-4-6`)
+also work — they bypass agents.yaml and use the provider name + model
+directly. Useful for one-off cases; agents.yaml is preferred for the
+shared-config posture.
+
+Provider authentication is handled by the existing
+`flowgate set-provider-keys` CLI + `~/.config/flowgate/providers.env`
+file — both aether-llm (chat) and our `HttpEmbedder` (embeddings) read
+from the same env vars. One auth setup; both consumers.
+
+### 33.5 Optional cargo feature: `embeddings-llm-executor`
+
+The `LlmExecutor` lives in a new crate `mcp-flowgate-llm-executor`
+behind a default-on cargo feature:
+
+```toml
+# crates/mcp-flowgate/Cargo.toml
+[features]
+default = ["llm-executor"]
+llm-executor = ["dep:mcp-flowgate-llm-executor"]
+```
+
+- **Default install** includes the executor — `cargo install
+  mcp-flowgate` gets you a runtime that can host LLM calls.
+- **Opt-out** for operators who don't want the aether-llm dep:
+  `cargo install mcp-flowgate --no-default-features`. The executor
+  registry simply doesn't have a `kind: llm` entry; workflows
+  referencing it fail at config load with a clear error.
+- **Replace with rig** (hypothetical future): a parallel
+  `mcp-flowgate-llm-executor-rig` crate could provide the same trait
+  with rig as the backend. Operators pick one feature or the other.
+
+### 33.6 Composition with existing executors
+
+`LlmExecutor` is just another executor. It composes naturally with the
+existing executor primitives:
+
+- **`parallel`** — fan out multiple `LlmExecutor` calls concurrently
+  (e.g., consult three models in parallel; the join condition
+  decides which result advances the workflow).
+- **`pipeline`** — chain `LlmExecutor → script → mcp` to extract
+  data with the LLM, validate with a script, call out to an MCP
+  service.
+- **`script`** — pre-process inputs / post-process outputs around
+  the LLM call.
+- **`human`** — gate an LLM transition behind a human approval
+  (compliance pattern).
+
+The `delegate:` sub-agent pattern (SPEC §21) is the existing way to
+spawn an isolated agent session for a state. The `LlmExecutor` is the
+in-process alternative — same governance, no subprocess. Both stay
+available; operators pick per state based on isolation requirements.
+
+### 33.7 Tool-call → transition dispatch contract
+
+The LLM emits a tool call shaped per the JSON Schema we provided:
+
+```json
+{
+  "tool_call": {
+    "name": "mark_as_bug",
+    "arguments": { "severity": "high", "labels": ["bug", "p1"] }
+  }
+}
+```
+
+The runtime treats this as `flowgate.command({
+  workflowId, expectedVersion, transition: "mark_as_bug",
+  arguments: { severity: "high", labels: ["bug", "p1"] }
+})` — same dispatch path the MCP surface uses. Guards run; blackboard
+updates; audit fires; state advances.
+
+If the model emits something that isn't a recognized transition:
+
+- **Unknown tool name** — runtime returns a structured error to the
+  model in the next turn: "tool 'X' is not available at this state;
+  valid: [...]." This is the model's chance to correct itself.
+- **Malformed arguments** — same shape: validation error returned;
+  next turn fires.
+- **No tool call (final answer instead)** — error: "you must select
+  one of [...] transitions to advance; emit a tool call."
+
+Three retries (configurable via `max_iterations`); then the executor
+fails with `LLM_EXECUTION_EXHAUSTED` and the workflow's failure path
+(if any) takes over.
+
+### 33.8 Audit + cost tracking
+
+Every LLM call emits an audit event:
+
+```json
+{
+  "event_type": "llm.invocation",
+  "workflow_id": "wf_01H...",
+  "state": "triaging",
+  "model": "anthropic/claude-sonnet-4-6",
+  "tokens_in": 1842,
+  "tokens_out": 87,
+  "latency_ms": 1230,
+  "cost_usd": 0.0042,
+  "tool_call_emitted": "mark_as_bug"
+}
+```
+
+Per-workflow cost limits (SPEC §21's `max_sub_agent_seconds` /
+`max_sub_agent_steps` already exist; extend with `max_llm_cost_usd` /
+`max_llm_tokens` per workflow instance). When a limit is hit, the
+workflow transitions to its declared overrun handler (or fails if
+none).
+
+### 33.9 Implementation order
+
+1. **Crate skeleton** — `mcp-flowgate-llm-executor` with `Cargo.toml`,
+   `lib.rs`, empty `LlmExecutor` impl returning `Unimplemented`.
+   Register under `kind: llm`. Optional cargo feature. Test that the
+   feature flag works.
+2. **Aether-llm wiring** — implement `LlmExecutor::execute` to
+   construct an `aether_llm::Context` from the workflow state + tools,
+   call `stream_response`, parse the response, dispatch the tool call.
+3. **Transition-as-tool resolution** — for each transition available
+   at the current state, generate a `ToolDefinition` from its
+   `inputSchema` + name. Guards already exclude rejected transitions
+   from the available set.
+4. **Loop + termination conditions** — `max_iterations`,
+   `max_seconds`, `max_tokens`. Error responses for malformed tool
+   calls.
+5. **Agents.yaml resolution** — reuse the existing resolver from
+   `crates/mcp-flowgate-tui/src/agent_resolver/` for affinity-based
+   model selection. May require extracting the resolver from the TUI
+   crate into a shared location (likely `mcp-flowgate-core`).
+6. **Audit events** — emit `llm.invocation` per call with token
+   counts + latency + cost.
+7. **Cost limits** — `max_llm_cost_usd` / `max_llm_tokens` per
+   workflow instance; check before each call; transition to overrun
+   handler when exceeded.
+8. **Examples + integration tests** — at minimum an "issue triager"
+   example workflow demonstrating the executor end-to-end against a
+   mock LLM provider.
+9. **Documentation** — SPEC §33 prose + site reference page
+   (`site/src/content/docs/reference/executors.mdx` already lists the
+   existing kinds; add `llm`). Update README's executor list.
+10. **Reposition** (deliberate, last) — update the README tagline /
+    project_scope_boundary memory to acknowledge flowgate as a
+    governed LLM orchestration platform that also exposes an MCP
+    surface. This is the moment we publicly become a different
+    product. Land only after the executor is proven in use.
+
+### 33.10 Open questions
+
+1. **Streaming output to the operator.** The TUI today displays LLM
+   output as it streams. The `LlmExecutor` runs from the runtime
+   process — there's no operator-attached display. Do we surface
+   token-by-token streaming via a new audit channel? Or just capture
+   final output + tool call?
+2. **Reasoning models** (`o1`, Anthropic's extended thinking). These
+   emit a "thinking" channel separate from the final response. Do we
+   capture thinking content in the audit, or strip it for privacy?
+   Aether-llm has reasoning support per `packages/llm/src/reasoning.rs`
+   — confirm shape.
+3. **Multi-tool-call turns.** Some providers (OpenAI) allow the model
+   to emit multiple tool calls per turn. Do we accept all and run them
+   sequentially (with guards rechecked between each), or reject and
+   require one-at-a-time?
+4. **Idempotency on retry.** If the LLM emits the same tool call
+   twice across retries (e.g., the first call failed mid-dispatch),
+   does the second call dedupe? Optimistic concurrency on
+   `expectedVersion` already handles the case where state advanced —
+   but the dedup story across retries needs more thought.
+5. **Cost prediction.** Should the executor's config support a
+   `predicted_cost_usd` hint that operators set as a soft budget
+   check at config-load time (the doctor flags workflows whose
+   declared cost would exceed a global cap)?
+6. **MCP surface from inside the executor.** When the LLM is hosted
+   inside flowgate, can it call our own `flowgate.query` /
+   `flowgate.command` tools? The natural answer is yes — those become
+   another set of tools alongside the transitions — but they'd
+   typically be redundant (the transitions ARE the relevant subset
+   of those tools for the current state). Worth thinking through
+   before adding.
+
+Tracked: this section is queued for v0.6. Tool-surface consolidation
+(§32) and lexicon discipline (§30.10) must ship first.
