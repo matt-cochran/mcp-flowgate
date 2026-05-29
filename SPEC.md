@@ -2243,6 +2243,212 @@ gives operators full replay of vocabulary changes.
 Tier shape will be additive. Tier-1 configs remain valid against
 Tier-2/3 deployments.
 
+### 30.10 Aliases, placeholders, and the `SUBJECT_NEEDS_DEFINITION` interaction (queued for v0.5)
+
+Three additions sharpen the lexicon from "supplementary documentation"
+into the **schema for the system's vocabulary**, enforced by the runtime
+without breaking ergonomics for greenfield configs that haven't yet
+authored every entry.
+
+#### 30.10.1 Aliases field on lexicon entries
+
+The §30.5 entry schema gains an `aliases: string[]` field. Aliases
+are recognized surface forms of the canonical `term` — singular vs.
+plural, hyphen vs. underscore vs. space variants, common abbreviations.
+A lookup against any alias returns the same entry as a lookup against
+the canonical term.
+
+```yaml
+lexicon:
+  evidence-pack:
+    definition: "A bundle of facts the editor uses to plan a change."
+    aliases: ["evidence-packs", "evidence pack", "evidence packs"]
+    bounded_context: swe-agent
+    refs: ["acceptance-criteria"]
+    governance: human-only
+```
+
+**Load-time validation:** within a single bounded context, no alias may
+collide with another entry's term or alias. Violation →
+`LEXICON_ALIAS_COLLISION` naming both entries. Aliases across different
+bounded contexts may overlap.
+
+**Implementation:** at snapshot-pin time, build a single
+`HashMap<String, &LexiconEntry>` keyed by canonical term + every alias,
+all pointing at the same entry. O(1) lookup against any surface form.
+
+#### 30.10.2 The verb-subject pair: only the subject is in scope
+
+Flowgate already maintains closed-enum verb taxonomies (`cognitive-verbs`,
+`cap-verbs`, `script-verbs` per §17). The lexicon registers **subjects
+only** — the noun half of every `<verb>.<subject>` identifier in the
+system. The verb half is validated against the existing taxonomies.
+
+Validation walks every config-level subject reference (script subjects,
+skill subjects, capability subjects, transition delegate targets,
+workflow `system`/`subject` metadata) and confirms the subject portion
+is a registered lexicon entry. Unregistered subjects do not hard-fail
+the load (see §30.10.3); they become placeholders.
+
+#### 30.10.3 `PENDING_DEFINITION` placeholders
+
+At config load, every subject referenced by the resolved config but not
+yet defined in the lexicon receives a placeholder entry:
+
+```rust
+LexiconEntry {
+    term: "evidence-foo",
+    state: PENDING_DEFINITION,
+    referenced_in: vec![/* file:line locations */],
+    bounded_context: /* inherited from referencing config */,
+    /* definition, aliases, refs all unset */
+}
+```
+
+Load succeeds; the placeholder is enumerable via the lexicon query
+surface. **Doctor reports the placeholder list** under a new check
+`lexicon coverage`, including which workflows reference them. The
+placeholder's presence blocks execution of any workflow whose reachable
+subject set includes it (see §30.10.4).
+
+`flowgate.query({ kind: "lexicon", state: "PENDING_DEFINITION" })`
+lists placeholders for operator review.
+
+#### 30.10.4 Pre-start subject walk: no execution without lexical clarity
+
+When `flowgate.command` is called with `definitionId` (a workflow
+start), the runtime walks the workflow definition's **reachable
+subjects** — every typed subject reference plus every alias that
+guidance bodies in scope might match against. If any reachable
+subject resolves to a `PENDING_DEFINITION` placeholder, the start is
+**paused, not executed**: the runtime returns a structured
+`SUBJECT_NEEDS_DEFINITION` interaction (see §30.10.5).
+
+This invariant ensures the pinned snapshot at `workflow.start` time
+(§8.2) is always complete — every subject reachable from the
+workflow definition has a real lexicon entry. There is no in-flight
+workflow with a partially-resolved lexicon, and no need to retroactively
+mutate a pinned snapshot.
+
+Mid-workflow surprises (a guard expression that introduces a dynamic
+subject; a workflow whose purpose IS lexicon authoring per §17) hit
+the same flow: the transition pauses, surfaces
+`SUBJECT_NEEDS_DEFINITION`, waits for resolution, then resumes. The
+current state does not advance during resolution.
+
+#### 30.10.5 `SUBJECT_NEEDS_DEFINITION` interaction protocol
+
+When the runtime detects an unresolved subject in the path of a
+command, it returns a structured response with:
+
+```json
+{
+  "interaction": {
+    "kind": "SUBJECT_NEEDS_DEFINITION",
+    "unknown_subject": "evidence-foo",
+    "context": {
+      "encountered_in": "workflow:swe_agent state:retrieving",
+      "bounded_context": "swe-agent"
+    },
+    "candidates": [
+      { "term": "evidence-pack", "distance": 2, "match_kind": "fuzzy_close",
+        "definition_preview": "A bundle of facts the editor uses…" },
+      { "term": "evidence-record", "distance": 3, "match_kind": "fuzzy_loose",
+        "definition_preview": "A persisted record of an evidence event…" }
+    ]
+  },
+  "queued_command": {
+    "method": "flowgate.command",
+    "args": { /* original command verbatim — replay after resolution */ }
+  },
+  "links": [
+    {
+      "rel": "link_as_alias",
+      "method": "flowgate.command",
+      "args": {
+        "subject": "lexicon:evidence-pack",
+        "definition": { "aliases_add": ["evidence-foo"] }
+      },
+      "hint": "Use this if 'evidence-foo' is a synonym for 'evidence-pack'."
+    },
+    {
+      "rel": "define_new",
+      "method": "flowgate.command",
+      "args": {
+        "subject": "lexicon:evidence-foo",
+        "definition": {
+          "definition": "<fill in>",
+          "boundedContext": "swe-agent"
+        }
+      },
+      "hint": "Use this if 'evidence-foo' is a genuinely new concept."
+    },
+    {
+      "rel": "cancel",
+      "method": "flowgate.command",
+      "args": {
+        "intent": "cancel_pending_subject",
+        "unknown_subject": "evidence-foo"
+      },
+      "hint": "Abandon the original command — the subject was a mistake."
+    }
+  ]
+}
+```
+
+The model (or operator) follows one link. Resolution updates the live
+lexicon (or drops the placeholder for `cancel`). The client retries
+the original command. The retry passes the subject walk; the snapshot
+pins; the workflow starts.
+
+#### 30.10.6 Levenshtein candidate ranking
+
+The `candidates` list is populated by Levenshtein distance against
+canonical terms + aliases within the current bounded context (fallback
+to global context if the bounded one yields no hits). Default
+threshold: distance ≤ 2, top 5 candidates. `match_kind`:
+
+- `fuzzy_close` — distance ≤ 1.
+- `fuzzy_loose` — distance ≤ 2.
+
+Candidates are advisory; the resolver picks any link, not necessarily
+a candidate.
+
+#### 30.10.7 Resolution handlers
+
+- `link_as_alias`: append the unknown subject to an existing entry's
+  `aliases` list. Audit: `lexicon.alias_added { term, alias }`. The
+  alias becomes a recognized surface form for future lookups.
+- `define_new`: upgrade the placeholder to a real entry with the
+  provided definition. Audit: `lexicon.defined { term, bounded_context, by_principal }`.
+- `cancel`: drop the placeholder. The original command remains
+  un-executed. Audit: `lexicon.pending_cancelled { term, cancelled_by }`.
+
+#### 30.10.8 Audit + observability
+
+Every `SUBJECT_NEEDS_DEFINITION` interaction emits a
+`lexicon.subject_unresolved` audit event with the unknown subject, the
+encountered-in context, the candidates surfaced, and (on retry) the
+resolution chosen. Combined with the audit trail from
+`lexicon.alias_added` / `lexicon.defined` / `lexicon.pending_cancelled`,
+operators can review the system's vocabulary evolution.
+
+#### 30.10.9 Error codes added
+
+| Code | When |
+|---|---|
+| `LEXICON_ALIAS_COLLISION` | Load-time: an alias collides with another entry's term or alias within the same bounded context |
+| `SUBJECT_NEEDS_DEFINITION` | Runtime: a command's reachable subjects include a `PENDING_DEFINITION` placeholder (returned as `Ok(structured response)`, not an MCP protocol error) |
+| `INVALID_RESOLUTION` | Runtime: a resolution call (`link_as_alias` / `define_new` / `cancel`) targets a subject that is not currently pending, or the resolution payload is malformed |
+
+#### 30.10.10 SPEC §32 implications
+
+This section resolves §32 open question OQ3 ("Lexicon term extraction
+performance"). The replacement design is the typed pre-start walk
+described in §30.10.4, not the regex-based prose scan originally
+sketched. Aliases (§30.10.1) carry the surface-form variation that
+the regex was meant to recover.
+
 ## 31. Pattern fragments + `extends:` (DRAFT — queued for v0.5)
 
 **Status:** Design draft. The cognitive-architectures pattern-library
@@ -2720,10 +2926,12 @@ in the same PR.
 2. **`summary` field on start.** Today `StartArgs` accepts `summary`
    but the field is unused by the runtime. Drop it from `command`'s
    schema, or keep it as a no-op for forward compat?
-3. **Lexicon term extraction performance.** Scanning every guidance
-   body at workflow.start time for referenced terms adds load. Is the
-   cost bounded? Suggest a regex-based first pass (cheap), cache per
-   pinned snapshot.
+3. **Lexicon term extraction performance.** **Resolved by §30.10.**
+   The original "regex prose scan" framing is replaced by the typed
+   pre-start subject walk (§30.10.4) against config-level identifiers
+   plus the alias map (§30.10.1). Cost is bounded by the workflow
+   definition's reachable surface, not the size of guidance prose.
+   Cache per pinned snapshot, populated at start.
 4. **`with_lexicon_writes` default.** Default-on for authoring builds
    (matches `with_skills_search` precedent) or default-off everywhere
    so production deployments are safe by construction?
