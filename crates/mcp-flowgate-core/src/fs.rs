@@ -141,12 +141,17 @@ impl InMemoryFilesystem {
     /// in tests that want to assert on the written data without going through
     /// the async trait methods.
     pub fn files(&self) -> Vec<(PathBuf, String)> {
-        let state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
+        let state = self
+            .inner
+            .lock()
+            .expect("LOCK_POISONED: in-memory filesystem state");
         state
             .files
             .iter()
             .filter_map(|(k, v)| {
-                String::from_utf8(v.clone()).ok().map(|s| (PathBuf::from(k), s))
+                String::from_utf8(v.clone())
+                    .ok()
+                    .map(|s| (PathBuf::from(k), s))
             })
             .collect()
     }
@@ -155,7 +160,10 @@ impl InMemoryFilesystem {
 #[async_trait]
 impl Filesystem for InMemoryFilesystem {
     async fn create_dir_all(&self, path: &Path) -> anyhow::Result<()> {
-        let mut state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
+        let mut state = self
+            .inner
+            .lock()
+            .expect("LOCK_POISONED: in-memory filesystem state");
         // Record the directory and all parents.
         let mut p = path.to_path_buf();
         loop {
@@ -169,7 +177,10 @@ impl Filesystem for InMemoryFilesystem {
     }
 
     async fn append(&self, path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-        let mut state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
+        let mut state = self
+            .inner
+            .lock()
+            .expect("LOCK_POISONED: in-memory filesystem state");
         // Mirror RealFilesystem: the parent directory must exist.
         if let Some(parent) = path.parent() {
             let parent_key = parent.to_string_lossy().into_owned();
@@ -186,15 +197,17 @@ impl Filesystem for InMemoryFilesystem {
     }
 
     async fn read_dir(&self, path: &Path) -> anyhow::Result<Vec<PathBuf>> {
-        let state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
+        let state = self
+            .inner
+            .lock()
+            .expect("LOCK_POISONED: in-memory filesystem state");
         let prefix = path.to_string_lossy().into_owned();
         let paths: Vec<PathBuf> = state
             .files
             .keys()
             .filter_map(|k| {
                 let p = Path::new(k);
-                if p.parent().map(|par| par.to_string_lossy().into_owned())
-                    == Some(prefix.clone())
+                if p.parent().map(|par| par.to_string_lossy().into_owned()) == Some(prefix.clone())
                 {
                     Some(PathBuf::from(k))
                 } else {
@@ -206,7 +219,10 @@ impl Filesystem for InMemoryFilesystem {
     }
 
     async fn read_to_string(&self, path: &Path) -> anyhow::Result<String> {
-        let state = self.inner.lock().expect("LOCK_POISONED: in-memory filesystem state");
+        let state = self
+            .inner
+            .lock()
+            .expect("LOCK_POISONED: in-memory filesystem state");
         let key = path.to_string_lossy().into_owned();
         match state.files.get(&key) {
             Some(bytes) => {
@@ -214,10 +230,7 @@ impl Filesystem for InMemoryFilesystem {
                     .map_err(|e| anyhow::anyhow!("file is not valid UTF-8: {e}"))?;
                 Ok(s)
             }
-            None => Err(anyhow::anyhow!(
-                "file not found: {}",
-                path.display()
-            )),
+            None => Err(anyhow::anyhow!("file not found: {}", path.display())),
         }
     }
 }

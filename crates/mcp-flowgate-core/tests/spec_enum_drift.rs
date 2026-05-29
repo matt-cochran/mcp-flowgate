@@ -14,9 +14,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use mcp_flowgate_core::discovery::{
-    ScriptVerb, Verb, BLESSED_SCRIPT_ROOTS, BLESSED_SUBJECT_ROOTS,
-};
+use mcp_flowgate_core::discovery::{ScriptVerb, Verb, BLESSED_SCRIPT_ROOTS, BLESSED_SUBJECT_ROOTS};
 
 fn workspace_root() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -48,10 +46,7 @@ fn slice_section<'a>(src: &'a str, marker_prefix: &str) -> &'a str {
     let after_start = &src[start..];
     // The header line's `#`-prefix tells us the depth. Find next header
     // at <= same depth.
-    let header_depth = after_start
-        .chars()
-        .take_while(|c| *c == '#')
-        .count();
+    let header_depth = after_start.chars().take_while(|c| *c == '#').count();
     let body_start = after_start
         .find('\n')
         .map(|i| start + i + 1)
@@ -89,16 +84,25 @@ fn extract_table_first_column_tokens(text: &str) -> Vec<String> {
         }
         // After `| ` find the first `... ` between two backticks.
         let after = &trimmed[2..];
-        let Some(first_bt) = after.find('`') else { continue };
+        let Some(first_bt) = after.find('`') else {
+            continue;
+        };
         let after_bt = &after[first_bt + 1..];
-        let Some(close_bt) = after_bt.find('`') else { continue };
+        let Some(close_bt) = after_bt.find('`') else {
+            continue;
+        };
         let raw = &after_bt[..close_bt];
         // Skip header separator rows (`---`).
         if raw.starts_with('-') {
             continue;
         }
         let token = raw.strip_suffix(".*").unwrap_or(raw);
-        if !token.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+        if !token
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_lowercase())
+            .unwrap_or(false)
+        {
             continue;
         }
         if token.contains('.') {
@@ -154,7 +158,12 @@ fn extract_backtick_tokens(text: &str) -> Vec<String> {
         // Strip blessed-root `.*` suffix.
         let stripped: &str = token.strip_suffix(".*").unwrap_or(&token);
         // Must start with a letter (filter out `5.4.1` style tokens).
-        if !stripped.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+        if !stripped
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_lowercase())
+            .unwrap_or(false)
+        {
             continue;
         }
         // Reject anything still containing `.` (compound like `plan.specify`).
@@ -191,7 +200,10 @@ fn extract_code_block_roots(text: &str) -> Vec<String> {
                 continue;
             }
             // Must be a kebab-only token.
-            if !tok.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+            if !tok
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            {
                 continue;
             }
             if seen.insert(tok.to_string()) {
@@ -205,14 +217,8 @@ fn extract_code_block_roots(text: &str) -> Vec<String> {
 fn assert_set_eq(label: &str, expected: &[&str], actual: &[String]) {
     let expected_set: HashSet<&str> = expected.iter().copied().collect();
     let actual_set: HashSet<&str> = actual.iter().map(String::as_str).collect();
-    let missing: Vec<&str> = expected_set
-        .difference(&actual_set)
-        .copied()
-        .collect();
-    let extra: Vec<&str> = actual_set
-        .difference(&expected_set)
-        .copied()
-        .collect();
+    let missing: Vec<&str> = expected_set.difference(&actual_set).copied().collect();
+    let extra: Vec<&str> = actual_set.difference(&expected_set).copied().collect();
     assert!(
         missing.is_empty() && extra.is_empty(),
         "{label}: drift between Rust enum and SPEC/schema.\n  \
@@ -241,11 +247,7 @@ fn spec_22_3_table_matches_script_verb_all_tokens() {
     let spec = read_spec();
     let section = slice_section(&spec, "### 22.3");
     let tokens = extract_table_first_column_tokens(section);
-    assert_set_eq(
-        "§22.3 script verbs",
-        ScriptVerb::ALL_TOKENS,
-        &tokens,
-    );
+    assert_set_eq("§22.3 script verbs", ScriptVerb::ALL_TOKENS, &tokens);
 }
 
 // ── §22.4 — blessed script roots ──────────────────────────────────────────
@@ -255,11 +257,7 @@ fn spec_22_4_code_block_matches_blessed_script_roots() {
     let spec = read_spec();
     let section = slice_section(&spec, "### 22.4");
     let tokens = extract_code_block_roots(section);
-    assert_set_eq(
-        "§22.4 blessed script roots",
-        BLESSED_SCRIPT_ROOTS,
-        &tokens,
-    );
+    assert_set_eq("§22.4 blessed script roots", BLESSED_SCRIPT_ROOTS, &tokens);
 }
 
 // ── §5.4.2 — blessed subject roots (table + prose) ────────────────────────
@@ -287,7 +285,10 @@ fn spec_5_4_2_matches_blessed_subject_roots_bidirectionally() {
     // Also filter out backticked schema tokens that aren't roots (e.g.
     // `INVALID_SUBJECT_ROOT` — already filtered above because of `_`,
     // but defensively keep only true lowercase-kebab tokens).
-    tokens.retain(|t| t.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+    tokens.retain(|t| {
+        t.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    });
     // Explicit allow-list for non-root tokens that legitimately appear
     // in §5.4.2 prose: `true` (boolean example for strict_namespacing),
     // `subject` (the noun being defined). Anything else extra-in-SPEC
@@ -295,7 +296,11 @@ fn spec_5_4_2_matches_blessed_subject_roots_bidirectionally() {
     const KNOWN_NON_ROOT_MENTIONS: &[&str] = &["true", "false", "subject"];
     tokens.retain(|t| !KNOWN_NON_ROOT_MENTIONS.contains(&t.as_str()));
 
-    assert_set_eq("§5.4.2 blessed subject roots", BLESSED_SUBJECT_ROOTS, &tokens);
+    assert_set_eq(
+        "§5.4.2 blessed subject roots",
+        BLESSED_SUBJECT_ROOTS,
+        &tokens,
+    );
 }
 
 // ── JSON schema script verb enum ──────────────────────────────────────────
@@ -316,12 +321,8 @@ fn schema_script_verb_enum_matches_script_verb_all_tokens() {
         .find("\"verb\":")
         .expect("scriptFragment must declare verb");
     let after_verb = &tail[verb_idx..];
-    let enum_open = after_verb
-        .find('[')
-        .expect("verb must have an enum array");
-    let enum_close = after_verb
-        .find(']')
-        .expect("verb enum must close");
+    let enum_open = after_verb.find('[').expect("verb must have an enum array");
+    let enum_close = after_verb.find(']').expect("verb enum must close");
     let enum_body = &after_verb[enum_open + 1..enum_close];
     // Strip quotes + commas, collect tokens.
     let tokens: Vec<String> = enum_body
@@ -388,9 +389,7 @@ fn schema_skill_verb_enum_matches_verb_all_tokens() {
         );
         return;
     }
-    let enum_open = inside
-        .find('[')
-        .expect("verb.enum array must open post-F9");
+    let enum_open = inside.find('[').expect("verb.enum array must open post-F9");
     let enum_close = inside[enum_open..]
         .find(']')
         .expect("verb.enum array must close")

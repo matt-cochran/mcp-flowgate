@@ -92,10 +92,7 @@ pub fn read(path: &Path) -> Result<BTreeMap<String, String>, ProviderKeysError> 
 /// chmod 0600, then rename over the target. Parent dir created with
 /// mode 0700 if missing. Atomic rename means a partial-write torn
 /// state is impossible.
-pub fn write_atomic(
-    path: &Path,
-    vars: &BTreeMap<String, String>,
-) -> Result<(), ProviderKeysError> {
+pub fn write_atomic(path: &Path, vars: &BTreeMap<String, String>) -> Result<(), ProviderKeysError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
         #[cfg(unix)]
@@ -130,7 +127,8 @@ pub fn write_atomic(
         std::fs::set_permissions(temp.path(), perm)?;
     }
 
-    temp.persist(path).map_err(|e| ProviderKeysError::Io(e.error))?;
+    temp.persist(path)
+        .map_err(|e| ProviderKeysError::Io(e.error))?;
     Ok(())
 }
 
@@ -179,11 +177,11 @@ impl ProviderId {
 
     pub fn slug(&self) -> &'static str {
         match self {
-            ProviderId::Anthropic  => "anthropic",
-            ProviderId::Openai     => "openai",
+            ProviderId::Anthropic => "anthropic",
+            ProviderId::Openai => "openai",
             ProviderId::Openrouter => "openrouter",
-            ProviderId::Bedrock    => "bedrock",
-            ProviderId::Gemini     => "gemini",
+            ProviderId::Bedrock => "bedrock",
+            ProviderId::Gemini => "gemini",
         }
     }
 
@@ -193,21 +191,21 @@ impl ProviderId {
 
     pub fn env_vars(&self) -> &'static [&'static str] {
         match self {
-            ProviderId::Anthropic  => &["ANTHROPIC_API_KEY"],
-            ProviderId::Openai     => &["OPENAI_API_KEY"],
+            ProviderId::Anthropic => &["ANTHROPIC_API_KEY"],
+            ProviderId::Openai => &["OPENAI_API_KEY"],
             ProviderId::Openrouter => &["OPENROUTER_API_KEY"],
-            ProviderId::Bedrock    => &["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
-            ProviderId::Gemini     => &["GEMINI_API_KEY"],
+            ProviderId::Bedrock => &["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"],
+            ProviderId::Gemini => &["GEMINI_API_KEY"],
         }
     }
 
     pub fn display(&self) -> &'static str {
         match self {
-            ProviderId::Anthropic  => "Anthropic",
-            ProviderId::Openai     => "OpenAI",
+            ProviderId::Anthropic => "Anthropic",
+            ProviderId::Openai => "OpenAI",
             ProviderId::Openrouter => "OpenRouter",
-            ProviderId::Bedrock    => "AWS Bedrock",
-            ProviderId::Gemini     => "Google Gemini",
+            ProviderId::Bedrock => "AWS Bedrock",
+            ProviderId::Gemini => "Google Gemini",
         }
     }
 }
@@ -296,7 +294,11 @@ pub fn run(args: SetProviderKeysArgs) -> anyhow::Result<ExitCode> {
             anyhow::anyhow!("unknown provider '{slug}'. Valid: {}", valid_slugs())
         })?;
         remove_provider(&path, provider)?;
-        eprintln!("removed {} keys from {}", provider.display(), path.display());
+        eprintln!(
+            "removed {} keys from {}",
+            provider.display(),
+            path.display()
+        );
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -340,11 +342,7 @@ fn run_list(path: &Path) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_set_one(
-    path: &Path,
-    provider: ProviderId,
-    from_stdin: bool,
-) -> anyhow::Result<ExitCode> {
+fn run_set_one(path: &Path, provider: ProviderId, from_stdin: bool) -> anyhow::Result<ExitCode> {
     let mut any = false;
     for env_var in provider.env_vars() {
         let value = if from_stdin {

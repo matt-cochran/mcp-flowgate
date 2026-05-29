@@ -101,8 +101,7 @@ workflows:
 "#;
     let diags = diagnostics_for(yaml);
     assert!(
-        has_error_containing(&diags, "INVALID_SNIPPET")
-            && has_error_containing(&diags, "outputs"),
+        has_error_containing(&diags, "INVALID_SNIPPET") && has_error_containing(&diags, "outputs"),
         "expected INVALID_SNIPPET about outputs: {diags:?}"
     );
 }
@@ -148,8 +147,7 @@ workflows:
 "#;
     let diags = diagnostics_for(yaml);
     assert!(
-        has_error_containing(&diags, "INVALID_SNIPPET")
-            && has_error_containing(&diags, "verdict"),
+        has_error_containing(&diags, "INVALID_SNIPPET") && has_error_containing(&diags, "verdict"),
         "expected INVALID_SNIPPET naming verdict: {diags:?}"
     );
 }

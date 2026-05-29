@@ -138,7 +138,8 @@ fn invalid_verb_error_lists_all_ten() {
 
 #[test]
 fn uppercase_verb_rejected() {
-    let err = config::resolve_str(&skills_yaml("Review")).expect_err("Review (capital R) must be rejected");
+    let err = config::resolve_str(&skills_yaml("Review"))
+        .expect_err("Review (capital R) must be rejected");
     assert!(format!("{err}").contains("INVALID_VERB"));
 }
 

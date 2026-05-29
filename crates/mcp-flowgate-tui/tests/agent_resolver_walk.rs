@@ -8,7 +8,10 @@ use std::path::PathBuf;
 
 fn resolver_from(yaml: &str) -> Resolver {
     let file = AgentsFile::from_yaml(yaml).expect("yaml parses");
-    Resolver::from_loaded(file, ConfigSource::Project(PathBuf::from("/tmp/agents.yaml")))
+    Resolver::from_loaded(
+        file,
+        ConfigSource::Project(PathBuf::from("/tmp/agents.yaml")),
+    )
 }
 
 // ── Delegate::parse ─────────────────────────────────────────────────────────
@@ -162,7 +165,9 @@ overrides:
 "#;
     let r = resolver_from(yaml);
     let d = Delegate::parse("coding-frontier").unwrap();
-    let err = r.walk(&d).expect_err("strict mode + full delegate + no exact = error");
+    let err = r
+        .walk(&d)
+        .expect_err("strict mode + full delegate + no exact = error");
     assert_eq!(err.delegate, "coding-frontier");
     let joined = err.walked_levels.join(" ");
     assert!(

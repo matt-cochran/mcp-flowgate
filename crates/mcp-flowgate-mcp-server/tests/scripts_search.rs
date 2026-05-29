@@ -66,11 +66,7 @@ fn build_discovery() -> Arc<InMemoryDiscoveryIndex> {
         script_item("build.cargo.release", "build", "config"),
         script_item("build.cargo.workspace", "build", "config"),
         script_item("test.cargo.workspace", "test", "config"),
-        script_item(
-            "lint.rust.clippy-strict",
-            "lint",
-            "cognitive-architectures",
-        ),
+        script_item("lint.rust.clippy-strict", "lint", "cognitive-architectures"),
     ]))
 }
 
@@ -135,14 +131,20 @@ async fn call_rejected_when_flag_off() {
 #[tokio::test]
 async fn returns_items_array_when_flag_on() {
     let server = enabled_server();
-    let resp = server.dispatch_call(call_search(json!({}))).await.expect("succeeds");
+    let resp = server
+        .dispatch_call(call_search(json!({})))
+        .await
+        .expect("succeeds");
     assert!(resp["items"].is_array());
 }
 
 #[tokio::test]
 async fn response_items_carry_no_body_field() {
     let server = enabled_server();
-    let resp = server.dispatch_call(call_search(json!({}))).await.expect("succeeds");
+    let resp = server
+        .dispatch_call(call_search(json!({})))
+        .await
+        .expect("succeeds");
     let items = resp["items"].as_array().expect("items array");
     for item in items {
         assert!(
@@ -233,9 +235,7 @@ async fn empty_filter_match_returns_empty_array() {
 async fn scripts_search_excludes_guidance_items() {
     // Add a guidance item to the index alongside scripts; scripts.search
     // must NOT return it (the listing is kind-filtered).
-    let mut items: Vec<DiscoveryItem> = vec![
-        script_item("build.cargo.release", "build", "config"),
-    ];
+    let mut items: Vec<DiscoveryItem> = vec![script_item("build.cargo.release", "build", "config")];
     items.push(DiscoveryItem {
         id: "review.code.adversarial".into(),
         kind: DiscoveryKind::Guidance,
@@ -255,7 +255,10 @@ async fn scripts_search_excludes_guidance_items() {
         .with_discovery(discovery)
         .with_scripts_search(true);
 
-    let resp = server.dispatch_call(call_search(json!({}))).await.expect("succeeds");
+    let resp = server
+        .dispatch_call(call_search(json!({})))
+        .await
+        .expect("succeeds");
     let items = resp["items"].as_array().unwrap();
     for item in items {
         let subj = item["subject"].as_str().unwrap_or("");

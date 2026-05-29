@@ -11,7 +11,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const LEGACY_VERBS: &[&str] = &[
-    "apply", "check", "avoid", "follow", "enforce", "suggest", "configure", "document",
+    "apply",
+    "check",
+    "avoid",
+    "follow",
+    "enforce",
+    "suggest",
+    "configure",
+    "document",
 ];
 
 fn workspace_root() -> PathBuf {

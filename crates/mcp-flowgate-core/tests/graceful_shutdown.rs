@@ -87,7 +87,7 @@ async fn drain_rejects_new_workflows() {
             definition_id: "drain_demo".to_string(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -108,7 +108,7 @@ async fn drain_allows_inflight_submit_and_get() {
             definition_id: "drain_demo".to_string(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -124,7 +124,7 @@ async fn drain_allows_inflight_submit_and_get() {
         .get(GetWorkflow {
             workflow_id: wf_id.clone(),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -140,7 +140,7 @@ async fn drain_allows_inflight_submit_and_get() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

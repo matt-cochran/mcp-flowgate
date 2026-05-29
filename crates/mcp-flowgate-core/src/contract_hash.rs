@@ -111,7 +111,9 @@ mod tests {
         assert!(h.starts_with("sha256:"));
         let hex = &h["sha256:".len()..];
         assert_eq!(hex.len(), 64);
-        assert!(hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]
@@ -142,7 +144,10 @@ mod tests {
             "inputs":  {},
             "outputs": { "v": { "type": "string", "enum": ["pass", "fail", "needs-revision"] } }
         });
-        assert_ne!(compute_contract_hash(&base), compute_contract_hash(&mutated));
+        assert_ne!(
+            compute_contract_hash(&base),
+            compute_contract_hash(&mutated)
+        );
     }
 
     #[test]

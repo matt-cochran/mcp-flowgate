@@ -219,7 +219,10 @@ pub async fn probe_binding(client: &Client, binding: &Binding) -> (ProbeStatus, 
     match &binding.provider {
         Provider::Anthropic => {
             let Ok(key) = std::env::var("ANTHROPIC_API_KEY") else {
-                return (ProbeStatus::NoCredential, "ANTHROPIC_API_KEY not set".into());
+                return (
+                    ProbeStatus::NoCredential,
+                    "ANTHROPIC_API_KEY not set".into(),
+                );
             };
             let base = std::env::var("ANTHROPIC_BASE_URL")
                 .unwrap_or_else(|_| "https://api.anthropic.com".into());
@@ -232,12 +235,10 @@ pub async fn probe_binding(client: &Client, binding: &Binding) -> (ProbeStatus, 
                     .await,
                 &binding.model,
                 |body: &serde_json::Value| {
-                    body.pointer("/data")
-                        .and_then(|d| d.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(&binding.model))
-                        })
+                    body.pointer("/data").and_then(|d| d.as_array()).map(|arr| {
+                        arr.iter()
+                            .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(&binding.model))
+                    })
                 },
             )
             .await
@@ -256,12 +257,10 @@ pub async fn probe_binding(client: &Client, binding: &Binding) -> (ProbeStatus, 
                     .await,
                 &binding.model,
                 |body: &serde_json::Value| {
-                    body.pointer("/data")
-                        .and_then(|d| d.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(&binding.model))
-                        })
+                    body.pointer("/data").and_then(|d| d.as_array()).map(|arr| {
+                        arr.iter()
+                            .any(|m| m.get("id").and_then(|v| v.as_str()) == Some(&binding.model))
+                    })
                 },
             )
             .await
@@ -309,10 +308,7 @@ async fn classify_listing(
     let resp = match result {
         Ok(r) => r,
         Err(e) => {
-            return (
-                ProbeStatus::Unreachable,
-                format!("transport error: {e}"),
-            );
+            return (ProbeStatus::Unreachable, format!("transport error: {e}"));
         }
     };
     let status = resp.status();

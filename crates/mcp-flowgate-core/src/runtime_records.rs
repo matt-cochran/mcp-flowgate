@@ -1,6 +1,5 @@
 use serde_json::Value;
 
-
 /// SPEC §7.2 — compute the per-transition delta of the workflow's
 /// `context` so transition records can carry the structural diff. Cumulative
 /// replay of these deltas reconstructs `context` at any past `seq` (§7.5).

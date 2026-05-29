@@ -82,12 +82,7 @@ pub fn resolve_use_inputs(
     resolved
 }
 
-fn resolve_one(
-    expr: &Value,
-    args: &Value,
-    ctx: &Value,
-    wf_input: &Value,
-) -> Value {
+fn resolve_one(expr: &Value, args: &Value, ctx: &Value, wf_input: &Value) -> Value {
     match expr {
         Value::String(s) if s.starts_with("$.") => {
             read_in_scopes(s, args, ctx, wf_input, None).unwrap_or(Value::Null)
@@ -170,8 +165,7 @@ pub fn validate_outputs_against_snippet(
         return Ok(());
     };
     // Invert bindings: cap-output-name -> host-path.
-    let mut by_name: std::collections::HashMap<&str, &str> =
-        std::collections::HashMap::new();
+    let mut by_name: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
     for (host_path, cap_name_value) in bindings {
         if let Some(cap_name) = cap_name_value.as_str() {
             by_name.insert(cap_name, host_path.as_str());
@@ -234,12 +228,7 @@ mod tests {
     #[test]
     fn resolve_use_inputs_passes_literal_values_through() {
         let use_inputs = json!({ "max_iterations": 3, "label": "primary" });
-        let r = resolve_use_inputs(
-            &use_inputs,
-            &json!({}),
-            &json!({}),
-            &json!({}),
-        );
+        let r = resolve_use_inputs(&use_inputs, &json!({}), &json!({}), &json!({}));
         assert_eq!(r.get("max_iterations"), Some(&json!(3)));
         assert_eq!(r.get("label"), Some(&json!("primary")));
     }
@@ -258,10 +247,7 @@ mod tests {
         });
         let ctx = json!({ "plan": "P1" });
         let r = resolve_use_inputs(&use_inputs, &json!({}), &ctx, &json!({}));
-        assert_eq!(
-            r.get("config"),
-            Some(&json!({ "plan": "P1", "limit": 5 }))
-        );
+        assert_eq!(r.get("config"), Some(&json!({ "plan": "P1", "limit": 5 })));
     }
 
     #[test]
@@ -320,9 +306,16 @@ mod tests {
         let err = validate_outputs_against_snippet(&snippet_outputs, &output_paths, &projected)
             .expect_err("both outputs invalid");
         let slots: Vec<&str> = err.iter().map(|v| v.slot.as_str()).collect();
-        assert!(slots.contains(&"verdict"), "should report verdict violation");
+        assert!(
+            slots.contains(&"verdict"),
+            "should report verdict violation"
+        );
         assert!(slots.contains(&"score"), "should report score violation");
-        assert_eq!(err.len(), 2, "both violations collected, not short-circuited");
+        assert_eq!(
+            err.len(),
+            2,
+            "both violations collected, not short-circuited"
+        );
     }
 
     #[test]

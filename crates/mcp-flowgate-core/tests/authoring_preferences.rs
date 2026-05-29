@@ -66,7 +66,10 @@ workflows:
     let err = resolve_str(yaml).expect_err("numeric preference must reject");
     let s = format!("{err:?}");
     assert!(s.contains("INVALID_AUTHORING_PREFERENCE"), "got: {s}");
-    assert!(s.contains("number"), "error must name the wrong shape; got: {s}");
+    assert!(
+        s.contains("number"),
+        "error must name the wrong shape; got: {s}"
+    );
 }
 
 #[test]
@@ -84,7 +87,10 @@ workflows:
     let err = resolve_str(yaml).expect_err("scalar authoring block must reject");
     let s = format!("{err:?}");
     assert!(s.contains("INVALID_AUTHORING_PREFERENCE"), "got: {s}");
-    assert!(s.contains("must be an object"), "error must explain the shape; got: {s}");
+    assert!(
+        s.contains("must be an object"),
+        "error must explain the shape; got: {s}"
+    );
 }
 
 #[test]
@@ -137,7 +143,9 @@ workflows:
 "#;
     let resolved = resolve_str(yaml).expect("loads");
     assert!(
-        resolved.pointer("/workflows/demo/_authoringPrefs").is_none(),
+        resolved
+            .pointer("/workflows/demo/_authoringPrefs")
+            .is_none(),
         "no stamping when authoring is absent — snapshot stays unbloated"
     );
 }
@@ -172,13 +180,13 @@ workflows:
 
 #[tokio::test]
 async fn template_substitutes_preferred_script_language_into_skill_guidance() {
-    use std::sync::Arc;
     use mcp_flowgate_core::audit::{AuditSink, NullAuditSink};
     use mcp_flowgate_core::guards::DefaultGuardEvaluator;
     use mcp_flowgate_core::model::{Principal, StartWorkflow};
     use mcp_flowgate_core::ports::ExecutorRegistry;
     use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
     use mcp_flowgate_core::WorkflowRuntime;
+    use std::sync::Arc;
 
     struct NoopRegistry;
     impl ExecutorRegistry for NoopRegistry {
@@ -226,7 +234,10 @@ workflows:
         })
         .await
         .expect("start");
-    let goal = resp.pointer("/guidance/goal").and_then(|v| v.as_str()).unwrap();
+    let goal = resp
+        .pointer("/guidance/goal")
+        .and_then(|v| v.as_str())
+        .unwrap();
     let instructions = resp
         .pointer("/guidance/instructions")
         .and_then(|v| v.as_str())
@@ -246,13 +257,13 @@ async fn missing_preference_renders_as_unset_stub_not_panic() {
     // No flowgate.authoring block declared, but skill body still references
     // the template. The resolver MUST emit a stub, not panic, not strip the
     // placeholder silently.
-    use std::sync::Arc;
     use mcp_flowgate_core::audit::{AuditSink, NullAuditSink};
     use mcp_flowgate_core::guards::DefaultGuardEvaluator;
     use mcp_flowgate_core::model::{Principal, StartWorkflow};
     use mcp_flowgate_core::ports::ExecutorRegistry;
     use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryWorkflowStore};
     use mcp_flowgate_core::WorkflowRuntime;
+    use std::sync::Arc;
 
     struct NoopRegistry;
     impl ExecutorRegistry for NoopRegistry {
@@ -296,7 +307,10 @@ workflows:
         })
         .await
         .expect("start");
-    let goal = resp.pointer("/guidance/goal").and_then(|v| v.as_str()).unwrap();
+    let goal = resp
+        .pointer("/guidance/goal")
+        .and_then(|v| v.as_str())
+        .unwrap();
     assert!(
         goal.contains("(preferred_script_language: unset)") || goal.contains("(unset)"),
         "missing preference must render as an `unset` stub, not panic or silently strip; got: {goal}"

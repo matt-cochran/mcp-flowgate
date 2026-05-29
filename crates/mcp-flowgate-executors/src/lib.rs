@@ -41,15 +41,7 @@ pub use pipeline::PipelineExecutor;
 /// executor (`RegistryExecutor`) whose `kind` value isn't a stable
 /// runtime executor kind.
 pub const REGISTERED_EXECUTOR_KINDS: &[&str] = &[
-    "cli",
-    "human",
-    "mcp",
-    "noop",
-    "parallel",
-    "pipeline",
-    "rest",
-    "script",
-    "workflow",
+    "cli", "human", "mcp", "noop", "parallel", "pipeline", "rest", "script", "workflow",
 ];
 pub use registry::HashMapExecutorRegistry;
 pub use registry_executor::RegistryExecutor;
@@ -105,8 +97,14 @@ pub fn default_registry_with_mcp(
         .with("human", Arc::new(HumanExecutor::with_audit(audit)))
         .with("noop", Arc::new(NoopExecutor))
         .with("script", Arc::new(ScriptExecutor::new()))
-        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>)
-        .with("pipeline", pipeline.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
+        .with(
+            "parallel",
+            parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>,
+        )
+        .with(
+            "pipeline",
+            pipeline.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>,
+        );
 
     let registry: Arc<dyn ExecutorRegistry> = Arc::new(registry);
     parallel.set_registry(registry.clone());
@@ -137,8 +135,14 @@ pub fn default_registry_with_workflow(
         .with("noop", Arc::new(NoopExecutor))
         .with("script", Arc::new(ScriptExecutor::new()))
         .with("workflow", Arc::new(WorkflowExecutor::new(runtime, audit)))
-        .with("parallel", parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>)
-        .with("pipeline", pipeline.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>);
+        .with(
+            "parallel",
+            parallel.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>,
+        )
+        .with(
+            "pipeline",
+            pipeline.clone() as Arc<dyn mcp_flowgate_core::ports::Executor>,
+        );
 
     let registry: Arc<dyn ExecutorRegistry> = Arc::new(registry);
     parallel.set_registry(registry.clone());

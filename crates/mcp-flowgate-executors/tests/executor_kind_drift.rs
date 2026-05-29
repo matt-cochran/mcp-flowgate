@@ -31,27 +31,18 @@ fn schema_executor_kind_examples_match_registered_executor_kinds() {
     // Find the `executor` $def → `properties` → `kind` → `examples` array.
     // The schema is a single root JSON value; parse it and traverse via
     // pointer rather than ad-hoc string slicing.
-    let schema: serde_json::Value = serde_json::from_str(&schema_src)
-        .expect("schema must parse as JSON");
+    let schema: serde_json::Value =
+        serde_json::from_str(&schema_src).expect("schema must parse as JSON");
     let examples = schema
         .pointer("/$defs/executor/properties/kind/examples")
         .and_then(|v| v.as_array())
         .expect("schema must have $defs/executor/properties/kind/examples array");
 
-    let schema_kinds: HashSet<&str> = examples
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
+    let schema_kinds: HashSet<&str> = examples.iter().filter_map(|v| v.as_str()).collect();
     let registered: HashSet<&str> = REGISTERED_EXECUTOR_KINDS.iter().copied().collect();
 
-    let missing_from_schema: Vec<&str> = registered
-        .difference(&schema_kinds)
-        .copied()
-        .collect();
-    let extra_in_schema: Vec<&str> = schema_kinds
-        .difference(&registered)
-        .copied()
-        .collect();
+    let missing_from_schema: Vec<&str> = registered.difference(&schema_kinds).copied().collect();
+    let extra_in_schema: Vec<&str> = schema_kinds.difference(&registered).copied().collect();
     assert!(
         missing_from_schema.is_empty() && extra_in_schema.is_empty(),
         "executor kind drift between Rust registry and JSON schema.\n  \

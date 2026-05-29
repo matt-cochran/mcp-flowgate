@@ -13,9 +13,9 @@ use crate::audit::AuditSink;
 use crate::error::RuntimeError;
 use crate::model::*;
 use crate::ports::*;
-pub(crate) use crate::runtime_schema::{apply_schema_defaults, required_str, validate_schema};
 pub use crate::runtime_links::is_terminal;
 pub(crate) use crate::runtime_links::{empty_object_schema, pointer_escape, transition_definition};
+pub(crate) use crate::runtime_schema::{apply_schema_defaults, required_str, validate_schema};
 
 // ---------------------------------------------------------------------------
 // Deterministic chaining types
@@ -200,7 +200,10 @@ impl WorkflowRuntime {
         // bump version so concurrent submits using stale `expected_version`
         // hit the version-conflict path rather than racing past cancel.
         updated.version = updated.version.saturating_add(1);
-        let saved = self.store.save_if_version(updated, expected_version).await?;
+        let saved = self
+            .store
+            .save_if_version(updated, expected_version)
+            .await?;
 
         let event = saved
             .audit_event("workflow.cancelled")
@@ -227,11 +230,12 @@ impl WorkflowRuntime {
     pub(crate) async fn record_or_self_event(&self, event: crate::audit::AuditEvent) {
         let event_type = event.event_type.clone();
         if let Err(primary_err) = self.audit.record(event).await {
-            let self_event = crate::audit::AuditEvent::new("audit.write_failed")
-                .with_payload(serde_json::json!({
+            let self_event = crate::audit::AuditEvent::new("audit.write_failed").with_payload(
+                serde_json::json!({
                     "originalEvent": event_type,
                     "error":         primary_err.to_string(),
-                }));
+                }),
+            );
             if let Err(inner) = self.audit.record(self_event).await {
                 tracing::warn!(
                     original = %event_type,
@@ -293,9 +297,7 @@ impl WorkflowRuntime {
         // return Ok(None) by trait default opt out of the check; their
         // runtime sees no constraint (best-effort safety net).
         if let Some(run_id) = &request.run_id {
-            if let Some(existing_workflow_id) =
-                self.store.find_by_run_id(run_id).await?
-            {
+            if let Some(existing_workflow_id) = self.store.find_by_run_id(run_id).await? {
                 return Err(RuntimeError::RunIdAlreadyRunning {
                     run_id: run_id.clone(),
                     existing_workflow_id,
@@ -339,10 +341,7 @@ impl WorkflowRuntime {
                             return Err(RuntimeError::SubjectNeedsDefinition {
                                 unknown_subject: term.clone(),
                                 bounded_context,
-                                workflow_id_context: format!(
-                                    "workflow:{}",
-                                    request.definition_id
-                                ),
+                                workflow_id_context: format!("workflow:{}", request.definition_id),
                             }
                             .into());
                         }
@@ -351,8 +350,7 @@ impl WorkflowRuntime {
                 None => {
                     // Phase 2 — snapshot fallback.
                     for (term, entry) in lib {
-                        if entry.get("state").and_then(Value::as_str)
-                            == Some("PENDING_DEFINITION")
+                        if entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION")
                         {
                             let bounded_context = entry
                                 .get("bounded_context")
@@ -361,10 +359,7 @@ impl WorkflowRuntime {
                             return Err(RuntimeError::SubjectNeedsDefinition {
                                 unknown_subject: term.clone(),
                                 bounded_context,
-                                workflow_id_context: format!(
-                                    "workflow:{}",
-                                    request.definition_id
-                                ),
+                                workflow_id_context: format!("workflow:{}", request.definition_id),
                             }
                             .into());
                         }
@@ -617,10 +612,22 @@ impl WorkflowRuntime {
         else {
             return Ok(None);
         };
-        let verb = entry.get("verb").and_then(Value::as_str).unwrap_or_default();
-        let body = entry.get("body").and_then(Value::as_str).unwrap_or_default();
-        let lifecycle = entry.get("lifecycle").and_then(Value::as_str).unwrap_or_default();
-        let hash = entry.get("hash").and_then(Value::as_str).unwrap_or_default();
+        let verb = entry
+            .get("verb")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let body = entry
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let lifecycle = entry
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let hash = entry
+            .get("hash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         Ok(Some(json!({
             "kind":      "guidance",
             "subject":   subject,
@@ -650,10 +657,22 @@ impl WorkflowRuntime {
         else {
             return Ok(None);
         };
-        let verb = entry.get("verb").and_then(Value::as_str).unwrap_or_default();
-        let body = entry.get("body").and_then(Value::as_str).unwrap_or_default();
-        let lifecycle = entry.get("lifecycle").and_then(Value::as_str).unwrap_or_default();
-        let hash = entry.get("hash").and_then(Value::as_str).unwrap_or_default();
+        let verb = entry
+            .get("verb")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let body = entry
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let lifecycle = entry
+            .get("lifecycle")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let hash = entry
+            .get("hash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         Ok(Some(json!({
             "kind":      "script",
             "subject":   subject,
@@ -831,7 +850,6 @@ impl WorkflowRuntime {
                 source,
             })
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -841,4 +859,3 @@ impl WorkflowRuntime {
 // ---------------------------------------------------------------------------
 // Guidance string templating (SPEC v2 §5.2)
 // ---------------------------------------------------------------------------
-

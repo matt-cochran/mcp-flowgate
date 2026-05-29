@@ -28,9 +28,7 @@ async fn doctor_passes_against_smoke_ete_with_anthropic_key_set() {
     std::env::set_var("ANTHROPIC_API_KEY", "test-placeholder");
 
     let args = DoctorArgs {
-        config: Some(
-            "../../examples/smoke-ete/gateway.yaml".to_string(),
-        ),
+        config: Some("../../examples/smoke-ete/gateway.yaml".to_string()),
         workflow: Some("smoke_ete".to_string()),
         agents: vec!["test=anthropic/claude-haiku-4-5-20251001".to_string()],
         refresh_agents: false,
@@ -76,8 +74,8 @@ async fn doctor_reports_workflow_not_declared() {
         refresh_agents: false,
     };
     let results = run_doctor(&args).await;
-    let fail = find_status(&results, "WORKFLOW_NOT_DECLARED")
-        .expect("WORKFLOW_NOT_DECLARED must surface");
+    let fail =
+        find_status(&results, "WORKFLOW_NOT_DECLARED").expect("WORKFLOW_NOT_DECLARED must surface");
     assert!(
         fail.detail.contains("smoke_ete"),
         "failure detail must list available workflows; got: {}",

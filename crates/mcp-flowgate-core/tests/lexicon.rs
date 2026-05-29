@@ -75,7 +75,8 @@ fn stamping_writes_lexicon_library_onto_every_workflow() {
     let lib = cfg.pointer("/workflows/demo/_lexiconLibrary").unwrap();
     assert!(lib.get("connector").is_some());
     assert_eq!(
-        lib.pointer("/connector/definition_short").and_then(|v| v.as_str()),
+        lib.pointer("/connector/definition_short")
+            .and_then(|v| v.as_str()),
         Some("Integration unit.")
     );
 }
@@ -144,7 +145,10 @@ fn search_matches_term_name_substring() {
     let def = cfg.pointer("/workflows/demo").unwrap();
     let hits = search_terms(def, "connect", None, None);
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].get("term").and_then(|v| v.as_str()), Some("connector"));
+    assert_eq!(
+        hits[0].get("term").and_then(|v| v.as_str()),
+        Some("connector")
+    );
 }
 
 #[test]
@@ -235,8 +239,14 @@ fn agent_allowed_against_agent_may_propose_term() {
 #[test]
 fn build_entry_sets_defaults() {
     let entry = build_entry("a real def", None, None, None, None).expect("ok");
-    assert_eq!(entry.pointer("/definition_short").and_then(|v| v.as_str()), Some("a real def"));
-    assert_eq!(entry.pointer("/governance").and_then(|v| v.as_str()), Some("human-only"));
+    assert_eq!(
+        entry.pointer("/definition_short").and_then(|v| v.as_str()),
+        Some("a real def")
+    );
+    assert_eq!(
+        entry.pointer("/governance").and_then(|v| v.as_str()),
+        Some("human-only")
+    );
 }
 
 #[test]
@@ -280,15 +290,30 @@ fn alias_lookup_returns_same_entry_as_canonical() {
     });
     let lib = lexicon.as_object().unwrap();
     let index = build_combined_index(lib, "swe-agent").expect("no collision");
-    assert!(index.contains_key("evidence-pack"), "canonical term must be indexed");
-    assert!(index.contains_key("evidence-packs"), "alias 'evidence-packs' must be indexed");
-    assert!(index.contains_key("evidence pack"), "alias 'evidence pack' must be indexed");
+    assert!(
+        index.contains_key("evidence-pack"),
+        "canonical term must be indexed"
+    );
+    assert!(
+        index.contains_key("evidence-packs"),
+        "alias 'evidence-packs' must be indexed"
+    );
+    assert!(
+        index.contains_key("evidence pack"),
+        "alias 'evidence pack' must be indexed"
+    );
     // All three keys map to the same entry (pointer identity).
     let canonical = index["evidence-pack"] as *const _;
     let alias1 = index["evidence-packs"] as *const _;
     let alias2 = index["evidence pack"] as *const _;
-    assert!(std::ptr::eq(canonical, alias1), "alias1 should point at same entry as canonical");
-    assert!(std::ptr::eq(canonical, alias2), "alias2 should point at same entry as canonical");
+    assert!(
+        std::ptr::eq(canonical, alias1),
+        "alias1 should point at same entry as canonical"
+    );
+    assert!(
+        std::ptr::eq(canonical, alias2),
+        "alias2 should point at same entry as canonical"
+    );
 }
 
 #[test]
@@ -352,7 +377,10 @@ fn same_bounded_context_alias_collides_with_another_alias() {
 
 /// Helper: build a config where the scripts block references a subject
 /// whose name, after stripping the first verb segment, is `subject_name`.
-fn config_with_script_subject(script_key: &str, subject_lexicon_key: Option<&str>) -> serde_json::Value {
+fn config_with_script_subject(
+    script_key: &str,
+    subject_lexicon_key: Option<&str>,
+) -> serde_json::Value {
     let mut lexicon = serde_json::Map::new();
     if let Some(key) = subject_lexicon_key {
         lexicon.insert(
@@ -389,7 +417,9 @@ fn unregistered_script_subject_creates_pending_placeholder() {
     let lib = resolved
         .pointer("/workflows/demo/_lexiconLibrary")
         .expect("_lexiconLibrary must be stamped");
-    let entry = lib.get("evidence-foo").expect("pending placeholder must exist for evidence-foo");
+    let entry = lib
+        .get("evidence-foo")
+        .expect("pending placeholder must exist for evidence-foo");
     assert_eq!(
         entry.get("state").and_then(|v| v.as_str()),
         Some("PENDING_DEFINITION"),
@@ -449,10 +479,20 @@ fn multiple_unresolved_subjects_each_get_placeholder() {
     let lib = resolved
         .pointer("/workflows/demo/_lexiconLibrary")
         .expect("_lexiconLibrary must be stamped");
-    let alpha = lib.get("alpha-thing").expect("placeholder for alpha-thing must exist");
-    let beta = lib.get("beta-thing").expect("placeholder for beta-thing must exist");
-    assert_eq!(alpha.get("state").and_then(|v| v.as_str()), Some("PENDING_DEFINITION"));
-    assert_eq!(beta.get("state").and_then(|v| v.as_str()), Some("PENDING_DEFINITION"));
+    let alpha = lib
+        .get("alpha-thing")
+        .expect("placeholder for alpha-thing must exist");
+    let beta = lib
+        .get("beta-thing")
+        .expect("placeholder for beta-thing must exist");
+    assert_eq!(
+        alpha.get("state").and_then(|v| v.as_str()),
+        Some("PENDING_DEFINITION")
+    );
+    assert_eq!(
+        beta.get("state").and_then(|v| v.as_str()),
+        Some("PENDING_DEFINITION")
+    );
 }
 
 #[test]
@@ -480,7 +520,9 @@ fn unregistered_skill_subject_creates_pending_placeholder() {
     let lib = resolved
         .pointer("/workflows/demo/_lexiconLibrary")
         .expect("_lexiconLibrary must be stamped");
-    let entry = lib.get("my-feature").expect("pending placeholder must exist for my-feature");
+    let entry = lib
+        .get("my-feature")
+        .expect("pending placeholder must exist for my-feature");
     assert_eq!(
         entry.get("state").and_then(|v| v.as_str()),
         Some("PENDING_DEFINITION"),

@@ -23,7 +23,7 @@ async fn depth_limit_stops_chain_early() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -51,7 +51,7 @@ async fn chain_failure_returns_partial_and_recovery_link() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -125,7 +125,7 @@ async fn chain_runs_after_submit() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -145,7 +145,7 @@ async fn chain_runs_after_submit() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -175,7 +175,7 @@ async fn chain_steps_have_incrementing_versions() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -208,7 +208,7 @@ async fn chain_emits_audit_events() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -249,7 +249,7 @@ async fn explain_shows_actor_and_deterministic_flag() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -302,7 +302,7 @@ async fn deterministic_transition_submittable_for_recovery() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -319,7 +319,7 @@ async fn deterministic_transition_submittable_for_recovery() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

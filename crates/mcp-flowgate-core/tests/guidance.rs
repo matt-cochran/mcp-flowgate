@@ -73,7 +73,7 @@ async fn guidance_string_interpolates_context() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -137,7 +137,7 @@ async fn unresolved_placeholder_renders_stub_not_error() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -197,7 +197,7 @@ async fn template_value_not_re_expanded() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -285,7 +285,7 @@ async fn response_surfaces_guidance_refs() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -295,10 +295,7 @@ async fn response_surfaces_guidance_refs() {
     let refs = resp["guidance"]["refs"]
         .as_array()
         .expect("guidance.refs must be present");
-    let subjects: Vec<&str> = refs
-        .iter()
-        .filter_map(|r| r["subject"].as_str())
-        .collect();
+    let subjects: Vec<&str> = refs.iter().filter_map(|r| r["subject"].as_str()).collect();
     assert!(
         subjects.contains(&"review.style.house-voice"),
         "workflow-scope ref must be surfaced; got: {subjects:?}"
@@ -385,7 +382,7 @@ async fn transition_scope_refs_ride_on_link() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -397,7 +394,10 @@ async fn transition_scope_refs_ride_on_link() {
         .and_then(|r| r.as_array())
         .cloned()
         .unwrap_or_default();
-    let top_subjects: Vec<&str> = top_refs.iter().filter_map(|r| r["subject"].as_str()).collect();
+    let top_subjects: Vec<&str> = top_refs
+        .iter()
+        .filter_map(|r| r["subject"].as_str())
+        .collect();
     assert!(
         !top_subjects.contains(&"review.style.tone-for-review"),
         "transition-scope ref leaked into guidance.refs (workflow/state-only): {top_subjects:?}"
@@ -414,7 +414,14 @@ async fn transition_scope_refs_ride_on_link() {
         .and_then(|g| g.get("refs"))
         .and_then(|r| r.as_array())
         .expect("link must carry guidance.refs for transition-scope skills");
-    assert_eq!(link_refs.len(), 1, "expected one ref on link; got {link_refs:?}");
+    assert_eq!(
+        link_refs.len(),
+        1,
+        "expected one ref on link; got {link_refs:?}"
+    );
     assert_eq!(link_refs[0]["verb"].as_str(), Some("review"));
-    assert_eq!(link_refs[0]["subject"].as_str(), Some("review.style.tone-for-review"));
+    assert_eq!(
+        link_refs[0]["subject"].as_str(),
+        Some("review.style.tone-for-review")
+    );
 }

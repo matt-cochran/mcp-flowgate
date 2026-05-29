@@ -250,9 +250,15 @@ async fn workflow_without_trace_run_keeps_audit_fields_null_across_transitions()
         assert!(
             e.trace_id.is_none(),
             "event {} leaked trace_id when workflow had none: {:?}",
-            e.event_type, e.trace_id
+            e.event_type,
+            e.trace_id
         );
-        assert!(e.run_id.is_none(), "event {} leaked run_id: {:?}", e.event_type, e.run_id);
+        assert!(
+            e.run_id.is_none(),
+            "event {} leaked run_id: {:?}",
+            e.event_type,
+            e.run_id
+        );
     }
 }
 
@@ -334,7 +340,9 @@ async fn start_with_duplicate_run_id_returns_structured_error() {
         "get link must use flowgate.query"
     );
     assert_eq!(
-        get_link["args"]["workflowId"].as_str().expect("workflowId must be a string"),
+        get_link["args"]["workflowId"]
+            .as_str()
+            .expect("workflowId must be a string"),
         existing_wf_id,
         "get link must reference the existing workflow id"
     );
@@ -357,10 +365,7 @@ async fn query_with_workflow_id_routes_to_get() {
     let workflow_id = start_resp["workflow"]["id"].as_str().unwrap().to_string();
 
     let get_resp = server
-        .dispatch_call(call(
-            TOOL_QUERY,
-            json!({ "workflowId": workflow_id }),
-        ))
+        .dispatch_call(call(TOOL_QUERY, json!({ "workflowId": workflow_id })))
         .await
         .expect("get succeeds");
     assert!(

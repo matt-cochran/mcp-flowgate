@@ -10,7 +10,9 @@ use mcp_flowgate_core::config::{
     Diagnostic,
 };
 
-fn resolve_yaml_with_diagnostics(yaml: &str) -> anyhow::Result<(serde_json::Value, Vec<Diagnostic>)> {
+fn resolve_yaml_with_diagnostics(
+    yaml: &str,
+) -> anyhow::Result<(serde_json::Value, Vec<Diagnostic>)> {
     let value: serde_json::Value = serde_yaml::from_str(yaml)?;
     resolve_with_diagnostics(value)
 }
@@ -45,8 +47,8 @@ fn closed_verb_enum_accepts_all_twelve() {
     // in the closed enum must load with a subject under its own blessed
     // verb-mirror root.
     for verb in [
-        "build", "test", "deploy", "format", "lint", "install", "verify", "run",
-        "inspect", "search", "fetch", "audit",
+        "build", "test", "deploy", "format", "lint", "install", "verify", "run", "inspect",
+        "search", "fetch", "audit",
     ] {
         let yaml = cfg(&format!(
             r#"  {verb}.script.fixture:
@@ -62,26 +64,22 @@ fn closed_verb_enum_accepts_all_twelve() {
 
 #[test]
 fn unknown_verb_rejects_with_invalid_script_verb_naming_subject() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: launch
     lifecycle: stable
     body: |
       echo hi
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_SCRIPT_VERB", "build.cargo.release");
 }
 
 #[test]
 fn missing_verb_rejects_with_missing_script_verb() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     lifecycle: stable
     body: |
       echo hi
-"#,
-    );
+"#);
     assert_load_error(&yaml, "MISSING_SCRIPT_VERB", "build.cargo.release");
 }
 
@@ -89,53 +87,45 @@ fn missing_verb_rejects_with_missing_script_verb() {
 
 #[test]
 fn blessed_script_root_inspect_accepted() {
-    let yaml = cfg(
-        r#"  inspect.deps.tree:
+    let yaml = cfg(r#"  inspect.deps.tree:
     verb: inspect
     lifecycle: stable
     body: |
       cargo tree
-"#,
-    );
+"#);
     resolve_str(&yaml).expect("inspect.* root must accept under strict_namespacing");
 }
 
 #[test]
 fn blessed_script_root_search_accepted() {
-    let yaml = cfg(
-        r#"  search.codebase.ripgrep:
+    let yaml = cfg(r#"  search.codebase.ripgrep:
     verb: search
     lifecycle: stable
     body: |
       rg "$1"
-"#,
-    );
+"#);
     resolve_str(&yaml).expect("search.* root must accept under strict_namespacing");
 }
 
 #[test]
 fn blessed_script_root_fetch_accepted() {
-    let yaml = cfg(
-        r#"  fetch.url.curl:
+    let yaml = cfg(r#"  fetch.url.curl:
     verb: fetch
     lifecycle: stable
     body: |
       curl -sSL "$1"
-"#,
-    );
+"#);
     resolve_str(&yaml).expect("fetch.* root must accept under strict_namespacing");
 }
 
 #[test]
 fn blessed_script_root_audit_accepted() {
-    let yaml = cfg(
-        r#"  audit.deps.cargo-audit:
+    let yaml = cfg(r#"  audit.deps.cargo-audit:
     verb: audit
     lifecycle: stable
     body: |
       cargo audit
-"#,
-    );
+"#);
     resolve_str(&yaml).expect("audit.* root must accept under strict_namespacing");
 }
 
@@ -144,14 +134,12 @@ fn blessed_script_root_audit_accepted() {
 #[test]
 fn unblessed_root_under_strict_namespacing_rejects() {
     // Strict is the default.
-    let yaml = cfg(
-        r#"  rocket.fuel.injection:
+    let yaml = cfg(r#"  rocket.fuel.injection:
     verb: build
     lifecycle: stable
     body: |
       echo hi
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_SCRIPT_SUBJECT_ROOT", "rocket");
 }
 
@@ -168,8 +156,7 @@ scripts:
       echo hi
 "#;
     let (_resolved, diagnostics): (serde_json::Value, Vec<Diagnostic>) =
-        resolve_yaml_with_diagnostics(yaml)
-            .expect("lenient mode must NOT bail; only warn");
+        resolve_yaml_with_diagnostics(yaml).expect("lenient mode must NOT bail; only warn");
     let warn = diagnostics
         .iter()
         .find(|d| d.code == "INVALID_SCRIPT_SUBJECT_ROOT")
@@ -192,14 +179,12 @@ scripts:
 fn empty_subject_rejects() {
     // YAML can't express an empty key cleanly, but a single-segment key
     // fails the is_subject_pattern check (which requires >=2 segments).
-    let yaml = cfg(
-        r#"  build:
+    let yaml = cfg(r#"  build:
     verb: build
     lifecycle: stable
     body: |
       echo hi
-"#,
-    );
+"#);
     let err = resolve_str(&yaml).expect_err("single-segment subject must reject");
     let s = format!("{err:?}");
     assert!(
@@ -212,26 +197,22 @@ fn empty_subject_rejects() {
 
 #[test]
 fn missing_lifecycle_rejects_with_missing_script_lifecycle() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     body: |
       echo hi
-"#,
-    );
+"#);
     assert_load_error(&yaml, "MISSING_SCRIPT_LIFECYCLE", "build.cargo.release");
 }
 
 #[test]
 fn invalid_lifecycle_rejects() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: graduated
     body: |
       echo hi
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_SCRIPT_LIFECYCLE", "graduated");
 }
 
@@ -239,39 +220,33 @@ fn invalid_lifecycle_rejects() {
 
 #[test]
 fn both_body_and_uri_rejects_as_ambiguous() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
     body: |
       echo hi
     uri: file://./build.sh
     hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
-"#,
-    );
+"#);
     assert_load_error(&yaml, "SCRIPT_BODY_SOURCE_AMBIGUOUS", "build.cargo.release");
 }
 
 #[test]
 fn neither_body_nor_uri_rejects_as_ambiguous() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
-"#,
-    );
+"#);
     assert_load_error(&yaml, "SCRIPT_BODY_SOURCE_AMBIGUOUS", "build.cargo.release");
 }
 
 #[test]
 fn uri_without_hash_rejects_with_missing_script_hash() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
     uri: file://./build.sh
-"#,
-    );
+"#);
     assert_load_error(&yaml, "MISSING_SCRIPT_HASH", "build.cargo.release");
 }
 
@@ -279,14 +254,12 @@ fn uri_without_hash_rejects_with_missing_script_hash() {
 fn uri_with_unsupported_scheme_rejects() {
     // SPEC §22.2 — supported schemes: file://, https://, git+https://.
     // Other schemes (s3, ftp, gs, ssh, etc.) reject at validate time.
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
     uri: s3://example-bucket/build.sh
     hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-"#,
-    );
+"#);
     assert_load_error(&yaml, "UNSUPPORTED_SCRIPT_URI_SCHEME", "s3");
 }
 
@@ -294,43 +267,37 @@ fn uri_with_unsupported_scheme_rejects() {
 
 #[test]
 fn malformed_hash_missing_prefix_rejects() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
     body: |
       echo hi
     hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_SCRIPT_HASH_FORMAT", "sha256:");
 }
 
 #[test]
 fn malformed_hash_wrong_length_rejects() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
     body: |
       echo hi
     hash: sha256:abc123
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_SCRIPT_HASH_FORMAT", "build.cargo.release");
 }
 
 #[test]
 fn malformed_hash_uppercase_hex_rejects() {
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
     body: |
       echo hi
     hash: sha256:E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_SCRIPT_HASH_FORMAT", "build.cargo.release");
 }
 
@@ -354,15 +321,13 @@ fn inline_body_with_matching_hash_loads_cleanly() {
 fn inline_body_with_mismatched_hash_rejects() {
     // Author-declared hash that doesn't match what compute_script_hash(body)
     // would produce. The runtime must catch this as SCRIPT_HASH_MISMATCH.
-    let yaml = cfg(
-        r#"  build.cargo.release:
+    let yaml = cfg(r#"  build.cargo.release:
     verb: build
     lifecycle: stable
     body: |
       echo hi
     hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
-"#,
-    );
+"#);
     assert_load_error(&yaml, "SCRIPT_HASH_MISMATCH", "build.cargo.release");
 }
 
@@ -416,14 +381,12 @@ fn https_uri_passes_validate_phase_when_hash_declared() {
     // happens at stamp time — resolve_str will fail with a network
     // error (invalid host), but NOT with UNSUPPORTED_SCRIPT_URI_SCHEME,
     // proving the validator accepted https://.
-    let yaml = cfg(
-        r#"  build.example.from-net:
+    let yaml = cfg(r#"  build.example.from-net:
     verb: build
     lifecycle: stable
     uri: https://example.invalid/path/to/script.sh
     hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
-"#,
-    );
+"#);
     let err = resolve_str(&yaml).expect_err("network fetch must fail for invalid host");
     let s = format!("{err:?}");
     assert!(
@@ -434,13 +397,11 @@ fn https_uri_passes_validate_phase_when_hash_declared() {
 
 #[test]
 fn https_uri_rejects_without_hash() {
-    let yaml = cfg(
-        r#"  build.example.from-net:
+    let yaml = cfg(r#"  build.example.from-net:
     verb: build
     lifecycle: stable
     uri: https://example.invalid/path/to/script.sh
-"#,
-    );
+"#);
     assert_load_error(&yaml, "MISSING_SCRIPT_HASH", "build.example.from-net");
 }
 
@@ -450,14 +411,12 @@ fn git_https_uri_passes_validate_phase_when_well_formed() {
     // shape; stamp-time `git archive` against a nonexistent repo
     // will fail with GIT_ARCHIVE_NOT_SUPPORTED (or git-spawn error),
     // but NOT with INVALID_GIT_HTTPS_URI / UNSUPPORTED_SCRIPT_URI_SCHEME.
-    let yaml = cfg(
-        r#"  build.example.from-git:
+    let yaml = cfg(r#"  build.example.from-git:
     verb: build
     lifecycle: stable
     uri: git+https://github.invalid/example/repo.git@v1.2.3#scripts/build.sh
     hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
-"#,
-    );
+"#);
     let err = resolve_str(&yaml).expect_err("git archive must fail for invalid host");
     let s = format!("{err:?}");
     assert!(
@@ -468,39 +427,33 @@ fn git_https_uri_passes_validate_phase_when_well_formed() {
 
 #[test]
 fn git_https_uri_rejects_without_path_fragment() {
-    let yaml = cfg(
-        r#"  build.example.no-frag:
+    let yaml = cfg(r#"  build.example.no-frag:
     verb: build
     lifecycle: stable
     uri: git+https://github.com/example/repo.git@v1.2.3
     hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_GIT_HTTPS_URI", "missing the `#<path>`");
 }
 
 #[test]
 fn git_https_uri_rejects_without_ref() {
-    let yaml = cfg(
-        r#"  build.example.no-ref:
+    let yaml = cfg(r#"  build.example.no-ref:
     verb: build
     lifecycle: stable
     uri: git+https://github.com/example/repo.git#scripts/build.sh
     hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
-"#,
-    );
+"#);
     assert_load_error(&yaml, "INVALID_GIT_HTTPS_URI", "missing the `@<ref>`");
 }
 
 #[test]
 fn unsupported_uri_scheme_rejects() {
-    let yaml = cfg(
-        r#"  build.example.bad-scheme:
+    let yaml = cfg(r#"  build.example.bad-scheme:
     verb: build
     lifecycle: stable
     uri: ftp://example.invalid/path/to/script.sh
     hash: sha256:0000000000000000000000000000000000000000000000000000000000000000
-"#,
-    );
+"#);
     assert_load_error(&yaml, "UNSUPPORTED_SCRIPT_URI_SCHEME", "ftp://");
 }

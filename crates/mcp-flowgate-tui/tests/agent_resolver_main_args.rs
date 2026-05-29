@@ -11,9 +11,18 @@ fn cli_flag_and_yaml_both_present_fails_startup() {
     let err = validate_agent_source_exclusivity(true, true)
         .expect_err("yaml + --agent simultaneously must be an error");
     let msg = err.to_string();
-    assert!(msg.contains("ambiguous"), "error message must name the ambiguity: {msg}");
-    assert!(msg.contains("--agent"), "error message must mention --agent: {msg}");
-    assert!(msg.contains("agents.yaml"), "error message must mention agents.yaml: {msg}");
+    assert!(
+        msg.contains("ambiguous"),
+        "error message must name the ambiguity: {msg}"
+    );
+    assert!(
+        msg.contains("--agent"),
+        "error message must mention --agent: {msg}"
+    );
+    assert!(
+        msg.contains("agents.yaml"),
+        "error message must mention agents.yaml: {msg}"
+    );
 }
 
 #[test]

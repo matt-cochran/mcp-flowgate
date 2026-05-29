@@ -23,7 +23,10 @@ default:
     assert_eq!(f.default.len(), 1);
     assert_eq!(f.default[0].provider, Provider::Anthropic);
     assert_eq!(f.default[0].model, "claude-sonnet-4-6");
-    assert!(matches!(f.default[0].features, ProviderFeatures::Anthropic(_)));
+    assert!(matches!(
+        f.default[0].features,
+        ProviderFeatures::Anthropic(_)
+    ));
     assert!(f.overrides.is_empty());
 }
 
@@ -179,7 +182,13 @@ default:
 "#;
     let err = AgentsFile::from_yaml(yaml).expect_err("version mismatch → error");
     assert!(
-        matches!(err, AgentConfigError::VersionMismatch { got: 99, expected: 1 }),
+        matches!(
+            err,
+            AgentConfigError::VersionMismatch {
+                got: 99,
+                expected: 1
+            }
+        ),
         "expected VersionMismatch{{got:99,expected:1}}, got {err:?}"
     );
 }

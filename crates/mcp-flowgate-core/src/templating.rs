@@ -1,7 +1,6 @@
 use crate::model::WorkflowInstance;
 use serde_json::Value;
 
-
 /// Render a `goal` or `guidance` template string against a live workflow
 /// instance.
 ///

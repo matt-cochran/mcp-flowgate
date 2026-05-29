@@ -66,7 +66,12 @@ fn build_evaluator(records: Vec<Evidence>) -> DefaultGuardEvaluator {
 async fn evaluate(records: Vec<Evidence>, guard: Value) -> bool {
     let evaluator = build_evaluator(records);
     evaluator
-        .evaluate(&guard, &instance_stub(), &json!({}), &Principal::anonymous())
+        .evaluate(
+            &guard,
+            &instance_stub(),
+            &json!({}),
+            &Principal::anonymous(),
+        )
         .await
         .expect("evaluate")
 }
@@ -86,10 +91,7 @@ async fn legacy_string_requirement_still_works() {
 
 #[tokio::test]
 async fn legacy_count_requirement_still_works() {
-    let records = vec![
-        ev("approval", None, None),
-        ev("approval", None, None),
-    ];
+    let records = vec![ev("approval", None, None), ev("approval", None, None)];
     let pass = evaluate(
         records,
         json!({ "kind": "evidence", "requires": [{ "kind": "approval", "count": 2 }] }),
@@ -122,7 +124,10 @@ async fn require_digest_excludes_records_with_no_digest() {
         }),
     )
     .await;
-    assert!(!pass, "record without digest must not satisfy require_digest");
+    assert!(
+        !pass,
+        "record without digest must not satisfy require_digest"
+    );
 }
 
 #[tokio::test]
@@ -269,10 +274,10 @@ async fn min_confidence_counts_only_qualifying_records_toward_quorum() {
 async fn combined_filters_intersect() {
     // Records: one with both, one missing each, one with neither.
     let records = vec![
-        ev("build", Some("sha256:a"), Some(0.9)),  // both → counts
-        ev("build", Some("sha256:b"), Some(0.4)),  // low confidence → drops
-        ev("build", None, Some(0.95)),              // no digest → drops
-        ev("build", None, None),                    // both missing → drops
+        ev("build", Some("sha256:a"), Some(0.9)), // both → counts
+        ev("build", Some("sha256:b"), Some(0.4)), // low confidence → drops
+        ev("build", None, Some(0.95)),            // no digest → drops
+        ev("build", None, None),                  // both missing → drops
     ];
     let pass = evaluate(
         records.clone(),
@@ -306,10 +311,7 @@ async fn combined_filters_intersect() {
 
 #[tokio::test]
 async fn multiple_requires_entries_must_all_satisfy() {
-    let records = vec![
-        ev("build", Some("sha256:a"), None),
-        ev("test", None, None),
-    ];
+    let records = vec![ev("build", Some("sha256:a"), None), ev("test", None, None)];
     // build with digest passes; test without digest fails because of the
     // require_digest on its requirement.
     let pass = evaluate(
@@ -334,7 +336,12 @@ async fn multiple_requires_entries_must_all_satisfy() {
 async fn evaluate_with_diag(records: Vec<Evidence>, guard: Value) -> (bool, Option<String>) {
     let evaluator = build_evaluator(records);
     evaluator
-        .evaluate_with_diagnostic(&guard, &instance_stub(), &json!({}), &Principal::anonymous())
+        .evaluate_with_diagnostic(
+            &guard,
+            &instance_stub(),
+            &json!({}),
+            &Principal::anonymous(),
+        )
         .await
         .expect("evaluate_with_diagnostic")
 }
@@ -402,7 +409,10 @@ async fn diagnostic_none_when_no_records_of_kind_exist() {
     )
     .await;
     assert!(!pass);
-    assert!(diag.is_none(), "non-filter-attributable miss must not surface §20.4 code");
+    assert!(
+        diag.is_none(),
+        "non-filter-attributable miss must not surface §20.4 code"
+    );
 }
 
 #[tokio::test]
@@ -426,7 +436,7 @@ async fn diagnostic_digest_required_takes_precedence_when_both_apply() {
     // Check the attribution chosen: digest filter takes precedence in our
     // implementation because it's evaluated first.
     let records = vec![
-        ev("build", None, Some(0.9)),       // dropped: no digest
+        ev("build", None, Some(0.9)), // dropped: no digest
     ];
     let (pass, diag) = evaluate_with_diag(
         records,

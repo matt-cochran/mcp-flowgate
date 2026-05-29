@@ -245,10 +245,7 @@ fn validate_one_workflow(
     // Blackboard slot check: if blackboard is declared, warn on any output: key not in the set.
     if let Some(blackboard) = def.get("blackboard") {
         let declared: HashSet<&str> = match blackboard {
-            Value::Array(arr) => arr
-                .iter()
-                .filter_map(|v| v.as_str())
-                .collect(),
+            Value::Array(arr) => arr.iter().filter_map(|v| v.as_str()).collect(),
             Value::Object(obj) => obj.keys().map(String::as_str).collect(),
             _ => HashSet::new(),
         };
@@ -341,7 +338,10 @@ fn check_use_before_def(
     let declared = declared_blackboard_slots(def);
 
     for (state_name, state_def) in states {
-        let available = writers.get(state_name.as_str()).cloned().unwrap_or_default();
+        let available = writers
+            .get(state_name.as_str())
+            .cloned()
+            .unwrap_or_default();
 
         // Templates on the state (state.goal, state.guidance).
         for field in ["goal", "guidance"] {
@@ -662,7 +662,9 @@ fn check_skills_refs(
             )));
         }
         for entry in arr {
-            let Some(subject) = entry.as_str() else { continue };
+            let Some(subject) = entry.as_str() else {
+                continue;
+            };
             // Direct match first (bare subject, OR already-prefixed).
             if skill_subjects.contains(subject) {
                 continue;
@@ -691,7 +693,10 @@ fn check_skills_refs(
         if let Some(ts) = state_def.get("transitions").and_then(Value::as_object) {
             for (t_name, t_def) in ts {
                 if let Some(refs) = t_def.get("skills") {
-                    check_scope(&format!("transition '{t_name}' in state '{state_name}'"), refs);
+                    check_scope(
+                        &format!("transition '{t_name}' in state '{state_name}'"),
+                        refs,
+                    );
                 }
             }
         }
@@ -752,10 +757,7 @@ fn validate_use_bindings(id: &str, def: &Value, out: &mut Vec<Diagnostic>) {
         return;
     };
     for (state_name, state_def) in states {
-        let Some(transitions) = state_def
-            .pointer("/transitions")
-            .and_then(Value::as_object)
-        else {
+        let Some(transitions) = state_def.pointer("/transitions").and_then(Value::as_object) else {
             continue;
         };
         for (t_name, t_def) in transitions {
@@ -923,7 +925,10 @@ fn v6_primary_executor_verb_shape(id: &str, def: &Value, out: &mut Vec<Diagnosti
         return; // generic missing-initialState error fired elsewhere
     };
     let Some(transitions) = def
-        .pointer(&format!("/states/{}/transitions", pointer_escape(initial_state)))
+        .pointer(&format!(
+            "/states/{}/transitions",
+            pointer_escape(initial_state)
+        ))
         .and_then(Value::as_object)
     else {
         return;
@@ -938,10 +943,7 @@ fn v6_primary_executor_verb_shape(id: &str, def: &Value, out: &mut Vec<Diagnosti
     let mut primary_kinds: Vec<&str> = Vec::new();
     let mut has_human_actor = false;
     for (_t_name, t_def) in transitions {
-        if let Some(kind) = t_def
-            .pointer("/executor/kind")
-            .and_then(Value::as_str)
-        {
+        if let Some(kind) = t_def.pointer("/executor/kind").and_then(Value::as_str) {
             primary_kinds.push(kind);
         }
         if t_def.get("actor").and_then(Value::as_str) == Some("human")
@@ -953,12 +955,10 @@ fn v6_primary_executor_verb_shape(id: &str, def: &Value, out: &mut Vec<Diagnosti
 
     let category = verb.category();
     let ok = match category {
-        CapVerbCategory::Cognitive => primary_kinds
-            .iter()
-            .any(|k| matches!(*k, "mcp" | "noop")),
-        CapVerbCategory::Deterministic => primary_kinds
-            .iter()
-            .any(|k| matches!(*k, "script" | "mcp")),
+        CapVerbCategory::Cognitive => primary_kinds.iter().any(|k| matches!(*k, "mcp" | "noop")),
+        CapVerbCategory::Deterministic => {
+            primary_kinds.iter().any(|k| matches!(*k, "script" | "mcp"))
+        }
         CapVerbCategory::Coordination => match verb {
             CapVerb::Gate => has_human_actor,
             // Spec §4.1 ideal for `coordinate` is `kind: mcp` AND
@@ -974,7 +974,9 @@ fn v6_primary_executor_verb_shape(id: &str, def: &Value, out: &mut Vec<Diagnosti
             CapVerbCategory::Cognitive => "kind: mcp OR kind: noop (skill-surfacing)",
             CapVerbCategory::Deterministic => "kind: script OR kind: mcp",
             CapVerbCategory::Coordination => match verb {
-                CapVerb::Gate => "at least one initial-state transition with actor: human OR purpose: ask",
+                CapVerb::Gate => {
+                    "at least one initial-state transition with actor: human OR purpose: ask"
+                }
                 CapVerb::Coordinate => "kind: mcp",
                 _ => "?",
             },
@@ -1042,10 +1044,7 @@ fn v11_orchestrator_does_not_invoke_orchestrator(id: &str, def: &Value, out: &mu
         return;
     };
     for (_state_name, state_def) in states {
-        let Some(transitions) = state_def
-            .pointer("/transitions")
-            .and_then(Value::as_object)
-        else {
+        let Some(transitions) = state_def.pointer("/transitions").and_then(Value::as_object) else {
             continue;
         };
         for (_t_name, t_def) in transitions {
@@ -1072,10 +1071,7 @@ fn v11_orchestrator_does_not_invoke_orchestrator(id: &str, def: &Value, out: &mu
 fn find_first_workflow_invocation(def: &Value) -> Option<String> {
     let states = def.pointer("/states").and_then(Value::as_object)?;
     for state_def in states.values() {
-        if let Some(transitions) = state_def
-            .pointer("/transitions")
-            .and_then(Value::as_object)
-        {
+        if let Some(transitions) = state_def.pointer("/transitions").and_then(Value::as_object) {
             for t_def in transitions.values() {
                 if t_def.pointer("/executor/kind").and_then(Value::as_str) == Some("workflow") {
                     if let Some(target) = t_def
@@ -1109,10 +1105,7 @@ fn validate_contract_hash_pins(
         return;
     };
     for (state_name, state_def) in states {
-        let Some(transitions) = state_def
-            .pointer("/transitions")
-            .and_then(Value::as_object)
-        else {
+        let Some(transitions) = state_def.pointer("/transitions").and_then(Value::as_object) else {
             continue;
         };
         for (t_name, t_def) in transitions {
@@ -1128,9 +1121,7 @@ fn validate_contract_hash_pins(
             let Some(actual_hash) = ctx.cap_contract_hashes.get(target_id) else {
                 continue; // target isn't a snippet-bearing cap; nothing to pin
             };
-            let declared_pin = exec
-                .get("expects_contract_hash")
-                .and_then(Value::as_str);
+            let declared_pin = exec.get("expects_contract_hash").and_then(Value::as_str);
             let lifecycle = ctx
                 .cap_lifecycles
                 .get(target_id)
@@ -1168,12 +1159,7 @@ fn validate_contract_hash_pins(
 /// consistency between two states writing the same path) is enforced
 /// inside [`crate::slot_table::build_slot_table`] and surfaces here as
 /// part of the returned diagnostic list.
-fn v13_v14_slot_table(
-    id: &str,
-    def: &Value,
-    ctx: &ValidationCtx<'_>,
-    out: &mut Vec<Diagnostic>,
-) {
+fn v13_v14_slot_table(id: &str, def: &Value, ctx: &ValidationCtx<'_>, out: &mut Vec<Diagnostic>) {
     let table = match crate::slot_table::build_slot_table(def, ctx.cap_snippet_outputs) {
         Ok(t) => t,
         Err(diagnostics) => {
@@ -1186,10 +1172,7 @@ fn v13_v14_slot_table(
         return;
     };
     for (state_name, state_def) in states {
-        let Some(transitions) = state_def
-            .pointer("/transitions")
-            .and_then(Value::as_object)
-        else {
+        let Some(transitions) = state_def.pointer("/transitions").and_then(Value::as_object) else {
             continue;
         };
         for (t_name, t_def) in transitions {
@@ -1200,7 +1183,9 @@ fn v13_v14_slot_table(
                 continue;
             };
             for (_input_name, expr_value) in use_inputs {
-                let Some(expr) = expr_value.as_str() else { continue };
+                let Some(expr) = expr_value.as_str() else {
+                    continue;
+                };
                 if !expr.starts_with("$.context.") {
                     // Non-context references (literals, $.workflow.input.*,
                     // $.arguments.*) bypass the slot table — they don't

@@ -37,12 +37,7 @@ fn build_registry(audit: Arc<MemoryAuditSink>) -> Arc<dyn ExecutorRegistry> {
     let mcp_conns = McpConnections::from_config(&json!({}));
     let cli_conns = Arc::new(CliConnections::from_config(&json!({})));
     let mcp_exec = Arc::new(McpExecutor::new(mcp_conns));
-    default_registry_with_mcp(
-        &json!({}),
-        mcp_exec,
-        cli_conns,
-        audit as Arc<dyn AuditSink>,
-    )
+    default_registry_with_mcp(&json!({}), mcp_exec, cli_conns, audit as Arc<dyn AuditSink>)
 }
 
 fn req(executor_config: Value) -> ExecuteRequest {
@@ -109,7 +104,12 @@ async fn first_step_failure_bails_by_default() {
         .into_iter()
         .filter(|e| e.event_type == "pipeline.step.started")
         .collect();
-    assert_eq!(started.len(), 1, "bail must stop after first failure; got {} started events", started.len());
+    assert_eq!(
+        started.len(),
+        1,
+        "bail must stop after first failure; got {} started events",
+        started.len()
+    );
 }
 
 #[tokio::test]
@@ -164,7 +164,10 @@ async fn missing_steps_rejects() {
     .await;
     let err = result.expect_err("missing steps must reject");
     let s = format!("{err:?}");
-    assert!(s.contains("INVALID_PIPELINE_CONFIG") && s.contains("steps"), "got: {s}");
+    assert!(
+        s.contains("INVALID_PIPELINE_CONFIG") && s.contains("steps"),
+        "got: {s}"
+    );
 }
 
 #[tokio::test]

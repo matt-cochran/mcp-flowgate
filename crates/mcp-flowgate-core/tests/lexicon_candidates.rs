@@ -20,11 +20,7 @@ fn single_entry(term: &str, definition_short: &str) -> Map<String, Value> {
 }
 
 /// Build a lexicon map with one entry that carries aliases.
-fn entry_with_aliases(
-    term: &str,
-    definition_short: &str,
-    aliases: &[&str],
-) -> Map<String, Value> {
+fn entry_with_aliases(term: &str, definition_short: &str, aliases: &[&str]) -> Map<String, Value> {
     let mut m = Map::new();
     m.insert(
         term.to_string(),
@@ -158,7 +154,10 @@ fn candidates_orders_exact_before_alias_before_fuzzy_close_before_fuzzy_loose() 
     let close_pos = kinds.iter().position(|&k| k == "fuzzy_close");
     let loose_pos = kinds.iter().position(|&k| k == "fuzzy_loose");
     if let (Some(cp), Some(lp)) = (close_pos, loose_pos) {
-        assert!(cp < lp, "fuzzy_close must appear before fuzzy_loose; order: {kinds:?}");
+        assert!(
+            cp < lp,
+            "fuzzy_close must appear before fuzzy_loose; order: {kinds:?}"
+        );
     }
 }
 
@@ -180,7 +179,8 @@ fn candidates_returns_at_most_five_entries() {
     let results = rank_candidates("target0", &lexicon, None);
     assert!(
         results.len() <= 5,
-        "must return at most 5 candidates; got {}", results.len()
+        "must return at most 5 candidates; got {}",
+        results.len()
     );
 }
 

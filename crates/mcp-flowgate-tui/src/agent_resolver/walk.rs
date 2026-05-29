@@ -174,7 +174,10 @@ impl Resolver {
             });
         }
         walked.push("default (matched)".to_string());
-        Ok((Cow::Borrowed(self.file.default.as_slice()), "default".to_string()))
+        Ok((
+            Cow::Borrowed(self.file.default.as_slice()),
+            "default".to_string(),
+        ))
     }
 
     /// Pick the next binding to try given prior failures. Walks the
@@ -197,7 +200,11 @@ impl Resolver {
             .iter()
             .any(|(_, class, _)| !class.is_infrastructure());
         if !has_content_failure {
-            let next_idx = prior_failures.iter().map(|(i, _, _)| *i + 1).max().unwrap_or(0);
+            let next_idx = prior_failures
+                .iter()
+                .map(|(i, _, _)| *i + 1)
+                .max()
+                .unwrap_or(0);
             if let Some(b) = bindings.get(next_idx) {
                 return Ok((next_idx, b));
             }

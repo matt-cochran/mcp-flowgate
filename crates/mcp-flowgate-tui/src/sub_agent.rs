@@ -49,9 +49,7 @@ use async_trait::async_trait;
 use llm::ReasoningEffort;
 use tokio::time::timeout;
 
-use crate::agent_resolver::{
-    AnthropicFeatures, GoogleFeatures, OpenAIFeatures, ProviderFeatures,
-};
+use crate::agent_resolver::{AnthropicFeatures, GoogleFeatures, OpenAIFeatures, ProviderFeatures};
 use crate::flowgate_mcp;
 use crate::interpreter::{InterpreterError, ResolvedAgent, SubAgentSpawner};
 use crate::tui_config::TuiConfig;
@@ -86,9 +84,9 @@ pub fn features_to_reasoning_effort(features: &ProviderFeatures) -> Option<Reaso
         ProviderFeatures::OpenAI(OpenAIFeatures { reasoning_effort }) => {
             reasoning_effort.as_deref().and_then(parse_openai_effort)
         }
-        ProviderFeatures::Google(GoogleFeatures { thinking_budget_tokens }) => {
-            thinking_budget_tokens.map(budget_to_effort)
-        }
+        ProviderFeatures::Google(GoogleFeatures {
+            thinking_budget_tokens,
+        }) => thinking_budget_tokens.map(budget_to_effort),
     }
 }
 
@@ -205,11 +203,9 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
         // agent's own settings.json system prompt + the user prompt
         // together drive the session.
         let mut mcp_config = McpConfigArgs::default();
-        flowgate_mcp::set_as_sole_mcp(&mut mcp_config).map_err(|e| {
-            InterpreterError::Mcp {
-                tool: "aether/sub_agent/mcp_wiring".into(),
-                source: e,
-            }
+        flowgate_mcp::set_as_sole_mcp(&mut mcp_config).map_err(|e| InterpreterError::Mcp {
+            tool: "aether/sub_agent/mcp_wiring".into(),
+            source: e,
         })?;
         let cwd = std::path::PathBuf::from(".")
             .canonicalize()
@@ -222,10 +218,12 @@ impl SubAgentSpawner for AetherSubAgentSpawner {
         // `HeadlessArgs` has no field for it; bypassing it lets the
         // operator's agents.yaml feature toggles actually take effect.
         let model_str = format!("{}:{}", agent.provider, agent.model);
-        let parsed_model = model_str.parse().map_err(|e: String| InterpreterError::Mcp {
-            tool: format!("aether/sub_agent/{}/model_parse", agent.label),
-            source: anyhow::anyhow!("invalid model `{model_str}`: {e}"),
-        })?;
+        let parsed_model = model_str
+            .parse()
+            .map_err(|e: String| InterpreterError::Mcp {
+                tool: format!("aether/sub_agent/{}/model_parse", agent.label),
+                source: anyhow::anyhow!("invalid model `{model_str}`: {e}"),
+            })?;
         let spec = AgentSpec::default_spec(&parsed_model, reasoning_effort, Vec::new());
 
         let config = RunConfig {

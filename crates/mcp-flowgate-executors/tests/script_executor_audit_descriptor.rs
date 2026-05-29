@@ -30,7 +30,9 @@ struct ByKind {
 }
 impl ByKind {
     fn new() -> Self {
-        Self { inner: std::collections::HashMap::new() }
+        Self {
+            inner: std::collections::HashMap::new(),
+        }
     }
     fn with(mut self, kind: &str, exec: Arc<dyn Executor>) -> Self {
         self.inner.insert(kind.to_string(), exec);
@@ -134,7 +136,10 @@ workflows:
         .unwrap_or_else(|| panic!("descriptor missing; record: {record}"));
     assert_eq!(descriptor["kind"], "script");
     assert!(descriptor.get("ok").is_some(), "ok must be present");
-    assert!(descriptor.get("durationMs").is_some(), "durationMs must be present");
+    assert!(
+        descriptor.get("durationMs").is_some(),
+        "durationMs must be present"
+    );
     assert_eq!(
         descriptor["subject"].as_str(),
         Some("build.cargo.release"),
@@ -143,8 +148,15 @@ workflows:
     let hash = descriptor["hash"]
         .as_str()
         .expect("hash must be on the executor descriptor for script executors");
-    assert!(hash.starts_with("sha256:"), "hash must carry the algorithm prefix");
-    assert_eq!(hash.len(), "sha256:".len() + 64, "hash must be 64 hex chars");
+    assert!(
+        hash.starts_with("sha256:"),
+        "hash must carry the algorithm prefix"
+    );
+    assert_eq!(
+        hash.len(),
+        "sha256:".len() + 64,
+        "hash must be 64 hex chars"
+    );
 }
 
 // ── Negative: non-script executor → descriptor stays at {kind, ok, durationMs} ──

@@ -79,11 +79,21 @@ impl Default for RepoLayout {
     }
 }
 
-fn default_capabilities_dir() -> String { "capabilities".to_string() }
-fn default_orchestrators_dir() -> String { "orchestrators".to_string() }
-fn default_skills_dir() -> String { "skills".to_string() }
-fn default_scripts_dir() -> String { "scripts".to_string() }
-fn default_connections_dir() -> String { "connections".to_string() }
+fn default_capabilities_dir() -> String {
+    "capabilities".to_string()
+}
+fn default_orchestrators_dir() -> String {
+    "orchestrators".to_string()
+}
+fn default_skills_dir() -> String {
+    "skills".to_string()
+}
+fn default_scripts_dir() -> String {
+    "scripts".to_string()
+}
+fn default_connections_dir() -> String {
+    "connections".to_string()
+}
 
 /// Load and validate a `flowgate.repo.yaml` from the given repo root.
 /// The path argument is the repo directory; the manifest is read from
@@ -192,8 +202,7 @@ fn merge_repo_file(
         // commonly carry. Hard-error only on keys that look like they
         // intended to declare a block we don't know how to namespace-
         // prefix.
-        const HARMLESS_TOP_LEVEL_KEYS: &[&str] =
-            &["version", "include", "description", "metadata"];
+        const HARMLESS_TOP_LEVEL_KEYS: &[&str] = &["version", "include", "description", "metadata"];
         if HARMLESS_TOP_LEVEL_KEYS.contains(&block_key.as_str()) {
             continue;
         }
@@ -263,10 +272,7 @@ pub(crate) fn rewrite_workflow_refs(value: &mut Value, namespace: &str) {
     match value {
         Value::Object(map) => {
             // Direct executor block: { kind: workflow, definitionId: ... }
-            let is_workflow_executor = map
-                .get("kind")
-                .and_then(Value::as_str)
-                == Some("workflow");
+            let is_workflow_executor = map.get("kind").and_then(Value::as_str) == Some("workflow");
             if is_workflow_executor {
                 if let Some(Value::String(id)) = map.get_mut("definitionId") {
                     if !id.contains('/') {
@@ -293,7 +299,9 @@ pub(crate) fn rewrite_workflow_refs(value: &mut Value, namespace: &str) {
 /// (anonymous-shadowing) checks.
 pub fn aggregate_ids(aggregate: &Value) -> HashSet<String> {
     let mut out = HashSet::new();
-    let Some(obj) = aggregate.as_object() else { return out };
+    let Some(obj) = aggregate.as_object() else {
+        return out;
+    };
     for block in PREFIXABLE_BLOCKS {
         if let Some(entries) = obj.get(*block).and_then(Value::as_object) {
             for k in entries.keys() {
@@ -347,8 +355,14 @@ mod tests {
         );
         let err = load_manifest(td.path()).expect_err("schema mismatch should error");
         let msg = format!("{:#}", err);
-        assert!(msg.contains("flowgate.repo/v1"), "error should mention v1: {msg}");
-        assert!(msg.contains("flowgate.repo/v2"), "error should mention actual: {msg}");
+        assert!(
+            msg.contains("flowgate.repo/v1"),
+            "error should mention v1: {msg}"
+        );
+        assert!(
+            msg.contains("flowgate.repo/v2"),
+            "error should mention actual: {msg}"
+        );
     }
 
     #[test]
@@ -379,7 +393,10 @@ mod tests {
         let td = TempDir::new().unwrap();
         let err = load_manifest(td.path()).expect_err("missing file should error");
         let msg = format!("{:#}", err);
-        assert!(msg.contains("flowgate.repo.yaml"), "error should mention file: {msg}");
+        assert!(
+            msg.contains("flowgate.repo.yaml"),
+            "error should mention file: {msg}"
+        );
     }
 
     fn minimal_manifest(namespace: &str) -> String {
@@ -404,7 +421,11 @@ mod tests {
             .pointer("/workflows")
             .and_then(Value::as_object)
             .expect("workflows present");
-        assert!(workflows.contains_key("swe/cap.plan.vet"), "got keys: {:?}", workflows.keys().collect::<Vec<_>>());
+        assert!(
+            workflows.contains_key("swe/cap.plan.vet"),
+            "got keys: {:?}",
+            workflows.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -428,7 +449,10 @@ mod tests {
         );
 
         let (_m, agg) = load_repo(td.path()).expect("repo loads");
-        let workflows = agg.pointer("/workflows").and_then(Value::as_object).unwrap();
+        let workflows = agg
+            .pointer("/workflows")
+            .and_then(Value::as_object)
+            .unwrap();
         assert!(workflows.contains_key("swe/cap.plan.vet"));
         assert!(workflows.contains_key("swe/flow.add-feature"));
         let skills = agg.pointer("/skills").and_then(Value::as_object).unwrap();
@@ -466,11 +490,17 @@ workflows:
         let vet_def_id = agg.pointer(
             "/workflows/swe~1flow.add-feature/states/planning/transitions/plan_drafted/executor/definitionId",
         ).and_then(Value::as_str).expect("ref should be present");
-        assert_eq!(vet_def_id, "swe/cap.plan.vet", "unprefixed ref should rewrite to current namespace");
+        assert_eq!(
+            vet_def_id, "swe/cap.plan.vet",
+            "unprefixed ref should rewrite to current namespace"
+        );
         let external = agg.pointer(
             "/workflows/swe~1flow.add-feature/states/planning/transitions/plan_external/executor/definitionId",
         ).and_then(Value::as_str).expect("external ref should be present");
-        assert_eq!(external, "quality/cap.plan.vet", "fully-qualified ref should pass through unchanged");
+        assert_eq!(
+            external, "quality/cap.plan.vet",
+            "fully-qualified ref should pass through unchanged"
+        );
     }
 
     #[test]
@@ -491,7 +521,10 @@ workflows:
         let err = load_repo(td.path()).expect_err("duplicate id should error");
         let msg = format!("{:#}", err);
         assert!(msg.contains("DUPLICATE_REPO_DEF"), "msg: {msg}");
-        assert!(msg.contains("swe/cap.plan.vet"), "msg should name the id: {msg}");
+        assert!(
+            msg.contains("swe/cap.plan.vet"),
+            "msg should name the id: {msg}"
+        );
     }
 
     #[test]
@@ -520,7 +553,10 @@ workflows:
         );
         let (_m, agg) = load_repo(td.path()).expect("skills-only repo loads");
         assert!(agg.pointer("/skills/snip~1sk.do.thing").is_some());
-        assert!(agg.pointer("/workflows").is_none(), "no workflows block expected");
+        assert!(
+            agg.pointer("/workflows").is_none(),
+            "no workflows block expected"
+        );
     }
 
     #[test]
@@ -545,11 +581,15 @@ workflows:
             }
         });
         rewrite_workflow_refs(&mut v, "ns");
-        let step0 = v.pointer("/states/s1/transitions/t1/executor/steps/0/executor/definitionId")
-            .and_then(Value::as_str).unwrap();
+        let step0 = v
+            .pointer("/states/s1/transitions/t1/executor/steps/0/executor/definitionId")
+            .and_then(Value::as_str)
+            .unwrap();
         assert_eq!(step0, "ns/cap.x");
-        let step1 = v.pointer("/states/s1/transitions/t1/executor/steps/1/executor/definitionId")
-            .and_then(Value::as_str).unwrap();
+        let step1 = v
+            .pointer("/states/s1/transitions/t1/executor/steps/1/executor/definitionId")
+            .and_then(Value::as_str)
+            .unwrap();
         assert_eq!(step1, "other/cap.y", "qualified ref untouched");
     }
 

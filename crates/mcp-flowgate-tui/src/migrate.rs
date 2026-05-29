@@ -119,8 +119,10 @@ pub fn cli_args_to_yaml(specs: &[String]) -> Result<String, MigrationError> {
     out.push_str("version: 1\n");
     out.push_str("default:\n");
     push_binding(&mut out, default_cfg);
-    let overrides: Vec<(&String, &&AgentConfig)> =
-        by_name.iter().filter(|(k, _)| k.as_str() != "default").collect();
+    let overrides: Vec<(&String, &&AgentConfig)> = by_name
+        .iter()
+        .filter(|(k, _)| k.as_str() != "default")
+        .collect();
     if !overrides.is_empty() {
         out.push_str("overrides:\n");
         for (key, cfg) in overrides {

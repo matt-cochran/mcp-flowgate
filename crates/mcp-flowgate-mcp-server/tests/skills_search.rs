@@ -105,7 +105,10 @@ async fn tool_not_advertised_when_flag_off() {
     let _server = disabled_server();
     // The default `tool_definitions()` must NOT include any skills-search
     // specific tool — with §32 the surface is always just two tools.
-    let names: Vec<String> = tool_definitions().into_iter().map(|t| t.name.to_string()).collect();
+    let names: Vec<String> = tool_definitions()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
     // Verify the two-tool surface is present.
     assert!(names.contains(&"flowgate.query".to_string()));
     assert!(names.contains(&"flowgate.command".to_string()));
@@ -137,14 +140,20 @@ async fn call_rejected_when_flag_off() {
 #[tokio::test]
 async fn returns_items_array_when_flag_on() {
     let server = enabled_server();
-    let resp = server.dispatch_call(call_search(json!({}))).await.expect("succeeds");
+    let resp = server
+        .dispatch_call(call_search(json!({})))
+        .await
+        .expect("succeeds");
     assert!(resp["items"].is_array());
 }
 
 #[tokio::test]
 async fn response_items_carry_no_body_field() {
     let server = enabled_server();
-    let resp = server.dispatch_call(call_search(json!({}))).await.expect("succeeds");
+    let resp = server
+        .dispatch_call(call_search(json!({})))
+        .await
+        .expect("succeeds");
     let items = resp["items"].as_array().expect("items array");
     for item in items {
         assert!(
@@ -164,7 +173,10 @@ async fn verb_filter_includes_only_matching_verb() {
         .await
         .expect("succeeds");
     let items = resp["items"].as_array().unwrap();
-    assert!(!items.is_empty(), "expected at least one diagnose-tagged item");
+    assert!(
+        !items.is_empty(),
+        "expected at least one diagnose-tagged item"
+    );
     for item in items {
         assert_eq!(item["verb"].as_str(), Some("diagnose"));
     }
@@ -183,7 +195,10 @@ async fn subject_root_filter_includes_only_matching_root() {
     assert!(!items.is_empty(), "expected items under review.*");
     for item in items {
         let subj = item["subject"].as_str().unwrap_or("");
-        assert!(subj.starts_with("review."), "subject must start with review.; got: {subj}");
+        assert!(
+            subj.starts_with("review."),
+            "subject must start with review.; got: {subj}"
+        );
     }
 }
 
@@ -275,13 +290,17 @@ async fn source_filter_git_url_returns_only_matching_ingested_fragments() {
 #[tokio::test]
 async fn source_filter_absent_returns_all_sources() {
     let server = mixed_source_server();
-    let resp = server.dispatch_call(call_search(json!({}))).await.expect("succeeds");
+    let resp = server
+        .dispatch_call(call_search(json!({})))
+        .await
+        .expect("succeeds");
     let items = resp["items"].as_array().unwrap();
-    let sources: std::collections::HashSet<&str> = items
-        .iter()
-        .filter_map(|i| i["source"].as_str())
-        .collect();
-    assert!(sources.contains("config"), "missing config items: {sources:?}");
+    let sources: std::collections::HashSet<&str> =
+        items.iter().filter_map(|i| i["source"].as_str()).collect();
+    assert!(
+        sources.contains("config"),
+        "missing config items: {sources:?}"
+    );
     assert!(
         sources.contains("git+https://github.com/org/skills@abc123"),
         "missing git items: {sources:?}"
@@ -292,7 +311,9 @@ async fn source_filter_absent_returns_all_sources() {
 async fn source_filter_unmatched_returns_empty_not_error() {
     let server = mixed_source_server();
     let resp = server
-        .dispatch_call(call_search(json!({ "source": "git+https://other/repo@deadbeef" })))
+        .dispatch_call(call_search(
+            json!({ "source": "git+https://other/repo@deadbeef" }),
+        ))
         .await
         .expect("unmatched filter is OK, not error");
     let items = resp["items"].as_array().expect("items array present");

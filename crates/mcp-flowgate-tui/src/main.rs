@@ -27,7 +27,10 @@ use mcp_flowgate_tui::agent_resolver::{
 use mcp_flowgate_tui::interpreter::{
     AgentRegistry, LegacyAgentRegistry, McpToolCaller, YamlAgentRegistry,
 };
-use mcp_flowgate_tui::{agent_config, flowgate_mcp, keyring, lexicon as lexicon_mod, mcp_init, provider_keys, tui_config};
+use mcp_flowgate_tui::{
+    agent_config, flowgate_mcp, keyring, lexicon as lexicon_mod, mcp_init, provider_keys,
+    tui_config,
+};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -384,9 +387,8 @@ async fn main() -> Result<ExitCode> {
 }
 
 fn run_migrate_agents_from_cli(args: MigrateAgentsArgs) -> Result<ExitCode> {
-    let yaml = mcp_flowgate_tui::migrate::cli_args_to_yaml(&args.agents).map_err(|e| {
-        anyhow::anyhow!("migration failed: {e}")
-    })?;
+    let yaml = mcp_flowgate_tui::migrate::cli_args_to_yaml(&args.agents)
+        .map_err(|e| anyhow::anyhow!("migration failed: {e}"))?;
     if args.dry_run {
         print!("{yaml}");
         return Ok(ExitCode::SUCCESS);
@@ -443,9 +445,7 @@ async fn run_walk(args: WalkArgs) -> Result<ExitCode> {
         .pointer("/workflow/id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
-            anyhow::anyhow!(
-                "flowgate.command (start) response missing /workflow/id: {start_resp}"
-            )
+            anyhow::anyhow!("flowgate.command (start) response missing /workflow/id: {start_resp}")
         })?
         .to_string();
 
@@ -462,8 +462,7 @@ async fn run_walk(args: WalkArgs) -> Result<ExitCode> {
 
     println!(
         "{}",
-        serde_json::to_string_pretty(&final_ctx)
-            .unwrap_or_else(|_| final_ctx.to_string())
+        serde_json::to_string_pretty(&final_ctx).unwrap_or_else(|_| final_ctx.to_string())
     );
 
     Ok(ExitCode::SUCCESS)

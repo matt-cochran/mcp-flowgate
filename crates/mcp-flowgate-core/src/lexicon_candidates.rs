@@ -90,9 +90,7 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
         curr[0] = i;
         for j in 1..=n {
             let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -127,11 +125,7 @@ pub fn rank_candidates(
         };
 
         // Skip placeholder entries (PENDING_DEFINITION) — they are not candidates.
-        if entry_obj
-            .get("state")
-            .and_then(Value::as_str)
-            == Some("PENDING_DEFINITION")
-        {
+        if entry_obj.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION") {
             continue;
         }
 
@@ -236,7 +230,11 @@ pub fn rank_candidates(
     candidates.sort_by(|a, b| {
         a.priority()
             .cmp(&b.priority())
-            .then(a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
             .then(a.term.cmp(&b.term))
     });
 
@@ -308,11 +306,7 @@ pub async fn rank_candidates_with_embedding(
         };
 
         // Skip PENDING_DEFINITION placeholders.
-        if entry_obj
-            .get("state")
-            .and_then(Value::as_str)
-            == Some("PENDING_DEFINITION")
-        {
+        if entry_obj.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION") {
             continue;
         }
 
@@ -332,12 +326,8 @@ pub async fn rank_candidates_with_embedding(
             continue;
         }
 
-
         // Retrieve the stored embedding vector.
-        let stored_vec: Vec<f32> = match entry_obj
-            .get("_embedding")
-            .and_then(Value::as_array)
-        {
+        let stored_vec: Vec<f32> = match entry_obj.get("_embedding").and_then(Value::as_array) {
             Some(arr) => arr
                 .iter()
                 .filter_map(|v| v.as_f64().map(|f| f as f32))
@@ -370,7 +360,11 @@ pub async fn rank_candidates_with_embedding(
     base.sort_by(|a, b| {
         a.priority()
             .cmp(&b.priority())
-            .then(a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                a.distance
+                    .partial_cmp(&b.distance)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
             .then(a.term.cmp(&b.term))
     });
 

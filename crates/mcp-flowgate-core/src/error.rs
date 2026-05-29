@@ -27,7 +27,9 @@ pub enum RuntimeError {
     /// duplicate. The MCP layer surfaces this as a structured
     /// `RUN_ID_ALREADY_RUNNING` response with a HATEOAS `get` link to the
     /// existing instance.
-    #[error("run_id '{run_id}' is already in flight (existing workflow id: {existing_workflow_id})")]
+    #[error(
+        "run_id '{run_id}' is already in flight (existing workflow id: {existing_workflow_id})"
+    )]
     RunIdAlreadyRunning {
         run_id: String,
         existing_workflow_id: String,

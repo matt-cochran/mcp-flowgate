@@ -35,7 +35,10 @@ fn clear_env() {
 fn mcp_flowgate_path_with_nonexistent_file_should_fail_fast() {
     let _g = env_lock().lock().unwrap();
     clear_env();
-    std::env::set_var("MCP_FLOWGATE_PATH", "/definitely/does/not/exist/mcp-flowgate");
+    std::env::set_var(
+        "MCP_FLOWGATE_PATH",
+        "/definitely/does/not/exist/mcp-flowgate",
+    );
     // The function is pub(crate); we can only run it through the binary.
     // This test documents the contract by spawning the TUI in
     // headless/agent mode and asserting the error message.

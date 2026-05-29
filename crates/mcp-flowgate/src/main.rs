@@ -578,13 +578,12 @@ fn approvals_tail(config_path: &PathBuf) -> anyhow::Result<()> {
     println!("(press Ctrl+C to stop)");
 
     // Track read position per log file so new rotated files are picked up.
-    let mut file_offsets: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
+    let mut file_offsets: std::collections::HashMap<PathBuf, u64> =
+        std::collections::HashMap::new();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
         tail_dir_once(audit_dir, &mut file_offsets, |event| {
-            if event.get("event_type").and_then(Value::as_str)
-                == Some("human.approval.requested")
-            {
+            if event.get("event_type").and_then(Value::as_str) == Some("human.approval.requested") {
                 let id = event.get("id").and_then(Value::as_str).unwrap_or("?");
                 let queue = event
                     .get("payload")
@@ -805,7 +804,8 @@ fn audit_tail(config_path: &PathBuf, filter: &Option<String>) -> anyhow::Result<
     }
     println!("(press Ctrl+C to stop)");
 
-    let mut file_offsets: std::collections::HashMap<PathBuf, u64> = std::collections::HashMap::new();
+    let mut file_offsets: std::collections::HashMap<PathBuf, u64> =
+        std::collections::HashMap::new();
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
         let filter_ref = filter.as_deref();

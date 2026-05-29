@@ -47,7 +47,7 @@ async fn executor_descriptor_carries_kind_ok_and_duration_ms() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -62,7 +62,7 @@ async fn executor_descriptor_carries_kind_ok_and_duration_ms() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -112,7 +112,7 @@ async fn executor_descriptor_omitted_when_no_executor_runs() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -127,7 +127,7 @@ async fn executor_descriptor_omitted_when_no_executor_runs() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

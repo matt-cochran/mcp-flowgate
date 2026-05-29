@@ -120,9 +120,7 @@ fn swe_agent_delegate_fields_present_on_four_model_driven_states() {
         let actual = state
             .get("delegate")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or_else(|| {
-                panic!("state '{state_name}' missing delegate field; got: {state}")
-            });
+            .unwrap_or_else(|| panic!("state '{state_name}' missing delegate field; got: {state}"));
         assert_eq!(actual, *expected_agent, "wrong delegate for '{state_name}'");
     }
 }

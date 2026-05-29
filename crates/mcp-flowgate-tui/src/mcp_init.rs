@@ -125,8 +125,7 @@ fn build_flowgate_mcp_config_json(dir: &Path) -> Result<String> {
 
     // Pretty-print: these files are operator-readable; they should
     // diff cleanly in version control.
-    serde_json::to_string_pretty(&body)
-        .context("serializing MCP config JSON")
+    serde_json::to_string_pretty(&body).context("serializing MCP config JSON")
 }
 
 /// Write `contents` to `path`. Refuses to overwrite an existing file
@@ -154,7 +153,6 @@ fn write_config_file(path: &Path, contents: &str, force: bool) -> Result<()> {
     if !to_write.ends_with('\n') {
         to_write.push('\n');
     }
-    std::fs::write(path, to_write)
-        .with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(path, to_write).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }

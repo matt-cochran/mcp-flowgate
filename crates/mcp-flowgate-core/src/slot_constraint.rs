@@ -65,9 +65,7 @@ pub fn evaluate_constraints(
     // We don't dedupe: a single slot name should only appear in ONE
     // place (cross-scope collision is INVALID_SLOT_REDECLARATION,
     // caught by the validator). At runtime we just check both.
-    let workflow_slots = definition
-        .get("blackboard")
-        .and_then(Value::as_object);
+    let workflow_slots = definition.get("blackboard").and_then(Value::as_object);
     let state_slots = definition
         .pointer(&format!(
             "/states/{}/slots",
@@ -357,10 +355,7 @@ pub fn validate_constraints_in_definition(definition: &Value) -> Result<()> {
         for (state_name, state_def) in states {
             if let Some(slots) = state_def.get("slots").and_then(Value::as_object) {
                 for (name, decl) in slots {
-                    validate_one_slot_constraint(
-                        &format!("{state_name}.{name}"),
-                        decl,
-                    )?;
+                    validate_one_slot_constraint(&format!("{state_name}.{name}"), decl)?;
                 }
             }
         }

@@ -160,9 +160,7 @@ impl Executor for ParallelExecutor {
                 .record(
                     AuditEvent::new("parallel.fanout.empty")
                         .with_workflow(&request.workflow.id)
-                        .with_correlation(
-                            request.correlation_id.as_deref().unwrap_or("unset-corr"),
-                        )
+                        .with_correlation(request.correlation_id.as_deref().unwrap_or("unset-corr"))
                         .with_payload(json!({
                             "transition": request.transition,
                             "for_each":   cfg.for_each_path,
@@ -294,25 +292,32 @@ impl Executor for ParallelExecutor {
 
         // Drain join condition. Apply on_branch_failure semantics.
         let join_result = match cfg.total_timeout {
-            Some(d) => timeout(d, drive_joinset(
-                &mut joinset,
-                &cfg.join,
-                cfg.on_branch_failure,
-                n,
-                &current_in_flight,
-                &mut max_in_flight,
-            ))
-            .await
-            .map_err(|_| ExecutorError::Timeout(cfg.total_timeout.map(|d| d.as_millis() as u64).unwrap_or(0)))?,
-            None => drive_joinset(
-                &mut joinset,
-                &cfg.join,
-                cfg.on_branch_failure,
-                n,
-                &current_in_flight,
-                &mut max_in_flight,
+            Some(d) => timeout(
+                d,
+                drive_joinset(
+                    &mut joinset,
+                    &cfg.join,
+                    cfg.on_branch_failure,
+                    n,
+                    &current_in_flight,
+                    &mut max_in_flight,
+                ),
             )
-            .await,
+            .await
+            .map_err(|_| {
+                ExecutorError::Timeout(cfg.total_timeout.map(|d| d.as_millis() as u64).unwrap_or(0))
+            })?,
+            None => {
+                drive_joinset(
+                    &mut joinset,
+                    &cfg.join,
+                    cfg.on_branch_failure,
+                    n,
+                    &current_in_flight,
+                    &mut max_in_flight,
+                )
+                .await
+            }
         };
 
         // Snapshot defensive assert post-aggregation (F1).
@@ -360,10 +365,7 @@ impl Executor for ParallelExecutor {
         // visibility into which branches were dropped vs which never ran.
         for branch in &branch_results {
             if branch.get("ok").and_then(Value::as_bool) == Some(false)
-                && branch
-                    .pointer("/error/code")
-                    .and_then(Value::as_str)
-                    == Some("cancelled")
+                && branch.pointer("/error/code").and_then(Value::as_str) == Some("cancelled")
             {
                 let branch_index = branch.get("index").and_then(Value::as_u64);
                 let _ = self
@@ -842,9 +844,7 @@ async fn drive_joinset(
         }
     }
 
-    let cancelled_count = n
-        .saturating_sub(ok_count)
-        .saturating_sub(failed_count);
+    let cancelled_count = n.saturating_sub(ok_count).saturating_sub(failed_count);
 
     // Fill any unfilled (cancelled-before-completion) slots with a stub.
     let branch_results: Vec<Value> = branch_results
@@ -974,15 +974,12 @@ impl ParallelConfig {
             Some(Value::String(s)) if s == "all" => JoinCondition::All,
             Some(Value::String(s)) if s == "any" => JoinCondition::Any,
             Some(Value::Object(o)) if o.contains_key("at_least") => {
-                let k = o
-                    .get("at_least")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| {
-                        ExecutorError::Permanent(
-                            "INVALID_PARALLEL_CONFIG: `join.at_least` must be a positive integer"
-                                .into(),
-                        )
-                    })?;
+                let k = o.get("at_least").and_then(Value::as_u64).ok_or_else(|| {
+                    ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: `join.at_least` must be a positive integer"
+                            .into(),
+                    )
+                })?;
                 if k == 0 {
                     return Err(ExecutorError::Permanent(
                         "INVALID_PARALLEL_CONFIG: `join.at_least` must be > 0 (got 0)".into(),
@@ -991,15 +988,12 @@ impl ParallelConfig {
                 JoinCondition::AtLeast(k as usize)
             }
             Some(Value::Object(o)) if o.contains_key("percent") => {
-                let p = o
-                    .get("percent")
-                    .and_then(Value::as_u64)
-                    .ok_or_else(|| {
-                        ExecutorError::Permanent(
-                            "INVALID_PARALLEL_CONFIG: `join.percent` must be an integer in 0..=100"
-                                .into(),
-                        )
-                    })?;
+                let p = o.get("percent").and_then(Value::as_u64).ok_or_else(|| {
+                    ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: `join.percent` must be an integer in 0..=100"
+                            .into(),
+                    )
+                })?;
                 if p > 100 {
                     return Err(ExecutorError::Permanent(format!(
                         "INVALID_PARALLEL_CONFIG: `join.percent` must be in 0..=100 (got {p})"
@@ -1010,15 +1004,11 @@ impl ParallelConfig {
             Some(Value::Object(o)) if o.contains_key("expression") => {
                 // Backward-compat sugar — `expression: "..."` desugars
                 // to `aggregator: { kind: expression, expr: "..." }`.
-                let e = o
-                    .get("expression")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        ExecutorError::Permanent(
-                            "INVALID_PARALLEL_CONFIG: `join.expression` must be a string"
-                                .into(),
-                        )
-                    })?;
+                let e = o.get("expression").and_then(Value::as_str).ok_or_else(|| {
+                    ExecutorError::Permanent(
+                        "INVALID_PARALLEL_CONFIG: `join.expression` must be a string".into(),
+                    )
+                })?;
                 if e.trim().is_empty() {
                     return Err(ExecutorError::Permanent(
                         "INVALID_PARALLEL_CONFIG: `join.expression` must be non-empty".into(),
@@ -1247,8 +1237,12 @@ fn hash_snapshot(def: &Value) -> String {
 /// is stable across reliability stack attempts), so downstream dedup still
 /// works correctly per branch.
 fn segment_branch_idempotency_key(mut cfg: Value, index: usize) -> Value {
-    let Some(obj) = cfg.as_object_mut() else { return cfg };
-    let Some(spec) = obj.get("idempotencyKey").cloned() else { return cfg };
+    let Some(obj) = cfg.as_object_mut() else {
+        return cfg;
+    };
+    let Some(spec) = obj.get("idempotencyKey").cloned() else {
+        return cfg;
+    };
     let segmented = match spec {
         Value::Bool(true) => Value::String(format!(
             "{{workflowId}}.{{transition}}.{{correlationId}}:branch:{index}"

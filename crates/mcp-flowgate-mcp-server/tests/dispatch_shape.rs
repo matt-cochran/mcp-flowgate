@@ -82,7 +82,8 @@ fn query_args_admits_search_shape() {
         "query": "swe",
         "kind": "workflow",
         "limit": 10
-    })).unwrap();
+    }))
+    .unwrap();
     assert_eq!(a.query.as_deref(), Some("swe"));
     assert_eq!(a.kind.as_deref(), Some("workflow"));
     assert_eq!(a.limit, Some(10u64));
@@ -93,7 +94,8 @@ fn query_args_admits_describe_in_workflow_shape() {
     let a: QueryArgs = serde_json::from_value(json!({
         "subject": "plan.specify.change-request",
         "workflowId": "wf_01H"
-    })).unwrap();
+    }))
+    .unwrap();
     assert_eq!(a.subject.as_deref(), Some("plan.specify.change-request"));
     assert_eq!(a.workflow_id.as_deref(), Some("wf_01H"));
 }
@@ -104,7 +106,8 @@ fn command_args_admits_start_shape() {
         "definitionId": "swe_agent",
         "input": { "issue": "x" },
         "runId": "r-1"
-    })).unwrap();
+    }))
+    .unwrap();
     assert_eq!(a.definition_id.as_deref(), Some("swe_agent"));
     assert!(a.workflow_id.is_none());
     assert_eq!(a.run_id.as_deref(), Some("r-1"));
@@ -120,7 +123,8 @@ fn command_args_admits_submit_shape_with_summary() {
         "transition": "approve",
         "arguments": { "note": "fine" },
         "summary": "Approved after risk review"
-    })).unwrap();
+    }))
+    .unwrap();
     assert_eq!(a.workflow_id.as_deref(), Some("wf_01H"));
     assert_eq!(a.expected_version, Some(3));
     assert_eq!(a.transition.as_deref(), Some("approve"));
@@ -135,7 +139,8 @@ fn command_args_admits_define_shape() {
             "definition_short": "Loss of paying customer in a billing period.",
             "boundedContext": "billing"
         }
-    })).unwrap();
+    }))
+    .unwrap();
     assert_eq!(a.subject.as_deref(), Some("lexicon:churn"));
     assert!(a.definition.is_some());
     assert!(a.definition_id.is_none());
@@ -180,10 +185,7 @@ async fn query_with_query_field_dispatches_to_search() {
 async fn query_subject_only_dispatches_to_describe() {
     let server = test_server().await;
     let resp = server
-        .dispatch_query(
-            json!({ "subject": "test_wf" }),
-            Principal::anonymous(),
-        )
+        .dispatch_query(json!({ "subject": "test_wf" }), Principal::anonymous())
         .await
         .expect("describe returns Ok");
     // Describe response has `id` or `kind` field.
@@ -284,10 +286,7 @@ async fn query_workflow_id_alone_dispatches_to_get() {
         .to_string();
 
     let resp = server
-        .dispatch_query(
-            json!({ "workflowId": workflow_id }),
-            Principal::anonymous(),
-        )
+        .dispatch_query(json!({ "workflowId": workflow_id }), Principal::anonymous())
         .await
         .expect("get returns Ok");
     // Get response has workflow.id.
@@ -416,7 +415,8 @@ async fn command_lexicon_define_shape_dispatches_to_define() {
         "define response must have entry; got: {resp}"
     );
     assert_eq!(
-        resp.pointer("/entry/bounded_context").and_then(|v| v.as_str()),
+        resp.pointer("/entry/bounded_context")
+            .and_then(|v| v.as_str()),
         Some("billing"),
         "bounded_context should round-trip through dispatch_lexicon_define reshape; got: {resp}"
     );
@@ -497,7 +497,9 @@ async fn search_response_links_use_new_tool_names() {
         .await
         .expect("search returns Ok");
     let links = resp["links"].as_array().expect("links array present");
-    let home_link = links.iter().find(|l| l["rel"] == "home")
+    let home_link = links
+        .iter()
+        .find(|l| l["rel"] == "home")
         .expect("home link present");
     assert_eq!(
         home_link["method"].as_str(),
@@ -519,10 +521,13 @@ fn call(tool: &'static str, args: Value) -> CallToolRequestParams {
 #[tokio::test]
 async fn lexicon_define_via_dispatch_call_is_blocked_when_writes_disabled() {
     let server = test_server().await; // default: with_lexicon_writes NOT enabled
-    let params = call("flowgate.command", json!({
-        "subject": "lexicon:churn",
-        "definition": { "definition_short": "loss of paying customer" }
-    }));
+    let params = call(
+        "flowgate.command",
+        json!({
+            "subject": "lexicon:churn",
+            "definition": { "definition_short": "loss of paying customer" }
+        }),
+    );
     let resp = server.dispatch_call(params).await.expect("dispatch_call");
     assert_eq!(
         resp["error"]["code"].as_str(),

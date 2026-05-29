@@ -30,8 +30,8 @@ fn examples_dir() -> PathBuf {
 
 fn build_runtime() -> (WorkflowRuntime, Arc<MemoryAuditSink>) {
     let path = examples_dir().join("smoke-ete/gateway.yaml");
-    let cfg = load_resolved(&path)
-        .unwrap_or_else(|e| panic!("smoke-ete/gateway.yaml must resolve: {e}"));
+    let cfg =
+        load_resolved(&path).unwrap_or_else(|e| panic!("smoke-ete/gateway.yaml must resolve: {e}"));
     let definitions = Arc::new(ConfigDefinitionStore::from_config(&cfg));
     let store = Arc::new(InMemoryWorkflowStore::new());
     let audit = Arc::new(MemoryAuditSink::new());
@@ -147,11 +147,7 @@ async fn smoke_ete_walks_to_ship_via_v04_primitives() {
     );
 
     // Composition assertions — every v0.4 primitive should have left a trace.
-    let events: Vec<String> = audit
-        .snapshot()
-        .into_iter()
-        .map(|e| e.event_type)
-        .collect();
+    let events: Vec<String> = audit.snapshot().into_iter().map(|e| e.event_type).collect();
     assert!(
         events.iter().any(|t| t == "parallel.fanout.completed"),
         "parallel executor must have emitted fanout.completed; got: {events:?}"

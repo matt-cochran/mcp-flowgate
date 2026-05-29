@@ -15,12 +15,14 @@ fn flag(s: &str) -> String {
 
 #[test]
 fn single_default_binding_round_trips() {
-    let yaml = cli_args_to_yaml(&[flag("default=anthropic/claude-sonnet-4-6")])
-        .expect("migrates");
+    let yaml = cli_args_to_yaml(&[flag("default=anthropic/claude-sonnet-4-6")]).expect("migrates");
     let parsed = AgentsFile::from_yaml(&yaml).expect("round-trips back through the parser");
     assert_eq!(parsed.default.len(), 1);
     assert_eq!(parsed.default[0].model, "claude-sonnet-4-6");
-    assert!(parsed.overrides.is_empty(), "no override for the literal `default`");
+    assert!(
+        parsed.overrides.is_empty(),
+        "no override for the literal `default`"
+    );
 }
 
 #[test]
@@ -98,12 +100,10 @@ fn unmappable_name_lists_every_offender() {
 
 #[test]
 fn unknown_provider_names_offender() {
-    let err = cli_args_to_yaml(&[flag("coding=mistral/medium")])
-        .expect_err("unknown provider rejected");
+    let err =
+        cli_args_to_yaml(&[flag("coding=mistral/medium")]).expect_err("unknown provider rejected");
     match err {
-        MigrationError::UnknownProvider {
-            name, provider, ..
-        } => {
+        MigrationError::UnknownProvider { name, provider, .. } => {
             assert_eq!(name, "coding");
             assert_eq!(provider, "mistral");
         }
@@ -147,11 +147,7 @@ fn write_atomic_no_tmp_leftover_after_success() {
     let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
         .unwrap()
         .filter_map(|r| r.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .contains(".tmp.")
-        })
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
         .collect();
     assert!(leftovers.is_empty(), "no tmp.{{pid}} leftovers");
 }

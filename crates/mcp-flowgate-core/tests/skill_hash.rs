@@ -93,9 +93,17 @@ fn semantic_edit_produces_different_hash() {
 #[test]
 fn hash_has_sha256_prefix_and_hex_digest() {
     let h = stamped_hash(config_with_body("anything"));
-    assert!(h.starts_with("sha256:"), "expected sha256: prefix; got: {h}");
+    assert!(
+        h.starts_with("sha256:"),
+        "expected sha256: prefix; got: {h}"
+    );
     let hex = &h["sha256:".len()..];
-    assert_eq!(hex.len(), 64, "expected 64 hex chars; got {} in: {h}", hex.len());
+    assert_eq!(
+        hex.len(),
+        64,
+        "expected 64 hex chars; got {} in: {h}",
+        hex.len()
+    );
     assert!(
         hex.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
         "expected lowercase-hex digest; got: {hex}"
@@ -120,8 +128,7 @@ async fn emitted_ref_carries_hash_field() {
     use mcp_flowgate_core::WorkflowRuntime;
     use std::sync::Arc;
 
-    let resolved = config::resolve(config_with_body("ref-carry test"))
-        .expect("config resolves");
+    let resolved = config::resolve(config_with_body("ref-carry test")).expect("config resolves");
     let definitions = Arc::new(ConfigDefinitionStore::from_config(&resolved));
     let store = Arc::new(InMemoryWorkflowStore::new());
     let executors = Arc::new(NoopRegistry);
@@ -140,7 +147,7 @@ async fn emitted_ref_carries_hash_field() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -187,7 +194,10 @@ fn stored_hash_mismatch_fails_at_load() {
 #[test]
 fn empty_body_hashes_deterministically() {
     let h = compute_skill_hash("");
-    assert_eq!(h, "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq!(
+        h,
+        "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
 }
 
 #[test]

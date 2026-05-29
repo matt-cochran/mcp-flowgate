@@ -101,7 +101,9 @@ pub enum Provider {
     Lmstudio,
     /// Self-hosted / unlisted provider. `endpoint` is required at load
     /// time — empty/missing → `AgentConfigError::ProviderEndpointRequired`.
-    Custom { endpoint: String },
+    Custom {
+        endpoint: String,
+    },
 }
 
 impl Provider {
@@ -200,12 +202,11 @@ impl RawBinding {
                     .map_err(|e| feature_error("openai", e))?,
             ),
             (Provider::Google, Some(v)) => ProviderFeatures::Google(
-                serde_yaml::from_value::<GoogleFeatures>(v).map_err(|e| feature_error("google", e))?,
+                serde_yaml::from_value::<GoogleFeatures>(v)
+                    .map_err(|e| feature_error("google", e))?,
             ),
             (Provider::Ollama | Provider::Lmstudio | Provider::Custom { .. }, Some(v)) => {
-                if !v.is_null()
-                    && !matches!(&v, serde_yaml::Value::Mapping(m) if m.is_empty())
-                {
+                if !v.is_null() && !matches!(&v, serde_yaml::Value::Mapping(m) if m.is_empty()) {
                     return Err(AgentConfigError::UnknownFeatureKey {
                         provider: "ollama|lmstudio|custom".to_string(),
                         key: "(any)".to_string(),

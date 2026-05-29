@@ -70,9 +70,7 @@ pub fn scripts_search_tool_definition() -> Tool {
         .expect("scripts_search schema is an object");
     Tool::new(
         Cow::Borrowed("flowgate.query"),
-        Cow::Borrowed(
-            "Authoring-time script search. Use flowgate.query with kind='script'.",
-        ),
+        Cow::Borrowed("Authoring-time script search. Use flowgate.query with kind='script'."),
         Arc::new(schema_obj),
     )
 }
@@ -97,9 +95,7 @@ pub fn skills_search_tool_definition() -> Tool {
         .expect("skills_search schema is an object");
     Tool::new(
         Cow::Borrowed("flowgate.query"),
-        Cow::Borrowed(
-            "Authoring-time skill search. Use flowgate.query with kind='skill'.",
-        ),
+        Cow::Borrowed("Authoring-time skill search. Use flowgate.query with kind='skill'."),
         Arc::new(schema_obj),
     )
 }

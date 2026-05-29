@@ -179,13 +179,9 @@ async fn search_default_limit_is_ten() {
 #[tokio::test]
 async fn search_respects_explicit_limit() {
     let server = build_server();
-    let resp = dispatch(
-        &server,
-        TOOL_QUERY,
-        json!({ "query": "", "limit": 1 }),
-    )
-    .await
-    .unwrap();
+    let resp = dispatch(&server, TOOL_QUERY, json!({ "query": "", "limit": 1 }))
+        .await
+        .unwrap();
     assert_eq!(resp["items"].as_array().unwrap().len(), 1);
 }
 
@@ -246,13 +242,9 @@ async fn describe_without_id_returns_required_error() {
 #[tokio::test]
 async fn describe_with_known_subject_returns_item() {
     let server = build_server();
-    let resp = dispatch(
-        &server,
-        TOOL_QUERY,
-        json!({ "subject": "wf.alpha" }),
-    )
-    .await
-    .unwrap();
+    let resp = dispatch(&server, TOOL_QUERY, json!({ "subject": "wf.alpha" }))
+        .await
+        .unwrap();
     assert_eq!(resp["id"], json!("wf.alpha"));
     assert_eq!(resp["item"]["id"], json!("wf.alpha"));
 }
@@ -260,13 +252,9 @@ async fn describe_with_known_subject_returns_item() {
 #[tokio::test]
 async fn describe_with_unknown_subject_returns_null_item() {
     let server = build_server();
-    let resp = dispatch(
-        &server,
-        TOOL_QUERY,
-        json!({ "subject": "nope" }),
-    )
-    .await
-    .unwrap();
+    let resp = dispatch(&server, TOOL_QUERY, json!({ "subject": "nope" }))
+        .await
+        .unwrap();
     assert_eq!(resp["item"], Value::Null);
 }
 
@@ -363,13 +351,9 @@ async fn start_without_input_defaults_to_empty_object() {
     // `{}`. The handler doesn't return "input is required"; it falls
     // through to the same runtime error as the with-input case.
     let server = build_server();
-    let err = dispatch(
-        &server,
-        TOOL_COMMAND,
-        json!({ "definitionId": "x" }),
-    )
-    .await
-    .unwrap_err();
+    let err = dispatch(&server, TOOL_COMMAND, json!({ "definitionId": "x" }))
+        .await
+        .unwrap_err();
     assert!(
         !err.message.contains("input is required"),
         "input should default to {{}}, got: {}",
@@ -398,13 +382,9 @@ async fn get_without_workflow_id_returns_required_error() {
 #[tokio::test]
 async fn get_with_workflow_id_passes_through_to_runtime() {
     let server = build_server();
-    let err = dispatch(
-        &server,
-        TOOL_QUERY,
-        json!({ "workflowId": "wf-1" }),
-    )
-    .await
-    .unwrap_err();
+    let err = dispatch(&server, TOOL_QUERY, json!({ "workflowId": "wf-1" }))
+        .await
+        .unwrap_err();
     assert!(
         !err.message.contains("is required"),
         "should not raise a required-field error: {}",
@@ -425,10 +405,7 @@ async fn submit_without_workflow_id_returns_required_error() {
     match resp {
         Ok(v) => {
             // AMBIGUOUS_INTENT is the expected outcome for no-arg command.
-            assert!(
-                v.get("error").is_some(),
-                "should be AMBIGUOUS_INTENT: {v}"
-            );
+            assert!(v.get("error").is_some(), "should be AMBIGUOUS_INTENT: {v}");
         }
         Err(e) => {
             panic!("unexpected error for empty command args: {}", e.message);
@@ -441,12 +418,7 @@ async fn submit_without_expected_version_returns_required_error() {
     // workflowId alone → get shape in query. In command, workflowId without
     // expectedVersion+transition → AMBIGUOUS_INTENT (not submit shape).
     let server = build_server();
-    let resp = dispatch(
-        &server,
-        TOOL_COMMAND,
-        json!({ "workflowId": "x" }),
-    )
-    .await;
+    let resp = dispatch(&server, TOOL_COMMAND, json!({ "workflowId": "x" })).await;
     match resp {
         Ok(v) => {
             assert!(
@@ -514,12 +486,7 @@ async fn explain_without_workflow_id_returns_required_error() {
     // transition alone (no workflowId) → AMBIGUOUS_INTENT (not a dispatch
     // shape). Verify no "workflowId is required" leaks through.
     let server = build_server();
-    let resp = dispatch(
-        &server,
-        TOOL_QUERY,
-        json!({ "transition": "t" }),
-    )
-    .await;
+    let resp = dispatch(&server, TOOL_QUERY, json!({ "transition": "t" })).await;
     match resp {
         Ok(v) => {
             assert!(
@@ -542,13 +509,9 @@ async fn explain_without_transition_returns_required_error() {
     // workflowId alone → get (not explain). Verify explain's
     // "transition is required" path is NOT triggered by workflowId-only.
     let server = build_server();
-    let err = dispatch(
-        &server,
-        TOOL_QUERY,
-        json!({ "workflowId": "x" }),
-    )
-    .await
-    .unwrap_err();
+    let err = dispatch(&server, TOOL_QUERY, json!({ "workflowId": "x" }))
+        .await
+        .unwrap_err();
     // This hits the runtime's "workflow not found" path (via get, not explain).
     assert!(
         !err.message.contains("transition is required"),

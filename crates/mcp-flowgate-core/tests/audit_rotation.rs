@@ -136,8 +136,7 @@ async fn transition_and_audit_streams_split_by_name() {
     );
     let trans_event: serde_json::Value = serde_json::from_str(trans_lines[0]).unwrap();
     assert_eq!(
-        trans_event["event_type"],
-        "workflow.transition",
+        trans_event["event_type"], "workflow.transition",
         "transitions log should contain the transition event"
     );
 
@@ -158,8 +157,7 @@ async fn transition_and_audit_streams_split_by_name() {
     );
     let audit_parsed: serde_json::Value = serde_json::from_str(audit_lines[0]).unwrap();
     assert_eq!(
-        audit_parsed["event_type"],
-        "workflow.started",
+        audit_parsed["event_type"], "workflow.started",
         "audit log should contain the non-transition event"
     );
 }

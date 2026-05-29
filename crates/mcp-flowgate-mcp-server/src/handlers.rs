@@ -183,13 +183,10 @@ impl FlowgateServer {
                         let merged = json!({ "_lexiconLibrary": snapshot_lex });
                         let term = subject_portion_from_skill_key(&id).to_string();
                         let terms = collect_describe_terms(&term, &merged);
-                        let term_refs: Vec<&str> =
-                            terms.iter().map(String::as_str).collect();
-                        if let Some(lex) = embed_lexicon_for_subjects(
-                            &term_refs,
-                            &merged,
-                            LEXICON_INLINE_BUDGET,
-                        ) {
+                        let term_refs: Vec<&str> = terms.iter().map(String::as_str).collect();
+                        if let Some(lex) =
+                            embed_lexicon_for_subjects(&term_refs, &merged, LEXICON_INLINE_BUDGET)
+                        {
                             obj.insert("lexicon".into(), lex);
                         }
                     }
@@ -279,11 +276,9 @@ impl FlowgateServer {
                         { "rel": "search", "method": "flowgate.query", "args": { "query": "" } }
                     ]
                 });
-                if let Some(lex) = embed_lexicon_for_subjects(
-                    &[term.as_str()],
-                    &merged,
-                    LEXICON_INLINE_BUDGET,
-                ) {
+                if let Some(lex) =
+                    embed_lexicon_for_subjects(&[term.as_str()], &merged, LEXICON_INLINE_BUDGET)
+                {
                     resp["lexicon"] = lex;
                 }
                 return Ok(resp);
@@ -437,10 +432,7 @@ impl FlowgateServer {
             .unwrap_or(50)
             .min(200) as usize;
 
-        let items = self
-            .discovery
-            .list(Some(DiscoveryKind::Guidance))
-            .await?;
+        let items = self.discovery.list(Some(DiscoveryKind::Guidance)).await?;
 
         let mut refs: Vec<Value> = Vec::with_capacity(items.len());
         for item in items {
@@ -654,13 +646,10 @@ impl FlowgateServer {
             .and_then(Value::as_str)
             .map(String::from);
         let merged = self.lexicon_merged_definition();
-        let entry = mcp_flowgate_core::lexicon::lookup_term(
-            &merged,
-            &term,
-            bounded_context.as_deref(),
-        )
-        .cloned()
-        .unwrap_or(Value::Null);
+        let entry =
+            mcp_flowgate_core::lexicon::lookup_term(&merged, &term, bounded_context.as_deref())
+                .cloned()
+                .unwrap_or(Value::Null);
         Ok(json!({ "term": term, "entry": entry }))
     }
 
@@ -686,14 +675,11 @@ impl FlowgateServer {
             .get("bounded_context")
             .and_then(Value::as_str)
             .map(String::from);
-        let refs: Option<Vec<String>> = args
-            .get("refs")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            });
+        let refs: Option<Vec<String>> = args.get("refs").and_then(Value::as_array).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
         let governance = args
             .get("governance")
             .and_then(Value::as_str)
@@ -718,11 +704,9 @@ impl FlowgateServer {
         };
         if !is_pending {
             let merged = self.lexicon_merged_definition();
-            if let Err(msg) = mcp_flowgate_core::lexicon::define_allowed(
-                &merged,
-                &term,
-                principal.is_human(),
-            ) {
+            if let Err(msg) =
+                mcp_flowgate_core::lexicon::define_allowed(&merged, &term, principal.is_human())
+            {
                 return Err(anyhow::anyhow!("{msg}"));
             }
         }
@@ -740,12 +724,7 @@ impl FlowgateServer {
                         .collect()
                 })
                 .unwrap_or_default();
-            let text = entry_embed_text(
-                &term,
-                &aliases_str,
-                definition,
-                None,
-            );
+            let text = entry_embed_text(&term, &aliases_str, definition, None);
             match self.embedder.embed(&text).await {
                 Ok(vec) => Some(vec),
                 Err(e) => {
@@ -807,16 +786,12 @@ impl FlowgateServer {
     /// - `workflowId + transition` → explain
     /// - `workflowId` alone     → get
     /// - anything else          → AMBIGUOUS_INTENT error
-    pub async fn dispatch_query(
-        &self,
-        args: Value,
-        principal: Principal,
-    ) -> anyhow::Result<Value> {
+    pub async fn dispatch_query(&self, args: Value, principal: Principal) -> anyhow::Result<Value> {
         let parsed: QueryArgs = serde_json::from_value(args.clone())?;
-        let q   = parsed.query.is_some();
-        let s   = parsed.subject.is_some();
+        let q = parsed.query.is_some();
+        let s = parsed.subject.is_some();
         let wid = parsed.workflow_id.is_some();
-        let tr  = parsed.transition.is_some();
+        let tr = parsed.transition.is_some();
 
         // Detect ambiguity: `query` (search intent) alongside subject/workflow
         // fields (describe/get/explain intent) is unresolvable.
@@ -934,7 +909,8 @@ impl FlowgateServer {
             (false, false, false, true) => {
                 // Cancel pending subject placeholder.
                 let subject = parsed.unknown_subject.expect("checked above");
-                self.handle_cancel_pending_subject(&subject, principal).await
+                self.handle_cancel_pending_subject(&subject, principal)
+                    .await
             }
             _ => Ok(ambiguous_intent_command()),
         }
@@ -967,9 +943,7 @@ impl FlowgateServer {
                         .iter()
                         .filter_map(|v| v.as_str().map(String::from))
                         .collect();
-                    return self
-                        .handle_alias_add(term, &aliases, principal)
-                        .await;
+                    return self.handle_alias_add(term, &aliases, principal).await;
                 }
 
                 // Normal define path (define_new).
@@ -1131,12 +1105,7 @@ impl FlowgateServer {
                 .get("definition_short")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let text = entry_embed_text(
-                target_term,
-                &new_aliases_strings,
-                definition_short,
-                None,
-            );
+            let text = entry_embed_text(target_term, &new_aliases_strings, definition_short, None);
             match self.embedder.embed(&text).await {
                 Ok(vec) => {
                     entry.insert("_embedding".to_string(), json!(vec));
@@ -1266,11 +1235,7 @@ impl FlowgateServer {
     /// supply the lexicon snapshot for candidate ranking in
     /// `SUBJECT_NEEDS_DEFINITION` responses.
     pub(crate) fn lexicon_merged_definition(&self) -> Value {
-        let base = self
-            .lexicon_base
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let base = self.lexicon_base.as_object().cloned().unwrap_or_default();
         let overlay_clone = {
             let overlay = self
                 .lexicon_overlay
@@ -1469,11 +1434,7 @@ pub(crate) fn embed_lexicon_for_subjects(
     for &term in terms {
         let Some(entry) = lib.get(term) else { continue };
         // Skip placeholders — they have no definition to embed.
-        if entry
-            .get("state")
-            .and_then(Value::as_str)
-            == Some("PENDING_DEFINITION")
-        {
+        if entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION") {
             continue;
         }
         let definition_short = entry
@@ -1530,9 +1491,7 @@ fn subject_portion_from_skill_key(key: &str) -> &str {
 /// dropped (they'll just be absent from the embedded lexicon). Deduplicates.
 pub(crate) fn collect_describe_terms(primary_term: &str, merged_def: &Value) -> Vec<String> {
     let mut terms = vec![primary_term.to_string()];
-    let lib = merged_def
-        .get("_lexiconLibrary")
-        .and_then(Value::as_object);
+    let lib = merged_def.get("_lexiconLibrary").and_then(Value::as_object);
     if let Some(lib) = lib {
         if let Some(entry) = lib.get(primary_term) {
             if let Some(refs) = entry.get("refs").and_then(Value::as_array) {

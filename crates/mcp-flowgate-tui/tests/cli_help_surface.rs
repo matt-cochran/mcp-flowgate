@@ -32,7 +32,10 @@ fn completions_zsh_also_works() {
 
 #[test]
 fn set_provider_keys_is_listed_in_help() {
-    let out = Command::new(binary()).arg("--help").output().expect("run --help");
+    let out = Command::new(binary())
+        .arg("--help")
+        .output()
+        .expect("run --help");
     assert!(out.status.success(), "--help failed: {:?}", out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -68,10 +71,7 @@ fn set_provider_keys_path_prints_resolved_path() {
 
 #[test]
 fn man_emits_roff_document() {
-    let out = Command::new(binary())
-        .arg("man")
-        .output()
-        .expect("run man");
+    let out = Command::new(binary()).arg("man").output().expect("run man");
     assert!(out.status.success(), "man failed: {:?}", out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -83,21 +83,39 @@ fn man_emits_roff_document() {
 
 #[test]
 fn top_level_help_groups_subcommands_under_headings() {
-    let out = Command::new(binary()).arg("--help").output().expect("--help");
+    let out = Command::new(binary())
+        .arg("--help")
+        .output()
+        .expect("--help");
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    for heading in ["Agent runtime", "Agent configuration", "Diagnostics & generators"] {
+    for heading in [
+        "Agent runtime",
+        "Agent configuration",
+        "Diagnostics & generators",
+    ] {
         assert!(
             stdout.contains(heading),
             "expected heading '{heading}' in --help; got:\n{stdout}"
         );
     }
     for cmd in [
-        "headless", "acp", "agent", "walk", "doctor", "mcp",
-        "validate-agents-config", "migrate-agents-from-cli",
-        "set-provider-keys", "completions", "man",
+        "headless",
+        "acp",
+        "agent",
+        "walk",
+        "doctor",
+        "mcp",
+        "validate-agents-config",
+        "migrate-agents-from-cli",
+        "set-provider-keys",
+        "completions",
+        "man",
     ] {
-        assert!(stdout.contains(cmd), "expected '{cmd}' in --help; got:\n{stdout}");
+        assert!(
+            stdout.contains(cmd),
+            "expected '{cmd}' in --help; got:\n{stdout}"
+        );
     }
 }
 

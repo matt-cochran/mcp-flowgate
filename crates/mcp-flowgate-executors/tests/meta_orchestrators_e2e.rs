@@ -40,7 +40,9 @@ impl Executor for CapShortCircuit {
     }
 }
 fn synthesize_outputs(snippet_outputs: &Value) -> Value {
-    let Some(obj) = snippet_outputs.as_object() else { return json!({}) };
+    let Some(obj) = snippet_outputs.as_object() else {
+        return json!({});
+    };
     let mut out = serde_json::Map::new();
     for (name, schema) in obj {
         out.insert(name.clone(), synthesize_one(schema));
@@ -48,7 +50,10 @@ fn synthesize_outputs(snippet_outputs: &Value) -> Value {
     Value::Object(out)
 }
 fn synthesize_one(schema: &Value) -> Value {
-    let ty = schema.get("type").and_then(Value::as_str).unwrap_or("string");
+    let ty = schema
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("string");
     if let Some(e) = schema.get("enum").and_then(Value::as_array) {
         if let Some(f) = e.first() {
             return f.clone();
@@ -168,8 +173,14 @@ async fn walk_to_terminal(definition_id: &str, input: Value, config: &Value) -> 
         })
         .await
         .unwrap_or_else(|e| panic!("start({definition_id}): {e}"));
-    let status = resp.pointer("/result/status").and_then(Value::as_str).unwrap_or("?");
-    let state = resp.pointer("/workflow/state").and_then(Value::as_str).unwrap_or("?");
+    let status = resp
+        .pointer("/result/status")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    let state = resp
+        .pointer("/workflow/state")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
     assert_eq!(
         state, "done",
         "{definition_id} should walk to terminal 'done'; got state='{state}' status='{status}'. resp: {resp:#}"

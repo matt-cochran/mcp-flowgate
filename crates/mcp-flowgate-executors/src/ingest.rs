@@ -27,9 +27,7 @@ impl Executor for IngestExecutor {
             .get("source_path")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                ExecutorError::Permanent(
-                    "ingest: missing required argument `source_path`".into(),
-                )
+                ExecutorError::Permanent("ingest: missing required argument `source_path`".into())
             })?;
 
         // Optional caller-supplied subject; if absent we infer from path.

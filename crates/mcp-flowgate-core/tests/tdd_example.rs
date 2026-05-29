@@ -129,7 +129,7 @@ async fn start(runtime: &WorkflowRuntime) -> (String, u64, Value) {
                 "runner_path": "/dev/null",
             }),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -148,7 +148,7 @@ async fn submit(runtime: &WorkflowRuntime, id: &str, version: u64, transition: &
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

@@ -1,8 +1,7 @@
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::model::WorkflowInstance;
-
 
 /// `linkFilter: byGuards` may be declared on the workflow or per-state.
 /// State setting wins when both exist.
@@ -162,7 +161,9 @@ pub(crate) fn push_resolved_refs(
         return;
     };
     for entry in arr {
-        let Some(subject) = entry.as_str() else { continue };
+        let Some(subject) = entry.as_str() else {
+            continue;
+        };
         if !seen.insert(subject.to_string()) {
             continue;
         }

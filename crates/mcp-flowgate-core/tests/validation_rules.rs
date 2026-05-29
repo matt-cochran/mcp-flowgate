@@ -140,7 +140,10 @@ workflows:
       done: { terminal: true }
 "#;
     let d = diagnostics_for(yaml);
-    assert!(!has_error_containing(&d, "INVALID_PRIMARY_EXECUTOR"), "{d:?}");
+    assert!(
+        !has_error_containing(&d, "INVALID_PRIMARY_EXECUTOR"),
+        "{d:?}"
+    );
 }
 
 #[test]
@@ -230,7 +233,10 @@ workflows:
       ready: { terminal: true }
 "#;
     let d = diagnostics_for(yaml);
-    assert!(!has_error_containing(&d, "ORCHESTRATOR_HAS_SNIPPET"), "{d:?}");
+    assert!(
+        !has_error_containing(&d, "ORCHESTRATOR_HAS_SNIPPET"),
+        "{d:?}"
+    );
 }
 
 #[test]
@@ -247,7 +253,10 @@ workflows:
       ready: { terminal: true }
 "#;
     let d = diagnostics_for(yaml);
-    assert!(has_error_containing(&d, "ORCHESTRATOR_HAS_SNIPPET"), "{d:?}");
+    assert!(
+        has_error_containing(&d, "ORCHESTRATOR_HAS_SNIPPET"),
+        "{d:?}"
+    );
 }
 
 // ---------- V9 — orchestrator has no verb ----------

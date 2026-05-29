@@ -130,7 +130,10 @@ async fn describe_record_carries_verb() {
         .await
         .expect("describe succeeds");
     let event = find_event(&audit, "guidance.describe_requested").expect("event present");
-    assert_eq!(event.payload.get("verb").and_then(Value::as_str), Some("review"));
+    assert_eq!(
+        event.payload.get("verb").and_then(Value::as_str),
+        Some("review")
+    );
 }
 
 // ── Positive: outcome=ok on success ────────────────────────────────────────
@@ -143,7 +146,10 @@ async fn describe_record_outcome_ok_on_success() {
         .await
         .expect("describe succeeds");
     let event = find_event(&audit, "guidance.describe_requested").expect("event present");
-    assert_eq!(event.payload.get("outcome").and_then(Value::as_str), Some("ok"));
+    assert_eq!(
+        event.payload.get("outcome").and_then(Value::as_str),
+        Some("ok")
+    );
 }
 
 // ── Positive: errorCode=null on success ────────────────────────────────────
@@ -157,7 +163,11 @@ async fn describe_record_error_code_null_on_success() {
         .expect("describe succeeds");
     let event = find_event(&audit, "guidance.describe_requested").expect("event present");
     assert!(
-        event.payload.get("errorCode").map(Value::is_null).unwrap_or(true),
+        event
+            .payload
+            .get("errorCode")
+            .map(Value::is_null)
+            .unwrap_or(true),
         "errorCode must be null on success; got: {:?}",
         event.payload.get("errorCode")
     );
@@ -180,7 +190,11 @@ async fn describe_without_workflow_id_records_null_workflow_id() {
         "workflowId key must be present in payload (null is OK; absent is not)"
     );
     assert!(
-        event.payload.get("workflowId").map(Value::is_null).unwrap_or(false),
+        event
+            .payload
+            .get("workflowId")
+            .map(Value::is_null)
+            .unwrap_or(false),
         "workflowId must be explicitly null when caller didn't provide one"
     );
 }

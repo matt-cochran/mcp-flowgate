@@ -79,8 +79,10 @@ default:
 
 fn list_of_three() -> ResolvedBindingList {
     let file = AgentsFile::from_yaml(three_binding_yaml()).unwrap();
-    let resolver =
-        Resolver::from_loaded(file, ConfigSource::Project(PathBuf::from("/tmp/agents.yaml")));
+    let resolver = Resolver::from_loaded(
+        file,
+        ConfigSource::Project(PathBuf::from("/tmp/agents.yaml")),
+    );
     let reg = YamlAgentRegistry::new(resolver);
     reg.resolve_bindings("coding").expect("resolves")
 }

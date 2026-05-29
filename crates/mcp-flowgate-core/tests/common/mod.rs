@@ -147,7 +147,7 @@ impl Scenario {
                 definition_id: def.to_string(),
                 input,
                 principal,
-                            trace_id: None,
+                trace_id: None,
                 run_id: None,
             })
             .await
@@ -156,12 +156,7 @@ impl Scenario {
         self.last.as_ref().unwrap()
     }
 
-    pub async fn submit(
-        &mut self,
-        transition: &str,
-        args: Value,
-        principal: Principal,
-    ) -> &Value {
+    pub async fn submit(&mut self, transition: &str, args: Value, principal: Principal) -> &Value {
         let workflow_id = self.last.as_ref().unwrap()["workflow"]["id"]
             .as_str()
             .unwrap()
@@ -178,7 +173,7 @@ impl Scenario {
                 arguments: args,
                 principal,
                 summary: None,
-                            trace_id: None,
+                trace_id: None,
                 run_id: None,
             })
             .await
@@ -208,7 +203,7 @@ impl Scenario {
                 arguments: args,
                 principal,
                 summary: None,
-                            trace_id: None,
+                trace_id: None,
                 run_id: None,
             })
             .await

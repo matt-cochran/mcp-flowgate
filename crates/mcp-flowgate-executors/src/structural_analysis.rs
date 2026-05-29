@@ -110,8 +110,8 @@ fn normalize_candidate(definition: Value) -> Value {
     if definition.get("workflows").is_some() {
         return definition;
     }
-    let is_bare_workflow = definition.get("initialState").is_some()
-        && definition.get("states").is_some();
+    let is_bare_workflow =
+        definition.get("initialState").is_some() && definition.get("states").is_some();
     if is_bare_workflow {
         json!({ "workflows": { "candidate": definition } })
     } else {
@@ -170,10 +170,7 @@ fn rule_no_transitions(definition: &Value, issues: &mut Vec<Value>) -> Result<()
 
 // ── UNDEFINED_TARGET ────────────────────────────────────────────────────────
 
-fn rule_undefined_target(
-    definition: &Value,
-    issues: &mut Vec<Value>,
-) -> Result<(), ExecutorError> {
+fn rule_undefined_target(definition: &Value, issues: &mut Vec<Value>) -> Result<(), ExecutorError> {
     let Some(workflows) = definition.get("workflows").and_then(Value::as_object) else {
         return Ok(());
     };
@@ -199,9 +196,7 @@ fn rule_undefined_target(
                         format!(
                             "/workflows/{wf_id}/states/{state_name}/transitions/{t_name}/target"
                         ),
-                        format!(
-                            "transition '{t_name}' targets undefined state '{target}'"
-                        ),
+                        format!("transition '{t_name}' targets undefined state '{target}'"),
                     );
                 }
             }
@@ -289,7 +284,9 @@ fn rule_cycle_detected(definition: &Value, issues: &mut Vec<Value>) -> Result<()
             let mut stack: Vec<(String, Vec<String>, bool)> =
                 vec![(start.clone(), vec![start.clone()], true)];
             while let Some((node, path, all_unguarded)) = stack.pop() {
-                let Some(edges) = adj.get(&node) else { continue };
+                let Some(edges) = adj.get(&node) else {
+                    continue;
+                };
                 for (next, has_guard) in edges {
                     if next == start && all_unguarded && !has_guard {
                         push_issue(
@@ -320,10 +317,7 @@ fn rule_cycle_detected(definition: &Value, issues: &mut Vec<Value>) -> Result<()
 
 // ── OVERSIZED_STATE ─────────────────────────────────────────────────────────
 
-fn rule_oversized_state(
-    definition: &Value,
-    issues: &mut Vec<Value>,
-) -> Result<(), ExecutorError> {
+fn rule_oversized_state(definition: &Value, issues: &mut Vec<Value>) -> Result<(), ExecutorError> {
     let Some(workflows) = definition.get("workflows").and_then(Value::as_object) else {
         return Ok(());
     };

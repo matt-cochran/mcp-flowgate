@@ -74,7 +74,8 @@ async fn delegate_surfaces_at_top_level_after_submit() {
     // land at `done` which has no delegate — delegate field MUST be absent.
     let resp = sc.submit("ready", json!({}), anon()).await;
     assert_eq!(
-        resp["delegate"], Value::Null,
+        resp["delegate"],
+        Value::Null,
         "delegate must NOT appear on response when current state has no delegate; \
          got top-level keys: {:?}",
         resp.as_object().map(|m| m.keys().collect::<Vec<_>>())
@@ -115,8 +116,7 @@ workflows:
       done:
         terminal: true
 "#;
-    let err = mcp_flowgate_core::config::resolve_str(bad)
-        .expect_err("empty delegate must reject");
+    let err = mcp_flowgate_core::config::resolve_str(bad).expect_err("empty delegate must reject");
     let s = format!("{err:?}");
     assert!(
         s.contains("INVALID_DELEGATE"),
@@ -147,8 +147,8 @@ workflows:
       done:
         terminal: true
 "#;
-    let err = mcp_flowgate_core::config::resolve_str(bad)
-        .expect_err("numeric delegate must reject");
+    let err =
+        mcp_flowgate_core::config::resolve_str(bad).expect_err("numeric delegate must reject");
     let s = format!("{err:?}");
     assert!(
         s.contains("INVALID_DELEGATE"),

@@ -69,7 +69,7 @@ async fn instance_describe_returns_snapshot_body_not_live_config() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -83,7 +83,10 @@ async fn instance_describe_returns_snapshot_body_not_live_config() {
         .unwrap()
         .expect("subject must resolve from snapshot");
     assert_eq!(described["kind"].as_str(), Some("guidance"));
-    assert_eq!(described["subject"].as_str(), Some("review.style.house-voice"));
+    assert_eq!(
+        described["subject"].as_str(),
+        Some("review.style.house-voice")
+    );
     assert_eq!(described["verb"].as_str(), Some("review"));
     assert!(
         described["body"]
@@ -139,7 +142,7 @@ async fn unknown_subject_returns_none() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

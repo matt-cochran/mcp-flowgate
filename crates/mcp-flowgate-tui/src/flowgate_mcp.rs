@@ -141,4 +141,3 @@ fn default_config_path() -> String {
         .map(|d| d.join("flowgate.yaml").to_string_lossy().to_string())
         .unwrap_or_else(|_| "./flowgate.yaml".to_string())
 }
-

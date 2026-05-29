@@ -63,7 +63,7 @@ async fn inspect_workflow_shows_state() {
         input: json!({"key": "value"}),
         context: json!({"count": 42}),
         started_at: chrono::Utc::now(),
-            trace_id: None,
+        trace_id: None,
         run_id: None,
         cancelled_at: None,
         cancelled_reason: None,

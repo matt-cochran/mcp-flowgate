@@ -62,8 +62,7 @@ fn config_with_pending_and_real() -> Value {
 
 fn build_server(cfg: Value) -> (FlowgateServer, Arc<MemoryAuditSink>) {
     let resolved = mcp_flowgate_core::config::resolve(cfg).expect("resolve");
-    let pending =
-        mcp_flowgate_core::lexicon::pending_subjects_from_resolved(&resolved);
+    let pending = mcp_flowgate_core::lexicon::pending_subjects_from_resolved(&resolved);
     let lexicon_base = resolved
         .get("lexicon")
         .cloned()
@@ -138,10 +137,7 @@ async fn link_as_alias_happy_path() {
     // After alias resolution the placeholder entry should be gone — lookup
     // returns null entry (PENDING_DEFINITION removed).
     let entry = &placeholder_lookup["entry"];
-    let is_pending = entry
-        .get("state")
-        .and_then(Value::as_str)
-        == Some("PENDING_DEFINITION");
+    let is_pending = entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION");
     assert!(
         !is_pending,
         "evidence-foo placeholder must be gone after alias resolution; got: {placeholder_lookup}"
@@ -237,10 +233,7 @@ async fn define_new_upgrades_placeholder() {
         .await
         .expect("dispatch_call");
 
-    assert!(
-        resp.get("error").is_none(),
-        "expected success; got: {resp}"
-    );
+    assert!(resp.get("error").is_none(), "expected success; got: {resp}");
 
     // Lookup should now return a real entry (no state: PENDING_DEFINITION).
     let lookup = server
@@ -250,9 +243,7 @@ async fn define_new_upgrades_placeholder() {
         ))
         .await
         .expect("lookup");
-    let state = lookup["entry"]
-        .get("state")
-        .and_then(Value::as_str);
+    let state = lookup["entry"].get("state").and_then(Value::as_str);
     assert!(
         state != Some("PENDING_DEFINITION"),
         "entry must not be PENDING_DEFINITION after define_new; got: {lookup}"
@@ -312,10 +303,7 @@ async fn define_new_creates_fresh_entry() {
         .await
         .expect("dispatch_call");
 
-    assert!(
-        resp.get("error").is_none(),
-        "expected success; got: {resp}"
-    );
+    assert!(resp.get("error").is_none(), "expected success; got: {resp}");
 
     // Lookup must find the new entry.
     let lookup = server
@@ -359,10 +347,7 @@ async fn cancel_drops_placeholder() {
         .await
         .expect("dispatch_call");
 
-    assert!(
-        resp.get("error").is_none(),
-        "expected success; got: {resp}"
-    );
+    assert!(resp.get("error").is_none(), "expected success; got: {resp}");
 
     // The placeholder for evidence-foo must be gone.
     let lookup = server
@@ -373,10 +358,7 @@ async fn cancel_drops_placeholder() {
         .await
         .expect("lookup");
     let entry = &lookup["entry"];
-    let is_pending = entry
-        .get("state")
-        .and_then(Value::as_str)
-        == Some("PENDING_DEFINITION");
+    let is_pending = entry.get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION");
     assert!(
         !is_pending,
         "placeholder must be gone after cancel; got: {lookup}"
@@ -385,7 +367,9 @@ async fn cancel_drops_placeholder() {
     // Audit event lexicon.pending_cancelled must have been emitted.
     let events = audit.snapshot();
     assert!(
-        events.iter().any(|e| e.event_type == "lexicon.pending_cancelled"),
+        events
+            .iter()
+            .any(|e| e.event_type == "lexicon.pending_cancelled"),
         "lexicon.pending_cancelled must be emitted; events: {:?}",
         events.iter().map(|e| &e.event_type).collect::<Vec<_>>()
     );

@@ -65,16 +65,13 @@ impl Executor for ScriptExecutor {
 
         // Subject lookup is required — there's no "inline body" path on
         // the executor itself (that's what the cli executor is for).
-        let subject = cfg
-            .get("subject")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                ExecutorError::Permanent(
-                    "INVALID_SCRIPT_INVOCATION: script executor requires `subject` \
+        let subject = cfg.get("subject").and_then(Value::as_str).ok_or_else(|| {
+            ExecutorError::Permanent(
+                "INVALID_SCRIPT_INVOCATION: script executor requires `subject` \
                      (the curated script's dotted name from the top-level `scripts:` block)"
-                        .into(),
-                )
-            })?;
+                    .into(),
+            )
+        })?;
 
         // SPEC §22 + N — body lives in the instance's stamped library, not
         // in the live config. This is the §8.2 invariant: an in-flight
@@ -96,15 +93,12 @@ impl Executor for ScriptExecutor {
                      transition (not a free-form field) so stamp_scripts_library can find it."
                 ))
             })?;
-        let body = entry
-            .get("body")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                ExecutorError::Permanent(format!(
-                    "SCRIPT_NOT_IN_SNAPSHOT: script '{subject}' entry has no `body`. \
+        let body = entry.get("body").and_then(Value::as_str).ok_or_else(|| {
+            ExecutorError::Permanent(format!(
+                "SCRIPT_NOT_IN_SNAPSHOT: script '{subject}' entry has no `body`. \
                      The snapshot is malformed (likely a bug — file an issue)."
-                ))
-            })?;
+            ))
+        })?;
         let hash = entry
             .get("hash")
             .and_then(Value::as_str)
@@ -121,19 +115,14 @@ impl Executor for ScriptExecutor {
         let temp = NamedTempFile::new().map_err(|e| {
             ExecutorError::Connection(format!("failed to create temp file for script: {e}"))
         })?;
-        std::fs::write(temp.path(), body).map_err(|e| {
-            ExecutorError::Connection(format!("failed to write script body: {e}"))
-        })?;
+        std::fs::write(temp.path(), body)
+            .map_err(|e| ExecutorError::Connection(format!("failed to write script body: {e}")))?;
         let temp_path = temp.into_temp_path();
         #[cfg(unix)]
         {
-            std::fs::set_permissions(
-                &temp_path,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .map_err(|e| {
-                ExecutorError::Connection(format!("failed to chmod 0700 script file: {e}"))
-            })?;
+            std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o700)).map_err(
+                |e| ExecutorError::Connection(format!("failed to chmod 0700 script file: {e}")),
+            )?;
         }
 
         // Render args from {$.arguments, $.context, $.input} scopes.
@@ -142,8 +131,7 @@ impl Executor for ScriptExecutor {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let rendered_args: Vec<String> =
-            raw_args.iter().map(|a| render_arg(a, &request)).collect();
+        let rendered_args: Vec<String> = raw_args.iter().map(|a| render_arg(a, &request)).collect();
 
         // Honor shebang if body starts with `#!`. Otherwise default to bash.
         // Both paths preserve argv semantics; we don't pipe via stdin.
@@ -220,8 +208,7 @@ impl Executor for ScriptExecutor {
         };
 
         let stdout_str = String::from_utf8_lossy(&output.stdout).to_string();
-        let parsed_json: Value =
-            serde_json::from_str(stdout_str.trim()).unwrap_or(Value::Null);
+        let parsed_json: Value = serde_json::from_str(stdout_str.trim()).unwrap_or(Value::Null);
 
         // Audit-grade output: includes scriptSubject + scriptHash so a
         // transition record uniquely identifies what code ran, and a
@@ -283,4 +270,3 @@ fn render_arg(value: &Value, request: &ExecuteRequest) -> String {
     }
     raw.to_string()
 }
-

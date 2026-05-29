@@ -50,14 +50,13 @@ impl ExecutorRegistry for SingleExecRegistry {
     }
 }
 
-fn build_runtime(
-    config: Value,
-    executor_output: Value,
-) -> (WorkflowRuntime, Arc<MemoryAuditSink>) {
+fn build_runtime(config: Value, executor_output: Value) -> (WorkflowRuntime, Arc<MemoryAuditSink>) {
     let definitions = Arc::new(ConfigDefinitionStore::from_config(&config));
     let store = Arc::new(InMemoryWorkflowStore::new());
     let executors = Arc::new(SingleExecRegistry {
-        inner: Arc::new(FixedOutputExecutor { output: executor_output }),
+        inner: Arc::new(FixedOutputExecutor {
+            output: executor_output,
+        }),
     });
     let guards = Arc::new(DefaultGuardEvaluator::new());
     let audit = Arc::new(MemoryAuditSink::new());
@@ -102,14 +101,13 @@ async fn typed_slot_mismatch_aborts_with_blackboard_type_error() {
     });
 
     // Executor returns a string where the schema says integer → violation.
-    let (runtime, _audit) =
-        build_runtime(cfg, json!({ "value": "not-an-integer" }));
+    let (runtime, _audit) = build_runtime(cfg, json!({ "value": "not-an-integer" }));
     let start = runtime
         .start(StartWorkflow {
             definition_id: "ci".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -125,7 +123,7 @@ async fn typed_slot_mismatch_aborts_with_blackboard_type_error() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -190,7 +188,7 @@ async fn typed_slot_conforming_value_advances_transition() {
             definition_id: "ci".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -206,7 +204,7 @@ async fn typed_slot_conforming_value_advances_transition() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -258,7 +256,7 @@ async fn bare_name_slot_accepts_any_value() {
             definition_id: "ci".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -271,7 +269,7 @@ async fn bare_name_slot_accepts_any_value() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

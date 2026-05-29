@@ -261,7 +261,10 @@ async fn failing_non_critical_audit_event_does_not_abort_workflow() {
         .find(|e| e.event_type == "audit.write_failed")
         .expect("audit.write_failed self-event must be emitted");
     assert_eq!(
-        self_event.payload.get("originalEvent").and_then(|v| v.as_str()),
+        self_event
+            .payload
+            .get("originalEvent")
+            .and_then(|v| v.as_str()),
         Some("transition.rejected"),
         "self-event payload must name the original event; got: {:?}",
         self_event.payload

@@ -61,7 +61,9 @@ struct FailingEmbedder;
 #[async_trait]
 impl EmbeddingProvider for FailingEmbedder {
     async fn embed(&self, _text: &str) -> Result<Vec<f32>, EmbeddingError> {
-        Err(EmbeddingError::BackendFailed("injected test failure".to_string()))
+        Err(EmbeddingError::BackendFailed(
+            "injected test failure".to_string(),
+        ))
     }
 
     fn dimensions(&self) -> usize {
@@ -616,8 +618,7 @@ async fn subject_needs_definition_response_echoes_queued_command_args_verbatim()
         .await
         .expect("dispatch_call");
     assert_eq!(
-        resp["queued_command"]["args"],
-        start_args,
+        resp["queued_command"]["args"], start_args,
         "queued_command.args must echo original args verbatim; got: {resp}"
     );
 }
@@ -861,10 +862,8 @@ async fn link_as_alias_removes_placeholder_when_attached_to_existing_entry() {
         ))
         .await
         .expect("lookup");
-    let is_pending = lookup["entry"]
-        .get("state")
-        .and_then(Value::as_str)
-        == Some("PENDING_DEFINITION");
+    let is_pending =
+        lookup["entry"].get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION");
     assert!(
         !is_pending,
         "evidence-foo placeholder must be gone after alias resolution; got: {lookup}"
@@ -1201,8 +1200,7 @@ async fn define_new_bypasses_governance_gate_for_placeholder_upgrade() {
         .and_then(Value::as_str)
         .unwrap_or("");
     assert_ne!(
-        code,
-        "LEXICON_DEFINE_REQUIRES_HUMAN",
+        code, "LEXICON_DEFINE_REQUIRES_HUMAN",
         "define_new on placeholder must bypass governance gate; got: {resp}"
     );
     assert!(
@@ -1238,10 +1236,8 @@ async fn cancel_removes_pending_definition_placeholder() {
         ))
         .await
         .expect("lookup");
-    let is_pending = lookup["entry"]
-        .get("state")
-        .and_then(Value::as_str)
-        == Some("PENDING_DEFINITION");
+    let is_pending =
+        lookup["entry"].get("state").and_then(Value::as_str) == Some("PENDING_DEFINITION");
     assert!(
         !is_pending,
         "placeholder must be gone after cancel; got: {lookup}"
@@ -1264,7 +1260,9 @@ async fn cancel_emits_lexicon_pending_cancelled_audit_event() {
         .expect("dispatch_call");
     let events = audit.snapshot();
     assert!(
-        events.iter().any(|e| e.event_type == "lexicon.pending_cancelled"),
+        events
+            .iter()
+            .any(|e| e.event_type == "lexicon.pending_cancelled"),
         "lexicon.pending_cancelled must be emitted by cancel; events: {:?}",
         events.iter().map(|e| &e.event_type).collect::<Vec<_>>()
     );
@@ -1542,8 +1540,7 @@ async fn define_with_embedder_stores_embedding_on_entry() {
 #[tokio::test]
 async fn define_with_failing_embedder_returns_embedding_backend_failed() {
     let failing: Arc<dyn EmbeddingProvider> = Arc::new(FailingEmbedder);
-    let (server, _) =
-        build_server_with_embedder(config_with_pending_and_real(), Some(failing));
+    let (server, _) = build_server_with_embedder(config_with_pending_and_real(), Some(failing));
 
     let resp = server
         .dispatch_call(call(
@@ -1585,14 +1582,18 @@ async fn alias_add_with_embedder_reembeds_entry() {
             // Each call returns a distinct vector so we can tell them apart.
             Ok(vec![n as f32, 0.0, 0.0])
         }
-        fn dimensions(&self) -> usize { 3 }
-        fn backend_name(&self) -> &'static str { "counting" }
+        fn dimensions(&self) -> usize {
+            3
+        }
+        fn backend_name(&self) -> &'static str {
+            "counting"
+        }
     }
 
-    let embedder: Arc<dyn EmbeddingProvider> =
-        Arc::new(CountingEmbedder { call_count: AtomicUsize::new(0) });
-    let (server, _) =
-        build_server_with_embedder(config_with_pending_and_real(), Some(embedder));
+    let embedder: Arc<dyn EmbeddingProvider> = Arc::new(CountingEmbedder {
+        call_count: AtomicUsize::new(0),
+    });
+    let (server, _) = build_server_with_embedder(config_with_pending_and_real(), Some(embedder));
 
     // Step 1: define evidence-pack (already in base, use evidence-foo as a new term).
     let _ = server
@@ -1715,9 +1716,7 @@ async fn subject_needs_definition_includes_semantic_candidate_when_embedder_conf
         .as_array()
         .expect("candidates must be an array");
 
-    let semantic_candidate = candidates
-        .iter()
-        .find(|c| c["match_kind"] == "semantic");
+    let semantic_candidate = candidates.iter().find(|c| c["match_kind"] == "semantic");
 
     assert!(
         semantic_candidate.is_some(),

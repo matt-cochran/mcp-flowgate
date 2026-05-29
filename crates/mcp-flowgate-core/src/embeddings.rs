@@ -248,9 +248,7 @@ impl EmbeddingProvider for HttpEmbedder {
 ///
 /// Returns an error for an unrecognised `backend:` value or an invalid
 /// `request_format:` value.
-pub fn parse_embeddings_config(
-    config: &Value,
-) -> Result<Option<HttpEmbedder>, anyhow::Error> {
+pub fn parse_embeddings_config(config: &Value) -> Result<Option<HttpEmbedder>, anyhow::Error> {
     let Some(block) = config.get("embeddings") else {
         return Ok(None); // block absent → noop
     };
@@ -275,28 +273,15 @@ pub fn parse_embeddings_config(
         }
     };
 
-    let url = block
-        .get("url")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "INVALID_EMBEDDINGS_CONFIG: `url` is required for backend '{backend}'"
-            )
-        })?;
+    let url = block.get("url").and_then(Value::as_str).ok_or_else(|| {
+        anyhow::anyhow!("INVALID_EMBEDDINGS_CONFIG: `url` is required for backend '{backend}'")
+    })?;
 
-    let model = block
-        .get("model")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "INVALID_EMBEDDINGS_CONFIG: `model` is required for backend '{backend}'"
-            )
-        })?;
+    let model = block.get("model").and_then(Value::as_str).ok_or_else(|| {
+        anyhow::anyhow!("INVALID_EMBEDDINGS_CONFIG: `model` is required for backend '{backend}'")
+    })?;
 
-    let dimensions = block
-        .get("dimensions")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+    let dimensions = block.get("dimensions").and_then(Value::as_u64).unwrap_or(0) as usize;
 
     let api_key_env = block
         .get("api_key_env")

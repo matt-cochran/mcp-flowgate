@@ -28,7 +28,10 @@ fn anthropic_extended_thinking_true_no_budget_defaults_high() {
         extended_thinking: true,
         thinking_budget_tokens: None,
     });
-    assert_eq!(features_to_reasoning_effort(&f), Some(ReasoningEffort::High));
+    assert_eq!(
+        features_to_reasoning_effort(&f),
+        Some(ReasoningEffort::High)
+    );
 }
 
 #[test]
@@ -107,7 +110,10 @@ fn openai_case_insensitive_parse() {
     let f = ProviderFeatures::OpenAI(OpenAIFeatures {
         reasoning_effort: Some("HIGH".into()),
     });
-    assert_eq!(features_to_reasoning_effort(&f), Some(ReasoningEffort::High));
+    assert_eq!(
+        features_to_reasoning_effort(&f),
+        Some(ReasoningEffort::High)
+    );
 }
 
 #[test]
@@ -134,5 +140,8 @@ fn google_budget_snaps_to_effort() {
     let f = ProviderFeatures::Google(GoogleFeatures {
         thinking_budget_tokens: Some(10240),
     });
-    assert_eq!(features_to_reasoning_effort(&f), Some(ReasoningEffort::High));
+    assert_eq!(
+        features_to_reasoning_effort(&f),
+        Some(ReasoningEffort::High)
+    );
 }

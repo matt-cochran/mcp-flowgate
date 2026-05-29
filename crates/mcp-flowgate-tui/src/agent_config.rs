@@ -24,9 +24,7 @@ pub enum AgentConfigParseError {
     #[error("agent spec '{0}' has empty name (left of '=')")]
     EmptyName(String),
 
-    #[error(
-        "agent spec '{spec}' value '{value}' is missing '/' — expected `name=provider/model`"
-    )]
+    #[error("agent spec '{spec}' value '{value}' is missing '/' — expected `name=provider/model`")]
     MissingProviderModelSlash { spec: String, value: String },
 
     #[error("agent spec '{spec}' has empty provider (left of '/')")]

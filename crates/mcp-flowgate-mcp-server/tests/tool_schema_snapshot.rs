@@ -37,12 +37,12 @@ fn query_schema_has_expected_fields() {
     );
     let props = schema["properties"].as_object().expect("properties object");
     // Must carry the search/describe/get/explain discriminator fields.
-    assert!(props.contains_key("query"),      "missing query");
-    assert!(props.contains_key("kind"),       "missing kind");
-    assert!(props.contains_key("subject"),    "missing subject");
+    assert!(props.contains_key("query"), "missing query");
+    assert!(props.contains_key("kind"), "missing kind");
+    assert!(props.contains_key("subject"), "missing subject");
     assert!(props.contains_key("workflowId"), "missing workflowId");
     assert!(props.contains_key("transition"), "missing transition");
-    assert!(props.contains_key("limit"),      "missing limit");
+    assert!(props.contains_key("limit"), "missing limit");
 }
 
 #[test]
@@ -55,16 +55,19 @@ fn command_schema_has_expected_fields() {
     );
     let props = schema["properties"].as_object().expect("properties object");
     // Must carry the start/submit/define discriminator fields.
-    assert!(props.contains_key("definitionId"),    "missing definitionId");
-    assert!(props.contains_key("input"),           "missing input");
-    assert!(props.contains_key("workflowId"),      "missing workflowId");
-    assert!(props.contains_key("expectedVersion"), "missing expectedVersion");
-    assert!(props.contains_key("transition"),      "missing transition");
-    assert!(props.contains_key("arguments"),       "missing arguments");
-    assert!(props.contains_key("subject"),         "missing subject");
-    assert!(props.contains_key("definition"),      "missing definition");
-    assert!(props.contains_key("traceId"),         "missing traceId");
-    assert!(props.contains_key("runId"),           "missing runId");
+    assert!(props.contains_key("definitionId"), "missing definitionId");
+    assert!(props.contains_key("input"), "missing input");
+    assert!(props.contains_key("workflowId"), "missing workflowId");
+    assert!(
+        props.contains_key("expectedVersion"),
+        "missing expectedVersion"
+    );
+    assert!(props.contains_key("transition"), "missing transition");
+    assert!(props.contains_key("arguments"), "missing arguments");
+    assert!(props.contains_key("subject"), "missing subject");
+    assert!(props.contains_key("definition"), "missing definition");
+    assert!(props.contains_key("traceId"), "missing traceId");
+    assert!(props.contains_key("runId"), "missing runId");
 }
 
 #[test]

@@ -92,7 +92,10 @@ async fn no_transitions_detected() {
         }
     });
     let out = analyze(def).await;
-    assert!(has_rule(&out, "NO_TRANSITIONS"), "expected NO_TRANSITIONS; got: {out}");
+    assert!(
+        has_rule(&out, "NO_TRANSITIONS"),
+        "expected NO_TRANSITIONS; got: {out}"
+    );
 }
 
 // ── UNDEFINED_TARGET ────────────────────────────────────────────────────────
@@ -154,7 +157,10 @@ async fn initial_state_not_flagged_as_dead() {
         .iter()
         .filter(|i| i["rule"].as_str() == Some("DEAD_STATE"))
         .collect();
-    assert!(dead.is_empty(), "initial state must not be flagged; got: {dead:?}");
+    assert!(
+        dead.is_empty(),
+        "initial state must not be flagged; got: {dead:?}"
+    );
 }
 
 // ── CYCLE_DETECTED (unguarded only) ─────────────────────────────────────────
@@ -201,7 +207,10 @@ async fn guarded_cycle_not_flagged() {
         .iter()
         .filter(|i| i["rule"].as_str() == Some("CYCLE_DETECTED"))
         .collect();
-    assert!(cycles.is_empty(), "guarded cycle must not flag; got: {cycles:?}");
+    assert!(
+        cycles.is_empty(),
+        "guarded cycle must not flag; got: {cycles:?}"
+    );
 }
 
 // ── UNDECLARED_SLOT_READ ────────────────────────────────────────────────────
@@ -255,7 +264,10 @@ async fn declared_slot_read_passes() {
         .iter()
         .filter(|i| i["rule"].as_str() == Some("UNDECLARED_SLOT_READ"))
         .collect();
-    assert!(undeclared.is_empty(), "declared slot must pass; got: {undeclared:?}");
+    assert!(
+        undeclared.is_empty(),
+        "declared slot must pass; got: {undeclared:?}"
+    );
 }
 
 // ── UNBLESSED_SUBJECT_ROOT ──────────────────────────────────────────────────

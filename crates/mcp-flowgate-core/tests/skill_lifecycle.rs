@@ -81,7 +81,8 @@ fn invalid_lifecycle_error_lists_all_three() {
 
 #[test]
 fn uppercase_lifecycle_rejected() {
-    let err = config::resolve_str(&skills_yaml("Stable")).expect_err("Stable (capital S) must reject");
+    let err =
+        config::resolve_str(&skills_yaml("Stable")).expect_err("Stable (capital S) must reject");
     assert!(format!("{err}").contains("INVALID_LIFECYCLE"));
 }
 
@@ -89,8 +90,7 @@ fn uppercase_lifecycle_rejected() {
 
 #[test]
 fn lifecycle_round_trips_to_skills_library() {
-    let resolved = config::resolve_str(&skills_yaml("experimental"))
-        .expect("config resolves");
+    let resolved = config::resolve_str(&skills_yaml("experimental")).expect("config resolves");
     // The top-level `skills:` map preserves the field.
     let v = resolved
         .pointer("/skills/review.style.fixture/lifecycle")

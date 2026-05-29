@@ -69,9 +69,8 @@ async fn live_spawn_against_real_aether_completes_or_times_out() {
     // SubAgentTimeout within the configured window." We don't assert
     // workflow.submit was called because that requires a live workflow
     // store, which is a longer-running end-to-end dogfood scenario.
-    let spawner = AetherSubAgentSpawner::new(
-        TuiConfig::from_cli(Some(30), Some(5), Some(16_384)).unwrap(),
-    );
+    let spawner =
+        AetherSubAgentSpawner::new(TuiConfig::from_cli(Some(30), Some(5), Some(16_384)).unwrap());
     let result = spawner
         .spawn_and_wait(
             &fake_agent(),

@@ -20,7 +20,7 @@ use mcp_flowgate_core::error::ExecutorError;
 use mcp_flowgate_core::model::{ExecuteRequest, WorkflowInstance};
 use mcp_flowgate_core::ports::ExecutorRegistry;
 use mcp_flowgate_executors::{
-    default_registry_with_mcp, McpExecutor, McpConnections, CliConnections,
+    default_registry_with_mcp, CliConnections, McpConnections, McpExecutor,
 };
 use serde_json::{json, Value};
 
@@ -46,12 +46,7 @@ fn build_registry(audit: Arc<MemoryAuditSink>) -> Arc<dyn ExecutorRegistry> {
     let mcp_conns = McpConnections::from_config(&json!({}));
     let cli_conns = Arc::new(CliConnections::from_config(&json!({})));
     let mcp_exec = Arc::new(McpExecutor::new(mcp_conns));
-    default_registry_with_mcp(
-        &json!({}),
-        mcp_exec,
-        cli_conns,
-        audit as Arc<dyn AuditSink>,
-    )
+    default_registry_with_mcp(&json!({}), mcp_exec, cli_conns, audit as Arc<dyn AuditSink>)
 }
 
 fn req(executor_config: Value, instance: WorkflowInstance) -> ExecuteRequest {
@@ -65,7 +60,11 @@ fn req(executor_config: Value, instance: WorkflowInstance) -> ExecuteRequest {
     }
 }
 
-async fn run_parallel(executor_config: Value, instance: WorkflowInstance, audit: Arc<MemoryAuditSink>) -> Result<mcp_flowgate_core::model::ExecuteResult, ExecutorError> {
+async fn run_parallel(
+    executor_config: Value,
+    instance: WorkflowInstance,
+    audit: Arc<MemoryAuditSink>,
+) -> Result<mcp_flowgate_core::model::ExecuteResult, ExecutorError> {
     let registry = build_registry(audit);
     let parallel = registry.get("parallel").expect("parallel registered");
     parallel.execute(req(executor_config, instance)).await
@@ -178,9 +177,7 @@ async fn join_at_least_3_succeeds_with_3_of_5() {
     )
     .await
     .expect("at_least: 3 with 5 successes must succeed");
-    assert!(
-        result.output["summary"]["ok_count"].as_u64().unwrap() >= 3,
-    );
+    assert!(result.output["summary"]["ok_count"].as_u64().unwrap() >= 3,);
     assert_eq!(result.output["summary"]["verdict"], "succeeded");
 }
 
@@ -497,8 +494,7 @@ async fn join_percent_threshold_not_met_returns_threshold_failure() {
     let err = result.expect_err("1 of 4 = 25% < 75% threshold must fail");
     let s = format!("{err:?}");
     assert!(
-        s.contains("threshold_not_met") || s.contains("ThresholdNotMet")
-            || s.contains("failed"),
+        s.contains("threshold_not_met") || s.contains("ThresholdNotMet") || s.contains("failed"),
         "expected threshold failure indication, got: {s}"
     );
 }
@@ -850,8 +846,10 @@ async fn for_each_where_fan_out_index_is_post_filter_position() {
     .await
     .expect("filter passes");
     let branches = result.output["branches"].as_array().unwrap();
-    let fan_out: Vec<u64> =
-        branches.iter().map(|b| b["index"].as_u64().unwrap()).collect();
+    let fan_out: Vec<u64> = branches
+        .iter()
+        .map(|b| b["index"].as_u64().unwrap())
+        .collect();
     assert_eq!(
         fan_out,
         vec![0, 1],

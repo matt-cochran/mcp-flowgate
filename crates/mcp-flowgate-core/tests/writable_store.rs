@@ -87,7 +87,10 @@ async fn audit_failure_aborts_register_commit() {
     assert!(format!("{err}").contains("RECORD_WRITE_FAILED"));
     // Definition must NOT be loadable after a failed commit.
     let load = store.load("never_published").await;
-    assert!(load.is_err(), "definition must not be loadable post-failed-audit");
+    assert!(
+        load.is_err(),
+        "definition must not be loadable post-failed-audit"
+    );
 }
 
 // ── Edge: load of unknown id errors with explicit message ──────────────────
@@ -96,7 +99,10 @@ async fn audit_failure_aborts_register_commit() {
 async fn load_unknown_definition_errors() {
     let audit = Arc::new(MemoryAuditSink::new());
     let store = InMemoryWritableDefinitionStore::new(audit as Arc<dyn AuditSink>);
-    let err = store.load("nonexistent").await.expect_err("unknown id must error");
+    let err = store
+        .load("nonexistent")
+        .await
+        .expect_err("unknown id must error");
     assert!(format!("{err}").contains("nonexistent"));
 }
 

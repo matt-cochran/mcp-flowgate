@@ -290,7 +290,10 @@ async fn flowgate_env_vars_exposed_to_script_body() {
         .await
         .unwrap();
     let stdout = result.output["stdout"].as_str().unwrap();
-    assert!(stdout.contains("sub=verify.env.exposed"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("sub=verify.env.exposed"),
+        "stdout: {stdout}"
+    );
     assert!(stdout.contains(&format!("hash={hash}")), "stdout: {stdout}");
 }
 

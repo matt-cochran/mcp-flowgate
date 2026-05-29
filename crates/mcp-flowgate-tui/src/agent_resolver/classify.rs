@@ -72,9 +72,10 @@ impl FailureClass {
     pub fn from_io_error(kind: std::io::ErrorKind) -> Self {
         use std::io::ErrorKind::*;
         match kind {
-            TimedOut | ConnectionRefused | ConnectionReset | ConnectionAborted
-            | NotConnected | HostUnreachable | NetworkUnreachable | NetworkDown
-            | Interrupted => FailureClass::NetworkTimeout,
+            TimedOut | ConnectionRefused | ConnectionReset | ConnectionAborted | NotConnected
+            | HostUnreachable | NetworkUnreachable | NetworkDown | Interrupted => {
+                FailureClass::NetworkTimeout
+            }
             _ => FailureClass::ContentOther,
         }
     }

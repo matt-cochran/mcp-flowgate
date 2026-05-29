@@ -181,7 +181,9 @@ workflows:
     // manually if start() didn't auto-chain. (Deterministic chaining
     // requires `actor: deterministic` declarations not present in the
     // minimal fixture above.)
-    let after = if start_resp.pointer("/workflow/state").and_then(Value::as_str)
+    let after = if start_resp
+        .pointer("/workflow/state")
+        .and_then(Value::as_str)
         == Some("done")
     {
         start_resp

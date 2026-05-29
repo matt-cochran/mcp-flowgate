@@ -61,7 +61,9 @@ fn undeclared_output_slot_warns() {
     let diags = validate_workflows(&config);
     let warnings: Vec<_> = diags
         .iter()
-        .filter(|d| !d.is_error() && d.message().contains("typo") && d.message().contains("blackboard"))
+        .filter(|d| {
+            !d.is_error() && d.message().contains("typo") && d.message().contains("blackboard")
+        })
         .collect();
     assert!(
         !warnings.is_empty(),
@@ -95,7 +97,9 @@ fn undeclared_output_slot_warns_object_form() {
     let diags = validate_workflows(&config);
     let warnings: Vec<_> = diags
         .iter()
-        .filter(|d| !d.is_error() && d.message().contains("typo") && d.message().contains("blackboard"))
+        .filter(|d| {
+            !d.is_error() && d.message().contains("typo") && d.message().contains("blackboard")
+        })
         .collect();
     assert!(
         !warnings.is_empty(),
@@ -564,7 +568,10 @@ fn guard_reading_context_clean_when_blackboard_absent() {
     });
     let diags = validate_workflows(&config);
     let errs: Vec<_> = diags.iter().filter(|d| d.is_error()).collect();
-    assert!(errs.is_empty(), "no errors expected without blackboard declaration; got: {errs:?}");
+    assert!(
+        errs.is_empty(),
+        "no errors expected without blackboard declaration; got: {errs:?}"
+    );
 }
 
 #[test]

@@ -116,11 +116,13 @@ pub fn classify_outcome(
             class,
             detail,
         }),
-        PreflightOutcome::MissingCredential { env_var } => Some(PreflightError::MissingCredential {
-            delegate: label.to_string(),
-            binding: binding.clone(),
-            env_var,
-        }),
+        PreflightOutcome::MissingCredential { env_var } => {
+            Some(PreflightError::MissingCredential {
+                delegate: label.to_string(),
+                binding: binding.clone(),
+                env_var,
+            })
+        }
     }
 }
 
@@ -151,7 +153,10 @@ pub async fn verify_primary_bindings(
         let Some(primary) = bindings.first() else {
             continue;
         };
-        let key = (primary.provider.display_name().to_string(), primary.model.clone());
+        let key = (
+            primary.provider.display_name().to_string(),
+            primary.model.clone(),
+        );
         if !seen.insert(key) {
             continue;
         }
@@ -202,9 +207,7 @@ pub async fn probe_binding(binding: &Binding) -> PreflightOutcome {
 ///
 /// A workflow-aware variant (`verify_primary_bindings(&[Delegate])`)
 /// is available for callers that already know the delegate set.
-pub async fn verify_all_primary_bindings(
-    resolver: &Resolver,
-) -> Result<(), Vec<PreflightError>> {
+pub async fn verify_all_primary_bindings(resolver: &Resolver) -> Result<(), Vec<PreflightError>> {
     if std::env::var("FLOWGATE_SKIP_PREFLIGHT").as_deref() == Ok("1") {
         tracing::info!(
             target: "flowgate.agent_resolver",

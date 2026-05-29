@@ -42,7 +42,9 @@ impl Executor for RegistryExecutor {
             .get("definition_id")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                ExecutorError::Permanent("registry: missing required argument `definition_id`".into())
+                ExecutorError::Permanent(
+                    "registry: missing required argument `definition_id`".into(),
+                )
             })?;
         let definition = args.get("definition").cloned().ok_or_else(|| {
             ExecutorError::Permanent("registry: missing required argument `definition`".into())

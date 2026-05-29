@@ -56,9 +56,12 @@ repos:
         quality = fixtures_root().join("quality-core").display(),
     );
     let path = write_host(&td, &host);
-    let (config, diagnostics) = load_resolved_with_repos(&path)
-        .expect("two-repo load should succeed");
-    assert!(diagnostics.is_empty(), "no soft diagnostics expected: {diagnostics:?}");
+    let (config, diagnostics) =
+        load_resolved_with_repos(&path).expect("two-repo load should succeed");
+    assert!(
+        diagnostics.is_empty(),
+        "no soft diagnostics expected: {diagnostics:?}"
+    );
 
     let workflows = config
         .pointer("/workflows")
@@ -269,7 +272,10 @@ workflows:
     assert!(msg.contains("UNRESOLVED_WORKFLOW_REF"), "msg: {msg}");
     // After namespace-prefixing the unprefixed ref `cap.missing` becomes
     // `ur/cap.missing` — that's the name V22 reports.
-    assert!(msg.contains("ur/cap.missing"), "msg should name the unresolved id: {msg}");
+    assert!(
+        msg.contains("ur/cap.missing"),
+        "msg should name the unresolved id: {msg}"
+    );
 }
 
 // ---------- V23 — anonymous shadowing via host include ----------
@@ -295,8 +301,8 @@ workflows:
         swe = fixtures_root().join("swe-core").display(),
     );
     let path = write_host(&td, &host);
-    let (config, _diagnostics) = load_resolved_with_repos(&path)
-        .expect("explicit override should be accepted");
+    let (config, _diagnostics) =
+        load_resolved_with_repos(&path).expect("explicit override should be accepted");
     // Host wins on the explicitly declared override.
     let title = config
         .pointer("/workflows/swe~1cap.plan.vet/title")
@@ -327,7 +333,10 @@ workflows:
     let err = load_resolved_with_repos(&path).expect_err("anonymous shadow must error");
     let msg = format!("{:#}", err);
     assert!(msg.contains("ANONYMOUS_OVERRIDE"), "msg: {msg}");
-    assert!(msg.contains("swe/cap.plan.vet"), "msg should name the id: {msg}");
+    assert!(
+        msg.contains("swe/cap.plan.vet"),
+        "msg should name the id: {msg}"
+    );
 }
 
 #[test]

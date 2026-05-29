@@ -112,9 +112,7 @@ pub fn build_runtime_with_executor(
     (runtime, audit)
 }
 
-pub fn build_runtime(
-    config: Value,
-) -> (WorkflowRuntime, Arc<FixedExecutor>, Arc<MemoryAuditSink>) {
+pub fn build_runtime(config: Value) -> (WorkflowRuntime, Arc<FixedExecutor>, Arc<MemoryAuditSink>) {
     let executor = Arc::new(FixedExecutor::new(json!({})));
     let (runtime, audit) =
         build_runtime_with_executor(config, executor.clone() as Arc<dyn Executor>);

@@ -74,8 +74,7 @@ impl TuiConfig {
         max_sub_agent_steps: Option<usize>,
         max_blackboard_bytes: Option<usize>,
     ) -> Result<Self, TuiConfigError> {
-        let (Some(seconds), Some(steps)) = (max_sub_agent_seconds, max_sub_agent_steps)
-        else {
+        let (Some(seconds), Some(steps)) = (max_sub_agent_seconds, max_sub_agent_steps) else {
             return Err(TuiConfigError::MissingTimeoutOrSteps);
         };
         if seconds == 0 {

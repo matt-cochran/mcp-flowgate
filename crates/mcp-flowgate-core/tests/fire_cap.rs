@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
 use mcp_flowgate_core::config::resolve;
+use mcp_flowgate_core::error::ExecutorError;
 use mcp_flowgate_core::guards::DefaultGuardEvaluator;
+use mcp_flowgate_core::model::{ExecuteRequest, ExecuteResult};
 use mcp_flowgate_core::model::{Principal, StartWorkflow, SubmitTransition};
 use mcp_flowgate_core::ports::{Executor, ExecutorRegistry};
-use mcp_flowgate_core::error::ExecutorError;
-use mcp_flowgate_core::model::{ExecuteRequest, ExecuteResult};
 use mcp_flowgate_core::runtime::WorkflowRuntime;
 use mcp_flowgate_core::store::InMemoryWorkflowStore;
 use mcp_flowgate_core::ConfigDefinitionStore;
@@ -60,8 +60,7 @@ async fn make_runtime(yaml: &str) -> (WorkflowRuntime, Arc<MemoryAuditSink>) {
     let resolved = resolve(raw).expect("config resolves");
     let definitions = Arc::new(ConfigDefinitionStore::from_config(&resolved));
     let store = Arc::new(InMemoryWorkflowStore::new());
-    let executors: Arc<dyn ExecutorRegistry> =
-        Arc::new(SingleExec(Arc::new(NoopExec)));
+    let executors: Arc<dyn ExecutorRegistry> = Arc::new(SingleExec(Arc::new(NoopExec)));
     let guards = Arc::new(DefaultGuardEvaluator::new());
     let audit = Arc::new(MemoryAuditSink::new());
     let runtime = WorkflowRuntime::new(
@@ -100,7 +99,11 @@ workflows:
         })
         .await
         .unwrap();
-    let wf_id = start.pointer("/workflow/id").and_then(Value::as_str).unwrap().to_string();
+    let wf_id = start
+        .pointer("/workflow/id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
     let mut version = 0u64;
 
     for i in 0..2 {
@@ -122,7 +125,10 @@ workflows:
             status == Some("waiting_for_action") || status == Some("executed"),
             "iteration {i} should succeed; got status: {status:?}"
         );
-        version = resp.pointer("/workflow/version").and_then(Value::as_u64).unwrap();
+        version = resp
+            .pointer("/workflow/version")
+            .and_then(Value::as_u64)
+            .unwrap();
     }
 
     // Third call must hit the cap.
@@ -179,7 +185,11 @@ workflows:
         })
         .await
         .unwrap();
-    let wf_id = start.pointer("/workflow/id").and_then(Value::as_str).unwrap().to_string();
+    let wf_id = start
+        .pointer("/workflow/id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
     let mut version = 0u64;
 
     // Fire loop_a twice (cap=2).
@@ -197,7 +207,10 @@ workflows:
             })
             .await
             .unwrap();
-        version = resp.pointer("/workflow/version").and_then(Value::as_u64).unwrap();
+        version = resp
+            .pointer("/workflow/version")
+            .and_then(Value::as_u64)
+            .unwrap();
     }
 
     // Leave state a → counter should reset
@@ -214,8 +227,14 @@ workflows:
         })
         .await
         .unwrap();
-    version = resp.pointer("/workflow/version").and_then(Value::as_u64).unwrap();
-    assert_eq!(resp.pointer("/workflow/state").and_then(Value::as_str), Some("b"));
+    version = resp
+        .pointer("/workflow/version")
+        .and_then(Value::as_u64)
+        .unwrap();
+    assert_eq!(
+        resp.pointer("/workflow/state").and_then(Value::as_str),
+        Some("b")
+    );
 
     // Re-enter state a
     let resp = runtime
@@ -231,7 +250,10 @@ workflows:
         })
         .await
         .unwrap();
-    version = resp.pointer("/workflow/version").and_then(Value::as_u64).unwrap();
+    version = resp
+        .pointer("/workflow/version")
+        .and_then(Value::as_u64)
+        .unwrap();
 
     // Now we can fire loop_a TWICE more (counter was reset).
     for i in 0..2 {
@@ -253,7 +275,10 @@ workflows:
             status == Some("waiting_for_action") || status == Some("executed"),
             "re-entry fire {i} should succeed (counter reset); got status: {status:?}"
         );
-        version = resp.pointer("/workflow/version").and_then(Value::as_u64).unwrap();
+        version = resp
+            .pointer("/workflow/version")
+            .and_then(Value::as_u64)
+            .unwrap();
     }
 }
 
@@ -286,7 +311,11 @@ workflows:
         })
         .await
         .unwrap();
-    let wf_id = start.pointer("/workflow/id").and_then(Value::as_str).unwrap().to_string();
+    let wf_id = start
+        .pointer("/workflow/id")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
 
     let _ = runtime
         .submit(SubmitTransition {
@@ -306,13 +335,10 @@ workflows:
     let interaction = events
         .iter()
         .find(|e| e.event_type == "workflow.interaction");
-    let transition = events
-        .iter()
-        .find(|e| e.event_type == "workflow.transition" && e
-            .payload
-            .pointer("/transition")
-            .and_then(Value::as_str)
-            == Some("ask"));
+    let transition = events.iter().find(|e| {
+        e.event_type == "workflow.transition"
+            && e.payload.pointer("/transition").and_then(Value::as_str) == Some("ask")
+    });
     assert!(
         interaction.is_some(),
         "expected workflow.interaction event for lightweight transition; events: {:?}",

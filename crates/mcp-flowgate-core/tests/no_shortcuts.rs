@@ -83,7 +83,10 @@ fn verb_enum_has_no_other_variant() {
 fn no_optional_hash_for_skill_fragments() {
     // Search for the prohibited pattern across discovery.rs, config.rs,
     // and runtime_links.rs — files that touch the fragment shape.
-    let core = workspace_root().join("crates").join("mcp-flowgate-core").join("src");
+    let core = workspace_root()
+        .join("crates")
+        .join("mcp-flowgate-core")
+        .join("src");
     let watched = [
         core.join("discovery.rs"),
         core.join("config.rs"),
@@ -122,7 +125,10 @@ fn no_optional_hash_for_skill_fragments() {
 fn no_mock_types_in_test_files() {
     let root = workspace_root();
     let mut tests_dirs: Vec<PathBuf> = Vec::new();
-    for entry in fs::read_dir(root.join("crates")).expect("crates/ exists").flatten() {
+    for entry in fs::read_dir(root.join("crates"))
+        .expect("crates/ exists")
+        .flatten()
+    {
         let tests = entry.path().join("tests");
         if tests.exists() {
             tests_dirs.push(tests);
@@ -130,7 +136,10 @@ fn no_mock_types_in_test_files() {
     }
 
     let self_path = PathBuf::from(file!());
-    let self_name = self_path.file_name().and_then(|n| n.to_str()).unwrap_or("no_shortcuts.rs");
+    let self_name = self_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("no_shortcuts.rs");
 
     let mut violations = Vec::new();
     for dir in tests_dirs {
@@ -167,7 +176,10 @@ fn no_mock_types_in_test_files() {
 
 #[test]
 fn no_swallowed_audit_writes_in_critical_path() {
-    let core = workspace_root().join("crates").join("mcp-flowgate-core").join("src");
+    let core = workspace_root()
+        .join("crates")
+        .join("mcp-flowgate-core")
+        .join("src");
     // Per the FMECA: critical-path files where audit failures MUST propagate.
     // Other files (e.g. runtime_response.rs for non-critical describe-style
     // audits) may use `let _ =` legitimately, with a self-event emission.

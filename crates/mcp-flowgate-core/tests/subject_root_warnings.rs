@@ -40,8 +40,7 @@ fn resolve_in_strict_mode_with_unblessed_root_fails() {
 #[test]
 fn lenient_mode_emits_invalid_subject_root_warning() {
     let cfg = skills_yaml_with("nonsense.foo.bar", false);
-    let (_resolved, diagnostics) =
-        config::resolve_with_diagnostics(cfg).expect("resolve succeeds");
+    let (_resolved, diagnostics) = config::resolve_with_diagnostics(cfg).expect("resolve succeeds");
     let warn = diagnostics
         .iter()
         .find(|d| d.code == "INVALID_SUBJECT_ROOT")
@@ -153,7 +152,5 @@ skills:
     body: "x"
 "#;
     let resolved = config::resolve_str(yaml).expect("resolve_str");
-    assert!(resolved
-        .pointer("/skills/nonsense.x.y")
-        .is_some());
+    assert!(resolved.pointer("/skills/nonsense.x.y").is_some());
 }

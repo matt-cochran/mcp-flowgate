@@ -190,10 +190,7 @@ mod tests {
     #[test]
     fn from_token_rejects_unblessed_strings() {
         for s in ["", "PLAN", " plan", "plan ", "destroy", "build_thing"] {
-            assert!(
-                CapVerb::from_token(s).is_none(),
-                "should reject '{s}'"
-            );
+            assert!(CapVerb::from_token(s).is_none(), "should reject '{s}'");
         }
     }
 

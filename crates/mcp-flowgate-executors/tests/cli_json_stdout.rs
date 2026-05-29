@@ -66,7 +66,7 @@ async fn cli_stdout_parsed_as_json_into_output_json() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -81,7 +81,7 @@ async fn cli_stdout_parsed_as_json_into_output_json() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

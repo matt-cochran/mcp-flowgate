@@ -35,7 +35,10 @@ default:
     let env = validate_agents_config_envelope(f.path());
     assert_eq!(env["ok"], serde_json::json!(true), "envelope: {env:#}");
     assert!(
-        env["summary"].as_str().unwrap().contains("1 default binding"),
+        env["summary"]
+            .as_str()
+            .unwrap()
+            .contains("1 default binding"),
         "envelope: {env:#}",
     );
 }
@@ -46,7 +49,8 @@ fn envelope_missing_default_surfaces_named_kind() {
     let env = validate_agents_config_envelope(f.path());
     assert_eq!(env["ok"], serde_json::json!(false), "envelope: {env:#}");
     assert_eq!(
-        env["error_kind"], serde_json::json!("MISSING_DEFAULT"),
+        env["error_kind"],
+        serde_json::json!("MISSING_DEFAULT"),
         "envelope: {env:#}",
     );
 }
@@ -68,7 +72,8 @@ overrides:
     let env = validate_agents_config_envelope(f.path());
     assert_eq!(env["ok"], serde_json::json!(false), "envelope: {env:#}");
     assert_eq!(
-        env["error_kind"], serde_json::json!("UNKNOWN_OVERRIDE_KEY"),
+        env["error_kind"],
+        serde_json::json!("UNKNOWN_OVERRIDE_KEY"),
         "envelope: {env:#}",
     );
     assert!(
@@ -95,7 +100,8 @@ default:
     let env = validate_agents_config_envelope(f.path());
     assert_eq!(env["ok"], serde_json::json!(false), "envelope: {env:#}");
     assert_eq!(
-        env["error_kind"], serde_json::json!("UNKNOWN_FEATURE_KEY"),
+        env["error_kind"],
+        serde_json::json!("UNKNOWN_FEATURE_KEY"),
         "envelope: {env:#}",
     );
 }
@@ -107,7 +113,8 @@ fn envelope_io_error_surfaces_named_kind_on_missing_path() {
     ));
     assert_eq!(env["ok"], serde_json::json!(false), "envelope: {env:#}");
     assert_eq!(
-        env["error_kind"], serde_json::json!("IO"),
+        env["error_kind"],
+        serde_json::json!("IO"),
         "envelope: {env:#}",
     );
 }

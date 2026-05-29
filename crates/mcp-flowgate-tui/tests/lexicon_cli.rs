@@ -296,12 +296,7 @@ fn list_outputs_authored_entry() {
     let cfg = write_fixture_config(dir.path());
 
     let out = Command::new(binary())
-        .args([
-            "lexicon",
-            "list",
-            "--config",
-            cfg.to_str().expect("path"),
-        ])
+        .args(["lexicon", "list", "--config", cfg.to_str().expect("path")])
         .output()
         .expect("run list");
 
@@ -324,20 +319,15 @@ fn list_output_is_json_lines() {
     let cfg = write_fixture_config(dir.path());
 
     let out = Command::new(binary())
-        .args([
-            "lexicon",
-            "list",
-            "--config",
-            cfg.to_str().expect("path"),
-        ])
+        .args(["lexicon", "list", "--config", cfg.to_str().expect("path")])
         .output()
         .expect("run list");
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Each non-empty line must parse as valid JSON.
     for line in stdout.lines().filter(|l| !l.is_empty()) {
-        let _: serde_json::Value =
-            serde_json::from_str(line).unwrap_or_else(|e| panic!("line is not JSON: {e}\nline: {line}"));
+        let _: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("line is not JSON: {e}\nline: {line}"));
     }
 }
 
@@ -403,8 +393,8 @@ fn pending_output_is_json_lines() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     for line in stdout.lines().filter(|l| !l.is_empty()) {
-        let _: serde_json::Value =
-            serde_json::from_str(line).unwrap_or_else(|e| panic!("line is not JSON: {e}\nline: {line}"));
+        let _: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("line is not JSON: {e}\nline: {line}"));
     }
 }
 

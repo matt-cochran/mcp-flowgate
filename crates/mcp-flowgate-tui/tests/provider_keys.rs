@@ -15,10 +15,17 @@ fn resolve_path_honors_env_override() {
     let _guard = env_lock().lock().unwrap();
     // SAFETY: env_lock() serializes access across this test binary; no
     // other crate code touches FLOWGATE_PROVIDER_KEYS_FILE.
-    unsafe { std::env::set_var("FLOWGATE_PROVIDER_KEYS_FILE", "/tmp/custom-provider-keys.env"); }
+    unsafe {
+        std::env::set_var(
+            "FLOWGATE_PROVIDER_KEYS_FILE",
+            "/tmp/custom-provider-keys.env",
+        );
+    }
     let p = provider_keys::resolve_path();
     assert_eq!(p, PathBuf::from("/tmp/custom-provider-keys.env"));
-    unsafe { std::env::remove_var("FLOWGATE_PROVIDER_KEYS_FILE"); }
+    unsafe {
+        std::env::remove_var("FLOWGATE_PROVIDER_KEYS_FILE");
+    }
 }
 
 #[test]
@@ -26,7 +33,9 @@ fn resolve_path_defaults_under_config_dir() {
     let _guard = env_lock().lock().unwrap();
     // SAFETY: env_lock() serializes access across this test binary; no
     // other crate code touches FLOWGATE_PROVIDER_KEYS_FILE.
-    unsafe { std::env::remove_var("FLOWGATE_PROVIDER_KEYS_FILE"); }
+    unsafe {
+        std::env::remove_var("FLOWGATE_PROVIDER_KEYS_FILE");
+    }
     let p = provider_keys::resolve_path();
     // The default is dirs::config_dir().join("flowgate/providers.env"); on every
     // supported platform `dirs::config_dir` returns Some. Assert the suffix
@@ -38,13 +47,18 @@ fn resolve_path_defaults_under_config_dir() {
 fn resolve_path_whitespace_env_falls_through_to_default() {
     let _guard = env_lock().lock().unwrap();
     // SAFETY: env_lock() serializes access across this test binary.
-    unsafe { std::env::set_var("FLOWGATE_PROVIDER_KEYS_FILE", "   "); }
+    unsafe {
+        std::env::set_var("FLOWGATE_PROVIDER_KEYS_FILE", "   ");
+    }
     let p = provider_keys::resolve_path();
     assert!(
         p.ends_with("flowgate/providers.env") || p.ends_with("flowgate-providers.env"),
-        "whitespace env should fall through; got {}", p.display()
+        "whitespace env should fall through; got {}",
+        p.display()
     );
-    unsafe { std::env::remove_var("FLOWGATE_PROVIDER_KEYS_FILE"); }
+    unsafe {
+        std::env::remove_var("FLOWGATE_PROVIDER_KEYS_FILE");
+    }
 }
 
 #[test]
@@ -93,7 +107,10 @@ fn read_skips_malformed_lines_and_blank_lines() {
         std::fs::set_permissions(&p, perm).unwrap();
     }
     let m = provider_keys::read(&p).unwrap();
-    assert_eq!(m.get("ANTHROPIC_API_KEY"), Some(&"sk-ant-valid".to_string()));
+    assert_eq!(
+        m.get("ANTHROPIC_API_KEY"),
+        Some(&"sk-ant-valid".to_string())
+    );
     assert_eq!(m.len(), 1);
 }
 
@@ -113,7 +130,7 @@ fn read_trims_whitespace_around_equals() {
     }
     let m = provider_keys::read(&p).unwrap();
     assert_eq!(m.get("ANTHROPIC_API_KEY"), Some(&"sk-ant-aaa".to_string()));
-    assert_eq!(m.get("OPENAI_API_KEY"),    Some(&"sk-bbb".to_string()));
+    assert_eq!(m.get("OPENAI_API_KEY"), Some(&"sk-bbb".to_string()));
 }
 
 #[cfg(unix)]
@@ -130,8 +147,16 @@ fn write_atomic_creates_0600_file_in_0700_parent() {
 
     let f_mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
     assert_eq!(f_mode, 0o600, "file mode should be 0600, got {:o}", f_mode);
-    let parent_mode = std::fs::metadata(p.parent().unwrap()).unwrap().permissions().mode() & 0o777;
-    assert_eq!(parent_mode, 0o700, "parent dir mode should be 0700, got {:o}", parent_mode);
+    let parent_mode = std::fs::metadata(p.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        parent_mode, 0o700,
+        "parent dir mode should be 0700, got {:o}",
+        parent_mode
+    );
 }
 
 #[test]
@@ -146,7 +171,10 @@ fn read_rejects_world_readable_file() {
 
     let err = provider_keys::read(&p).unwrap_err();
     assert!(
-        matches!(err, provider_keys::ProviderKeysError::PermissionsTooOpen { .. }),
+        matches!(
+            err,
+            provider_keys::ProviderKeysError::PermissionsTooOpen { .. }
+        ),
         "got {err:?}"
     );
 }
@@ -232,10 +260,10 @@ fn provider_id_env_vars_match_aether_llm() {
     // (packages/llm/src/providers/{anthropic,openai,openrouter,gemini,bedrock}).
     // Single-key providers read one env var; bedrock uses the AWS SDK
     // which honors the standard AWS_* trio.
-    assert_eq!(ProviderId::Anthropic.env_vars(),  &["ANTHROPIC_API_KEY"]);
-    assert_eq!(ProviderId::Openai.env_vars(),     &["OPENAI_API_KEY"]);
+    assert_eq!(ProviderId::Anthropic.env_vars(), &["ANTHROPIC_API_KEY"]);
+    assert_eq!(ProviderId::Openai.env_vars(), &["OPENAI_API_KEY"]);
     assert_eq!(ProviderId::Openrouter.env_vars(), &["OPENROUTER_API_KEY"]);
-    assert_eq!(ProviderId::Gemini.env_vars(),     &["GEMINI_API_KEY"]);
+    assert_eq!(ProviderId::Gemini.env_vars(), &["GEMINI_API_KEY"]);
     assert_eq!(
         ProviderId::Bedrock.env_vars(),
         &["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]
@@ -253,16 +281,19 @@ fn provider_id_slugs_are_stable() {
     use provider_keys::ProviderId;
     // Slug strings are documented as stable; this test catches accidental
     // renames that would silently break operator CLI scripts and file lines.
-    assert_eq!(ProviderId::Anthropic.slug(),  "anthropic");
-    assert_eq!(ProviderId::Openai.slug(),     "openai");
+    assert_eq!(ProviderId::Anthropic.slug(), "anthropic");
+    assert_eq!(ProviderId::Openai.slug(), "openai");
     assert_eq!(ProviderId::Openrouter.slug(), "openrouter");
-    assert_eq!(ProviderId::Bedrock.slug(),    "bedrock");
-    assert_eq!(ProviderId::Gemini.slug(),     "gemini");
+    assert_eq!(ProviderId::Bedrock.slug(), "bedrock");
+    assert_eq!(ProviderId::Gemini.slug(), "gemini");
 }
 
 #[test]
 fn mask_value_shows_short_prefix_and_last4() {
-    assert_eq!(provider_keys::mask_value("sk-ant-1234567890abcd"), "sk-ant-***abcd");
+    assert_eq!(
+        provider_keys::mask_value("sk-ant-1234567890abcd"),
+        "sk-ant-***abcd"
+    );
 }
 
 #[test]

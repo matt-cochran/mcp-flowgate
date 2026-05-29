@@ -84,8 +84,16 @@ impl Verb {
     /// `&'static [&'static str]` so error messages can list them verbatim
     /// without per-call allocation.
     pub const ALL_TOKENS: &'static [&'static str] = &[
-        "triage", "diagnose", "plan", "implement", "review", "refactor", "explain", "compose",
-        "research", "summarize",
+        "triage",
+        "diagnose",
+        "plan",
+        "implement",
+        "review",
+        "refactor",
+        "explain",
+        "compose",
+        "research",
+        "summarize",
     ];
 
     pub fn as_token(self) -> &'static str {
@@ -180,9 +188,9 @@ pub const BLESSED_SUBJECT_ROOTS: &[&str] = &[
     // Verb-mirror (groups guidance by cognitive operation).
     "triage",
     "diagnose",
-    "plan",       // also a verb
+    "plan", // also a verb
     "implement",
-    "review",     // also a verb
+    "review", // also a verb
     "refactor",
     "explain",
     "compose",
@@ -237,8 +245,8 @@ pub enum ScriptVerb {
 
 impl ScriptVerb {
     pub const ALL_TOKENS: &'static [&'static str] = &[
-        "build", "test", "deploy", "format", "lint", "install", "verify", "run",
-        "inspect", "search", "fetch", "audit",
+        "build", "test", "deploy", "format", "lint", "install", "verify", "run", "inspect",
+        "search", "fetch", "audit",
     ];
 
     pub fn as_token(self) -> &'static str {
@@ -286,24 +294,11 @@ impl ScriptVerb {
 /// with the closest-blessed-root suggestion.
 pub const BLESSED_SCRIPT_ROOTS: &[&str] = &[
     // Verb-mirror (action category).
-    "build",
-    "test",
-    "deploy",
-    "format",
-    "lint",
-    "install",
-    "verify",
-    "run",
+    "build", "test", "deploy", "format", "lint", "install", "verify", "run",
     // SPEC §22.3 expansion (v0.3) — verb-mirror roots for the
     // reconnaissance + graded-findings verbs.
-    "inspect",
-    "search",
-    "fetch",
-    "audit",
-    // Domain-themed (operational category).
-    "release",
-    "migrate",
-    "ci",
+    "inspect", "search", "fetch", "audit", // Domain-themed (operational category).
+    "release", "migrate", "ci",
 ];
 
 /// A single thing that can be discovered: a workflow, a proxy capability, or

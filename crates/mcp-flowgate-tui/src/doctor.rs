@@ -95,9 +95,7 @@ pub async fn run_doctor(args: &DoctorArgs) -> Vec<CheckResult> {
         Err(e) => results.push(CheckResult::fail(
             "mcp-flowgate binary",
             "MCP_FLOWGATE_NOT_FOUND",
-            format!(
-                "{e} — install with `cargo install mcp-flowgate` or set MCP_FLOWGATE_PATH"
-            ),
+            format!("{e} — install with `cargo install mcp-flowgate` or set MCP_FLOWGATE_PATH"),
         )),
     }
 
@@ -167,10 +165,7 @@ pub async fn run_doctor(args: &DoctorArgs) -> Vec<CheckResult> {
     // 4. Workflow declared
     if let Some(cfg) = &resolved_config {
         if let Some(wf_name) = &args.workflow {
-            if cfg
-                .pointer(&format!("/workflows/{wf_name}"))
-                .is_some()
-            {
+            if cfg.pointer(&format!("/workflows/{wf_name}")).is_some() {
                 results.push(CheckResult::pass("workflow declared", wf_name));
             } else {
                 let available: Vec<&str> = cfg
@@ -181,9 +176,7 @@ pub async fn run_doctor(args: &DoctorArgs) -> Vec<CheckResult> {
                 results.push(CheckResult::fail(
                     "workflow declared",
                     "WORKFLOW_NOT_DECLARED",
-                    format!(
-                        "--workflow '{wf_name}' not found in config. Available: {available:?}"
-                    ),
+                    format!("--workflow '{wf_name}' not found in config. Available: {available:?}"),
                 ));
             }
         } else {
@@ -196,10 +189,7 @@ pub async fn run_doctor(args: &DoctorArgs) -> Vec<CheckResult> {
 
     // 5. Per-agent API key present (parse `name=provider/model`)
     if args.agents.is_empty() {
-        results.push(CheckResult::skip(
-            "agent API keys",
-            "no --agent arguments",
-        ));
+        results.push(CheckResult::skip("agent API keys", "no --agent arguments"));
     } else {
         for spec in &args.agents {
             let parts: Vec<&str> = spec.splitn(2, '=').collect();
@@ -524,7 +514,10 @@ fn check_workflow_delegate_coverage(
     } else {
         results.push(CheckResult::pass(
             "workflow delegates",
-            format!("{} delegate(s) resolved to explicit overrides", delegates.len()),
+            format!(
+                "{} delegate(s) resolved to explicit overrides",
+                delegates.len()
+            ),
         ));
     }
 }
@@ -594,8 +587,7 @@ async fn check_agents_probe_cache(
 
     // Surface cache age as its own check so the operator sees one
     // line summarizing "your cache is N days old."
-    let stale_threshold =
-        std::time::Duration::from_secs(PROBE_STALE_AFTER_DAYS * 24 * 60 * 60);
+    let stale_threshold = std::time::Duration::from_secs(PROBE_STALE_AFTER_DAYS * 24 * 60 * 60);
     match cache.age() {
         Some(age) if age > stale_threshold => {
             results.push(CheckResult::fail(
@@ -640,7 +632,11 @@ async fn check_agents_probe_cache(
                 ));
             }
             ProbeStatus::AuthFailed => {
-                results.push(CheckResult::fail(name, "PROBE_AUTH_FAILED", entry.detail.clone()));
+                results.push(CheckResult::fail(
+                    name,
+                    "PROBE_AUTH_FAILED",
+                    entry.detail.clone(),
+                ));
             }
             ProbeStatus::ModelNotListed => {
                 results.push(CheckResult::fail(
@@ -650,7 +646,11 @@ async fn check_agents_probe_cache(
                 ));
             }
             ProbeStatus::Unreachable => {
-                results.push(CheckResult::fail(name, "PROBE_UNREACHABLE", entry.detail.clone()));
+                results.push(CheckResult::fail(
+                    name,
+                    "PROBE_UNREACHABLE",
+                    entry.detail.clone(),
+                ));
             }
             ProbeStatus::UnexpectedResponse => {
                 results.push(CheckResult::fail(
@@ -705,28 +705,16 @@ pub fn render_results(results: &[CheckResult]) -> String {
         let prefix = format!("{color}{mark}{reset}");
         match &r.status {
             CheckStatus::Pass => {
-                out.push_str(&format!(
-                    "  {prefix} {:<35} {}\n",
-                    r.name, r.detail
-                ));
+                out.push_str(&format!("  {prefix} {:<35} {}\n", r.name, r.detail));
             }
             CheckStatus::Warn(code) => {
-                out.push_str(&format!(
-                    "  {prefix} {:<35} {code}: {}\n",
-                    r.name, r.detail
-                ));
+                out.push_str(&format!("  {prefix} {:<35} {code}: {}\n", r.name, r.detail));
             }
             CheckStatus::Fail(code) => {
-                out.push_str(&format!(
-                    "  {prefix} {:<35} {code}: {}\n",
-                    r.name, r.detail
-                ));
+                out.push_str(&format!("  {prefix} {:<35} {code}: {}\n", r.name, r.detail));
             }
             CheckStatus::Skip(reason) => {
-                out.push_str(&format!(
-                    "  {prefix} {:<35} (skipped: {reason})\n",
-                    r.name
-                ));
+                out.push_str(&format!("  {prefix} {:<35} (skipped: {reason})\n", r.name));
             }
         }
     }

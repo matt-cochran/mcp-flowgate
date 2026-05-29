@@ -17,12 +17,11 @@ use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
 use mcp_flowgate_core::config;
 use mcp_flowgate_core::guards::DefaultGuardEvaluator;
 use mcp_flowgate_core::ports::{
-    DefinitionStore, DefinitionStoreWritable, ExecutorRegistry,
-    GuidanceAcknowledgmentStore,
+    DefinitionStore, DefinitionStoreWritable, ExecutorRegistry, GuidanceAcknowledgmentStore,
 };
 use mcp_flowgate_core::store::{
-    ConfigDefinitionStore, InMemoryGuidanceAcknowledgmentStore,
-    InMemoryWorkflowStore, InMemoryWritableDefinitionStore,
+    ConfigDefinitionStore, InMemoryGuidanceAcknowledgmentStore, InMemoryWorkflowStore,
+    InMemoryWritableDefinitionStore,
 };
 use mcp_flowgate_core::WorkflowRuntime;
 use mcp_flowgate_executors::{
@@ -321,10 +320,7 @@ async fn acknowledged_publish_via_human_principal_succeeds() {
     // change workflow version, but read it fresh to be safe.
     // §32: workflow.get is now flowgate.query with workflowId.
     let cur = server
-        .dispatch_call(args(
-            TOOL_QUERY,
-            json!({ "workflowId": &workflow_id }),
-        ))
+        .dispatch_call(args(TOOL_QUERY, json!({ "workflowId": &workflow_id })))
         .await
         .expect("get succeeds");
     let cur_version = cur["workflow"]["version"].as_u64().unwrap_or(version);

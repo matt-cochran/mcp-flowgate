@@ -90,7 +90,10 @@ fn synthesize_outputs(snippet_outputs: &Value) -> Value {
 }
 
 fn synthesize_one(schema: &Value) -> Value {
-    let ty = schema.get("type").and_then(Value::as_str).unwrap_or("string");
+    let ty = schema
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("string");
     // Enum constraint wins — use first allowed value.
     if let Some(enum_vals) = schema.get("enum").and_then(Value::as_array) {
         if let Some(first) = enum_vals.first() {
@@ -239,8 +242,14 @@ async fn walk_to_terminal(definition_id: &str, input: Value, config: &Value) -> 
         .await
         .unwrap_or_else(|e| panic!("start({definition_id}): {e}"));
 
-    let status = resp.pointer("/result/status").and_then(Value::as_str).unwrap_or("?");
-    let state = resp.pointer("/workflow/state").and_then(Value::as_str).unwrap_or("?");
+    let status = resp
+        .pointer("/result/status")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
+    let state = resp
+        .pointer("/workflow/state")
+        .and_then(Value::as_str)
+        .unwrap_or("?");
     assert_eq!(
         state, "done",
         "{definition_id} should walk to terminal 'done'; got state='{state}' status='{status}'. \
@@ -274,7 +283,10 @@ async fn flow_add_feature_walks_to_terminal() {
         .pointer("/context/pr_url")
         .and_then(Value::as_str)
         .unwrap_or("");
-    assert!(!pr_url.is_empty(), "pr_url should be projected; got {resp:#}");
+    assert!(
+        !pr_url.is_empty(),
+        "pr_url should be projected; got {resp:#}"
+    );
 }
 
 #[tokio::test]

@@ -87,9 +87,7 @@ pub trait GuardEvaluator: Send + Sync {
         arguments: &Value,
         principal: &Principal,
     ) -> anyhow::Result<(bool, Option<String>)> {
-        let pass = self
-            .evaluate(guard, instance, arguments, principal)
-            .await?;
+        let pass = self.evaluate(guard, instance, arguments, principal).await?;
         Ok((pass, None))
     }
 }
@@ -113,12 +111,8 @@ pub trait EvidenceStore: Send + Sync {
 pub trait GuidanceAcknowledgmentStore: Send + Sync {
     /// Record that `subject` was fetched for `workflow_id` while the body's
     /// normalized hash was `body_hash`.
-    async fn record(
-        &self,
-        workflow_id: &str,
-        subject: &str,
-        body_hash: &str,
-    ) -> anyhow::Result<()>;
+    async fn record(&self, workflow_id: &str, subject: &str, body_hash: &str)
+        -> anyhow::Result<()>;
 
     /// Return the hash of the body last fetched for `(workflow_id, subject)`,
     /// or `None` if no fetch was recorded.
@@ -136,12 +130,8 @@ pub trait GuidanceAcknowledgmentStore: Send + Sync {
 /// script guards). Hash-flip invalidation is the same semantic.
 #[async_trait]
 pub trait ScriptAcknowledgmentStore: Send + Sync {
-    async fn record(
-        &self,
-        workflow_id: &str,
-        subject: &str,
-        body_hash: &str,
-    ) -> anyhow::Result<()>;
+    async fn record(&self, workflow_id: &str, subject: &str, body_hash: &str)
+        -> anyhow::Result<()>;
 
     async fn last_acknowledged_hash(
         &self,

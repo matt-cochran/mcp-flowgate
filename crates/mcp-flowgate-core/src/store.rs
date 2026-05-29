@@ -169,7 +169,10 @@ impl InMemoryWritableDefinitionStore {
 
     /// Seed the store with an existing definition map (e.g. the resolved
     /// config at startup). Useful for tests and bootstrap.
-    pub fn with_seed(audit: Arc<dyn crate::audit::AuditSink>, seed: HashMap<String, Value>) -> Self {
+    pub fn with_seed(
+        audit: Arc<dyn crate::audit::AuditSink>,
+        seed: HashMap<String, Value>,
+    ) -> Self {
         Self {
             inner: Arc::new(RwLock::new(seed)),
             audit,
@@ -177,7 +180,12 @@ impl InMemoryWritableDefinitionStore {
     }
 
     pub fn known_ids(&self) -> Vec<String> {
-        self.inner.read().expect("LOCK_POISONED: writable definition store").keys().cloned().collect()
+        self.inner
+            .read()
+            .expect("LOCK_POISONED: writable definition store")
+            .keys()
+            .cloned()
+            .collect()
     }
 }
 
@@ -215,10 +223,13 @@ impl crate::ports::GuidanceAcknowledgmentStore for InMemoryGuidanceAcknowledgmen
         subject: &str,
         body_hash: &str,
     ) -> anyhow::Result<()> {
-        self.inner.write().expect("LOCK_POISONED: guidance acknowledgment store").insert(
-            (workflow_id.to_string(), subject.to_string()),
-            body_hash.to_string(),
-        );
+        self.inner
+            .write()
+            .expect("LOCK_POISONED: guidance acknowledgment store")
+            .insert(
+                (workflow_id.to_string(), subject.to_string()),
+                body_hash.to_string(),
+            );
         Ok(())
     }
 
@@ -259,10 +270,13 @@ impl crate::ports::ScriptAcknowledgmentStore for InMemoryScriptAcknowledgmentSto
         subject: &str,
         body_hash: &str,
     ) -> anyhow::Result<()> {
-        self.inner.write().expect("LOCK_POISONED: script acknowledgment store").insert(
-            (workflow_id.to_string(), subject.to_string()),
-            body_hash.to_string(),
-        );
+        self.inner
+            .write()
+            .expect("LOCK_POISONED: script acknowledgment store")
+            .insert(
+                (workflow_id.to_string(), subject.to_string()),
+                body_hash.to_string(),
+            );
         Ok(())
     }
 
@@ -284,8 +298,8 @@ impl crate::ports::ScriptAcknowledgmentStore for InMemoryScriptAcknowledgmentSto
 impl crate::ports::DefinitionStoreWritable for InMemoryWritableDefinitionStore {
     async fn register(&self, definition_id: &str, definition: Value) -> anyhow::Result<()> {
         // Audit-before-commit (SPEC §8.4). If this fails, abort.
-        let event = crate::audit::AuditEvent::new("definition.published")
-            .with_payload(serde_json::json!({
+        let event =
+            crate::audit::AuditEvent::new("definition.published").with_payload(serde_json::json!({
                 "definitionId": definition_id,
                 "outcome":      "pending_commit",
             }));
@@ -296,25 +310,29 @@ impl crate::ports::DefinitionStoreWritable for InMemoryWritableDefinitionStore {
         }
         // Commit becomes visible only after audit succeeded.
         {
-            let mut guard = self.inner.write().expect("LOCK_POISONED: writable definition store");
+            let mut guard = self
+                .inner
+                .write()
+                .expect("LOCK_POISONED: writable definition store");
             guard.insert(definition_id.to_string(), definition);
         }
         // Post-commit best-effort event (mirrors §5.8 non-critical semantics).
         // A self-event surfaces audit-write failure; we can't use
         // `record_or_self_event` here because that helper lives on
         // `WorkflowRuntime`, not on the store. Inline the pattern.
-        let post = crate::audit::AuditEvent::new("definition.loadable")
-            .with_payload(serde_json::json!({
+        let post =
+            crate::audit::AuditEvent::new("definition.loadable").with_payload(serde_json::json!({
                 "definitionId": definition_id,
                 "outcome":      "loadable",
             }));
         if let Err(primary_err) = self.audit.record(post).await {
-            let self_event = crate::audit::AuditEvent::new("audit.write_failed")
-                .with_payload(serde_json::json!({
+            let self_event = crate::audit::AuditEvent::new("audit.write_failed").with_payload(
+                serde_json::json!({
                     "originalEvent": "definition.loadable",
                     "definitionId":  definition_id,
                     "error":         primary_err.to_string(),
-                }));
+                }),
+            );
             if let Err(inner) = self.audit.record(self_event).await {
                 tracing::warn!(
                     definition_id = %definition_id,

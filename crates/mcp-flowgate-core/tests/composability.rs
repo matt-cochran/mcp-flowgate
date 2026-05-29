@@ -568,7 +568,7 @@ async fn capability_ref_in_workflow_actually_dispatches() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -584,7 +584,7 @@ async fn capability_ref_in_workflow_actually_dispatches() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -708,7 +708,7 @@ async fn capability_ref_emits_full_audit_trail() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -723,7 +723,7 @@ async fn capability_ref_emits_full_audit_trail() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

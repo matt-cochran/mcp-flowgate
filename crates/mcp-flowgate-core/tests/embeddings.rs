@@ -58,7 +58,6 @@ impl EmbeddingProvider for FixedVectorEmbedder {
     }
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,7 +124,8 @@ async fn one_shot_http_server_error() -> SocketAddr {
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut buf = [0u8; 4096];
         let _ = stream.read(&mut buf).await;
-        let resp = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let resp =
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         stream.write_all(resp.as_bytes()).await.unwrap();
     });
     addr
@@ -139,7 +139,10 @@ async fn one_shot_http_server_error() -> SocketAddr {
 async fn noop_embedder_returns_empty_vector() {
     let emb = NoopEmbedder;
     let result = emb.embed("hello").await.unwrap();
-    assert!(result.is_empty(), "NoopEmbedder must return an empty vector");
+    assert!(
+        result.is_empty(),
+        "NoopEmbedder must return an empty vector"
+    );
 }
 
 #[test]
@@ -172,8 +175,7 @@ async fn http_embedder_ollama_parses_embedding_field() {
 
 #[tokio::test]
 async fn http_embedder_openai_compatible_parses_data_0_embedding() {
-    let addr =
-        one_shot_http_server(r#"{"data":[{"embedding":[0.5,0.6,0.7]}]}"#).await;
+    let addr = one_shot_http_server(r#"{"data":[{"embedding":[0.5,0.6,0.7]}]}"#).await;
     let emb = HttpEmbedder::new(
         format!("http://{addr}/v1/embeddings"),
         "text-embedding-ada-002",
@@ -210,9 +212,7 @@ fn config_parse_backend_none_returns_none() {
 fn config_parse_invalid_backend_fails() {
     let config = json!({ "version": "1", "embeddings": { "backend": "bogus_provider" } });
     // Map to () to avoid requiring Debug on Option<HttpEmbedder>.
-    let err = parse_embeddings_config(&config)
-        .map(|_| ())
-        .unwrap_err();
+    let err = parse_embeddings_config(&config).map(|_| ()).unwrap_err();
     let msg = format!("{err}");
     assert!(
         msg.contains("bogus_provider"),
@@ -251,10 +251,7 @@ fn build_entry_with_embedding_stores_underscore_embedding_field() {
         .pointer("/_embedding")
         .and_then(Value::as_array)
         .expect("_embedding must be present");
-    let parsed: Vec<f32> = stored
-        .iter()
-        .map(|v| v.as_f64().unwrap() as f32)
-        .collect();
+    let parsed: Vec<f32> = stored.iter().map(|v| v.as_f64().unwrap() as f32).collect();
     assert_eq!(parsed, vec);
 }
 
@@ -264,7 +261,8 @@ fn build_entry_with_embedding_stores_underscore_embedding_field() {
 
 #[test]
 fn build_entry_with_none_embedding_stores_no_embedding_field() {
-    let entry = build_entry("a real def", None, None, None, None).expect("build_entry must succeed");
+    let entry =
+        build_entry("a real def", None, None, None, None).expect("build_entry must succeed");
     assert!(
         entry.pointer("/_embedding").is_none(),
         "_embedding must not be present when None is passed"
@@ -328,8 +326,15 @@ async fn tier3_ranks_semantically_similar_entry_with_match_kind_semantic() {
     )
     .await;
 
-    let semantic: Vec<_> = results.iter().filter(|c| c.match_kind == "semantic").collect();
-    assert_eq!(semantic.len(), 1, "expected exactly one semantic candidate; got {results:?}");
+    let semantic: Vec<_> = results
+        .iter()
+        .filter(|c| c.match_kind == "semantic")
+        .collect();
+    assert_eq!(
+        semantic.len(),
+        1,
+        "expected exactly one semantic candidate; got {results:?}"
+    );
     assert_eq!(semantic[0].term, "close-entry");
 }
 

@@ -51,15 +51,17 @@ impl WorkflowRuntime {
                 .await?;
             if pass {
                 self.record_or_self_event(
-                        instance.audit_event("transition.branched")
-                            .with_correlation(correlation_id)
-                            .with_actor(&principal.subject)
-                            .with_payload(json!({
-                                "branchIndex": idx,
-                                "fromState": instance.state,
-                                "toState": branch_target,
-                            })),
-                ).await;
+                    instance
+                        .audit_event("transition.branched")
+                        .with_correlation(correlation_id)
+                        .with_actor(&principal.subject)
+                        .with_payload(json!({
+                            "branchIndex": idx,
+                            "fromState": instance.state,
+                            "toState": branch_target,
+                        })),
+                )
+                .await;
                 return Ok(branch_target.to_string());
             }
         }
@@ -97,8 +99,8 @@ impl WorkflowRuntime {
         principal: &Principal,
         correlation_id: &str,
     ) -> anyhow::Result<Option<String>> {
-        let Some(state_def) = definition
-            .pointer(&format!("/states/{}", pointer_escape(from_state)))
+        let Some(state_def) =
+            definition.pointer(&format!("/states/{}", pointer_escape(from_state)))
         else {
             return Ok(None);
         };
@@ -197,15 +199,17 @@ impl WorkflowRuntime {
             // so the caller still gets a meaningful `failed`-style response.
             None => {
                 self.record_or_self_event(
-                        instance.audit_event("workflow.timed_out")
-                            .with_actor(&principal.subject)
-                            .with_payload(json!({
-                                "elapsedMs": elapsed,
-                                "timeoutMs": timeout_ms,
-                                "fromState": instance.state,
-                                "applied": false,
-                            })),
-                ).await;
+                    instance
+                        .audit_event("workflow.timed_out")
+                        .with_actor(&principal.subject)
+                        .with_payload(json!({
+                            "elapsedMs": elapsed,
+                            "timeoutMs": timeout_ms,
+                            "fromState": instance.state,
+                            "applied": false,
+                        })),
+                )
+                .await;
                 return Ok(None);
             }
         };
@@ -258,17 +262,19 @@ impl WorkflowRuntime {
             .await?;
 
         self.record_or_self_event(
-                saved.audit_event("workflow.timed_out")
-                    .with_correlation(&correlation_id)
-                    .with_actor(&principal.subject)
-                    .with_payload(json!({
-                        "elapsedMs": elapsed,
-                        "timeoutMs": timeout_ms,
-                        "fromState": from_state,
-                        "toState": target,
-                        "applied": true,
-                    })),
-        ).await;
+            saved
+                .audit_event("workflow.timed_out")
+                .with_correlation(&correlation_id)
+                .with_actor(&principal.subject)
+                .with_payload(json!({
+                    "elapsedMs": elapsed,
+                    "timeoutMs": timeout_ms,
+                    "fromState": from_state,
+                    "toState": target,
+                    "applied": true,
+                })),
+        )
+        .await;
         Ok(Some(saved))
     }
 
@@ -309,11 +315,9 @@ impl WorkflowRuntime {
             &on_enter_input,
             &result.output,
         )?;
-        if let Err((slot, reason)) = validate_blackboard_writes(
-            &definition,
-            on_enter.get("output"),
-            &instance.context,
-        ) {
+        if let Err((slot, reason)) =
+            validate_blackboard_writes(&definition, on_enter.get("output"), &instance.context)
+        {
             bail!("BLACKBOARD_TYPE_ERROR: onEnter output write to typed slot '{slot}': {reason}");
         }
 
@@ -419,15 +423,17 @@ impl WorkflowRuntime {
                 Ok(selected) => selected,
                 Err(e) => {
                     self.record_or_self_event(
-                            instance.audit_event("chain.failed")
-                                .with_correlation(correlation_id)
-                                .with_payload(json!({
-                                    "fromState": instance.state,
-                                    "chainDepth": steps.len(),
-                                    "errorClass": "selection_error",
-                                    "message": e.to_string(),
-                                })),
-                    ).await;
+                        instance
+                            .audit_event("chain.failed")
+                            .with_correlation(correlation_id)
+                            .with_payload(json!({
+                                "fromState": instance.state,
+                                "chainDepth": steps.len(),
+                                "errorClass": "selection_error",
+                                "message": e.to_string(),
+                            })),
+                    )
+                    .await;
                     return Ok(ChainOutcome::Failed {
                         failed_transition: String::new(),
                         error: e.to_string(),
@@ -445,14 +451,16 @@ impl WorkflowRuntime {
 
             // Audit: chain step beginning
             self.record_or_self_event(
-                    instance.audit_event("chain.step")
-                        .with_correlation(correlation_id)
-                        .with_payload(json!({
-                            "transition": transition_name,
-                            "fromState": from_state,
-                            "chainDepth": steps.len(),
-                        })),
-            ).await;
+                instance
+                    .audit_event("chain.step")
+                    .with_correlation(correlation_id)
+                    .with_payload(json!({
+                        "transition": transition_name,
+                        "fromState": from_state,
+                        "chainDepth": steps.len(),
+                    })),
+            )
+            .await;
 
             // Snapshot pre-merge context so the transition record can carry
             // an accurate blackboardDelta (SPEC §7.2). Cheap clone — context
@@ -497,16 +505,18 @@ impl WorkflowRuntime {
                                 "BLACKBOARD_TYPE_ERROR: output write to typed slot '{slot}': {reason}"
                             );
                             self.record_or_self_event(
-                                    instance.audit_event("chain.failed")
-                                        .with_correlation(correlation_id)
-                                        .with_payload(json!({
-                                            "transition": transition_name,
-                                            "fromState": from_state,
-                                            "chainDepth": steps.len(),
-                                            "code": "BLACKBOARD_TYPE_ERROR",
-                                            "message": message,
-                                        })),
-                            ).await;
+                                instance
+                                    .audit_event("chain.failed")
+                                    .with_correlation(correlation_id)
+                                    .with_payload(json!({
+                                        "transition": transition_name,
+                                        "fromState": from_state,
+                                        "chainDepth": steps.len(),
+                                        "code": "BLACKBOARD_TYPE_ERROR",
+                                        "message": message,
+                                    })),
+                            )
+                            .await;
                             return Ok(ChainOutcome::Failed {
                                 failed_transition: transition_name,
                                 error: message,
@@ -522,16 +532,18 @@ impl WorkflowRuntime {
                     }
                     Err(err) => {
                         self.record_or_self_event(
-                                instance.audit_event("chain.failed")
-                                    .with_correlation(correlation_id)
-                                    .with_payload(json!({
-                                        "transition": transition_name,
-                                        "fromState": from_state,
-                                        "chainDepth": steps.len(),
-                                        "errorClass": err.class().token(),
-                                        "message": err.to_string(),
-                                    })),
-                        ).await;
+                            instance
+                                .audit_event("chain.failed")
+                                .with_correlation(correlation_id)
+                                .with_payload(json!({
+                                    "transition": transition_name,
+                                    "fromState": from_state,
+                                    "chainDepth": steps.len(),
+                                    "errorClass": err.class().token(),
+                                    "message": err.to_string(),
+                                })),
+                        )
+                        .await;
                         return Ok(ChainOutcome::Failed {
                             failed_transition: transition_name,
                             error: err.to_string(),
@@ -609,17 +621,19 @@ impl WorkflowRuntime {
 
             // Audit: transition completed
             self.record_or_self_event(
-                    instance.audit_event("workflow.transitioned")
-                        .with_correlation(correlation_id)
-                        .with_actor(&principal.subject)
-                        .with_payload(json!({
-                            "transition": transition_name,
-                            "state": instance.state,
-                            "version": instance.version,
-                            "deterministic": true,
-                            "chainDepth": steps.len(),
-                        })),
-            ).await;
+                instance
+                    .audit_event("workflow.transitioned")
+                    .with_correlation(correlation_id)
+                    .with_actor(&principal.subject)
+                    .with_payload(json!({
+                        "transition": transition_name,
+                        "state": instance.state,
+                        "version": instance.version,
+                        "deterministic": true,
+                        "chainDepth": steps.len(),
+                    })),
+            )
+            .await;
 
             // Run onEnter for the new state
             instance = self
@@ -640,13 +654,15 @@ impl WorkflowRuntime {
         // Emit chain.completed if any steps were taken
         if !steps.is_empty() {
             self.record_or_self_event(
-                    instance.audit_event("chain.completed")
-                        .with_correlation(correlation_id)
-                        .with_payload(json!({
-                            "steps": steps.len(),
-                            "finalState": instance.state,
-                        })),
-            ).await;
+                instance
+                    .audit_event("chain.completed")
+                    .with_correlation(correlation_id)
+                    .with_payload(json!({
+                        "steps": steps.len(),
+                        "finalState": instance.state,
+                    })),
+            )
+            .await;
         }
 
         Ok(ChainOutcome::Completed(ChainResult {
@@ -687,14 +703,16 @@ impl WorkflowRuntime {
                     .evaluate(guard, instance, &json!({}), principal)
                     .await?;
                 self.record_or_self_event(
-                        instance.audit_event("guard.evaluated")
-                            .with_correlation(correlation_id)
-                            .with_payload(json!({
-                                "guard": guard,
-                                "passed": pass,
-                                "context": "deterministic_selection",
-                            })),
-                ).await;
+                    instance
+                        .audit_event("guard.evaluated")
+                        .with_correlation(correlation_id)
+                        .with_payload(json!({
+                            "guard": guard,
+                            "passed": pass,
+                            "context": "deterministic_selection",
+                        })),
+                )
+                .await;
                 if !pass {
                     all_pass = false;
                     break;
@@ -769,8 +787,8 @@ impl WorkflowRuntime {
         if let Some(ctx) = next.context.as_object_mut() {
             ctx.retain(|k, _| !k.starts_with(&fire_prefix));
         }
-        let Some(state_def) = definition
-            .pointer(&format!("/states/{}", pointer_escape(from_state)))
+        let Some(state_def) =
+            definition.pointer(&format!("/states/{}", pointer_escape(from_state)))
         else {
             return;
         };

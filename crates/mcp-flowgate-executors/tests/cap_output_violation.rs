@@ -170,7 +170,9 @@ workflows:
 
     let event_types = audit.event_types();
     assert!(
-        event_types.iter().any(|t| t == "cap.output.schema_violation"),
+        event_types
+            .iter()
+            .any(|t| t == "cap.output.schema_violation"),
         "cap.output.schema_violation must be in audit log; got {event_types:?}"
     );
 

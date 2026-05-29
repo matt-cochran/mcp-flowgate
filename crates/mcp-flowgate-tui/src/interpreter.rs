@@ -174,7 +174,9 @@ pub enum ResolutionError {
     )]
     UnknownLegacyAgent { delegate: String },
 
-    #[error("delegate `{delegate}` is not a valid <affinity> | <tier> | <affinity>-<tier>: {source}")]
+    #[error(
+        "delegate `{delegate}` is not a valid <affinity> | <tier> | <affinity>-<tier>: {source}"
+    )]
     InvalidDelegate {
         delegate: String,
         #[source]
@@ -238,11 +240,12 @@ impl LegacyAgentRegistry {
 
 impl AgentRegistry for LegacyAgentRegistry {
     fn resolve(&self, delegate: &str) -> Result<ResolvedAgent, ResolutionError> {
-        let c = self.agents.get(delegate).ok_or_else(|| {
-            ResolutionError::UnknownLegacyAgent {
+        let c = self
+            .agents
+            .get(delegate)
+            .ok_or_else(|| ResolutionError::UnknownLegacyAgent {
                 delegate: delegate.to_string(),
-            }
-        })?;
+            })?;
         Ok(ResolvedAgent {
             label: c.name.clone(),
             provider: c.provider.clone(),
@@ -276,11 +279,9 @@ impl AgentRegistry for YamlAgentRegistry {
     }
 
     fn resolve_bindings(&self, delegate: &str) -> Result<ResolvedBindingList, ResolutionError> {
-        let d = Delegate::parse(delegate).map_err(|source| {
-            ResolutionError::InvalidDelegate {
-                delegate: delegate.to_string(),
-                source,
-            }
+        let d = Delegate::parse(delegate).map_err(|source| ResolutionError::InvalidDelegate {
+            delegate: delegate.to_string(),
+            source,
         })?;
         let (bindings, level) = self.resolver.walk(&d)?;
         if bindings.is_empty() {
@@ -351,13 +352,8 @@ pub async fn walk_workflow(
                     // soft timeout for retry purposes.
                     retries = retries.saturating_add(1);
                     if retries >= SUB_AGENT_RETRY_BUDGET {
-                        try_escalate_or_propagate(
-                            mcp,
-                            workflow_id,
-                            &resp_after,
-                            agent_name,
-                        )
-                        .await?;
+                        try_escalate_or_propagate(mcp, workflow_id, &resp_after, agent_name)
+                            .await?;
                         retries = 0;
                         continue;
                     }
@@ -369,13 +365,7 @@ pub async fn walk_workflow(
                         // Re-fetch in case the sub-agent partially
                         // advanced before timing out.
                         let resp_now = mcp_get(mcp, workflow_id).await?;
-                        try_escalate_or_propagate(
-                            mcp,
-                            workflow_id,
-                            &resp_now,
-                            &list.label,
-                        )
-                        .await?;
+                        try_escalate_or_propagate(mcp, workflow_id, &resp_now, &list.label).await?;
                         retries = 0;
                         continue;
                     }
@@ -463,7 +453,10 @@ pub async fn spawn_with_cor(
     let mut prior: Vec<(usize, FailureClass, String)> = Vec::new();
     for (idx, _) in list.bindings.iter().enumerate() {
         let agent = list.agent_at(idx);
-        match spawner.spawn_and_wait(&agent, prompt, workflow_response).await {
+        match spawner
+            .spawn_and_wait(&agent, prompt, workflow_response)
+            .await
+        {
             Ok(()) => return Ok(idx),
             Err(InterpreterError::SubAgentTimeout { agent, state }) => {
                 // Timeout is the existing retry-budget's domain; bubble
@@ -609,12 +602,13 @@ fn pick_link(resp: &Value) -> Option<Value> {
 async fn submit_link(mcp: &dyn McpToolCaller, link: &Value) -> Result<(), InterpreterError> {
     let args = link.get("args").cloned().unwrap_or_else(|| json!({}));
     let state = current_state(link);
-    let resp = mcp.call("flowgate.command", args).await.map_err(|e| {
-        InterpreterError::Mcp {
+    let resp = mcp
+        .call("flowgate.command", args)
+        .await
+        .map_err(|e| InterpreterError::Mcp {
             tool: "flowgate.command".into(),
             source: e,
-        }
-    })?;
+        })?;
     // The gateway returns rejections in the body (`error.code`) not as
     // MCP-level errors. Translate so the interpreter sees them.
     if let Some(err) = resp.get("error") {
@@ -636,14 +630,11 @@ async fn try_escalate_or_propagate(
     resp: &Value,
     agent_name: &str,
 ) -> Result<(), InterpreterError> {
-    let escalate_link = resp
-        .get("links")
-        .and_then(Value::as_array)
-        .and_then(|arr| {
-            arr.iter()
-                .find(|l| l.get("rel").and_then(Value::as_str) == Some("escalate"))
-                .cloned()
-        });
+    let escalate_link = resp.get("links").and_then(Value::as_array).and_then(|arr| {
+        arr.iter()
+            .find(|l| l.get("rel").and_then(Value::as_str) == Some("escalate"))
+            .cloned()
+    });
     let Some(link) = escalate_link else {
         return Err(InterpreterError::SubAgentTimeout {
             agent: agent_name.to_string(),

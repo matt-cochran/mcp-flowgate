@@ -25,9 +25,7 @@ use anyhow::{anyhow, bail, Context};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::discovery::{
-    Lifecycle, ScriptVerb, Verb, BLESSED_SCRIPT_ROOTS, BLESSED_SUBJECT_ROOTS,
-};
+use crate::discovery::{Lifecycle, ScriptVerb, Verb, BLESSED_SCRIPT_ROOTS, BLESSED_SUBJECT_ROOTS};
 
 /// Recursively load `path` as YAML and merge any `include:` files into it.
 /// Includes resolve relative to the file that lists them.
@@ -323,20 +321,18 @@ fn expand_use_bindings(config: &mut Value) -> anyhow::Result<()> {
     // Borrow the workflows map immutably to harvest snippet schemas, then
     // walk it mutably to inject the synthesized outputs. We can't do both
     // at once, so snapshot the snippet schemas into a HashMap up front.
-    let snippets: HashMap<String, Value> = match config
-        .pointer("/workflows")
-        .and_then(Value::as_object)
-    {
-        Some(workflows) => workflows
-            .iter()
-            .filter_map(|(id, def)| {
-                def.pointer("/snippet/outputs")
-                    .cloned()
-                    .map(|outputs| (id.clone(), outputs))
-            })
-            .collect(),
-        None => HashMap::new(),
-    };
+    let snippets: HashMap<String, Value> =
+        match config.pointer("/workflows").and_then(Value::as_object) {
+            Some(workflows) => workflows
+                .iter()
+                .filter_map(|(id, def)| {
+                    def.pointer("/snippet/outputs")
+                        .cloned()
+                        .map(|outputs| (id.clone(), outputs))
+                })
+                .collect(),
+            None => HashMap::new(),
+        };
 
     let Some(workflows) = config
         .pointer_mut("/workflows")
@@ -346,10 +342,7 @@ fn expand_use_bindings(config: &mut Value) -> anyhow::Result<()> {
     };
 
     for (wf_id, def) in workflows.iter_mut() {
-        let Some(states) = def
-            .pointer_mut("/states")
-            .and_then(Value::as_object_mut)
-        else {
+        let Some(states) = def.pointer_mut("/states").and_then(Value::as_object_mut) else {
             continue;
         };
         for (state_name, state_def) in states.iter_mut() {
@@ -430,8 +423,12 @@ fn expand_one_transition(
     };
     let mut synthesized = Map::new();
     for (host_path, cap_name_value) in use_outputs {
-        let Some(cap_name) = cap_name_value.as_str() else { continue };
-        let Some(tail) = host_path_tail(host_path) else { continue };
+        let Some(cap_name) = cap_name_value.as_str() else {
+            continue;
+        };
+        let Some(tail) = host_path_tail(host_path) else {
+            continue;
+        };
         synthesized.insert(tail, Value::String(format!("$.output.{cap_name}")));
     }
 
@@ -503,10 +500,7 @@ fn inject_human_ask_transitions(config: &mut Value) {
             .get("human_ask_cap")
             .and_then(Value::as_u64)
             .unwrap_or(5);
-        let Some(states) = def
-            .pointer_mut("/states")
-            .and_then(Value::as_object_mut)
-        else {
+        let Some(states) = def.pointer_mut("/states").and_then(Value::as_object_mut) else {
             continue;
         };
         for (state_name, state_def) in states {
@@ -664,7 +658,9 @@ fn stamp_authoring_preferences(config: &mut Value) {
         return;
     };
     for def in workflows.values_mut() {
-        let Some(obj) = def.as_object_mut() else { continue };
+        let Some(obj) = def.as_object_mut() else {
+            continue;
+        };
         obj.insert("_authoringPrefs".into(), prefs.clone());
     }
 }
@@ -790,7 +786,10 @@ fn validate_skills(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow:
         // (default true), an unblessed root is a hard error; otherwise
         // (SPEC §5.4.2 / audit-resolution C.2) it's a soft warning
         // pushed into the diagnostics collector.
-        let root = strip_namespace_prefix(subject).split('.').next().unwrap_or("");
+        let root = strip_namespace_prefix(subject)
+            .split('.')
+            .next()
+            .unwrap_or("");
         if !BLESSED_SUBJECT_ROOTS.contains(&root) {
             if strict_ns {
                 bail!(
@@ -799,9 +798,8 @@ fn validate_skills(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow:
                     BLESSED_SUBJECT_ROOTS
                 );
             } else {
-                let suggestion = closest_blessed_root(root).map(|sugg| {
-                    format!("did you mean '{sugg}'?")
-                });
+                let suggestion =
+                    closest_blessed_root(root).map(|sugg| format!("did you mean '{sugg}'?"));
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::Warn,
                     code: "INVALID_SUBJECT_ROOT".to_string(),
@@ -894,7 +892,10 @@ fn validate_scripts(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow
                  — lowercase, kebab, dotted, at least two segments, no whitespace (SPEC §22.4)"
             );
         }
-        let root = strip_namespace_prefix(subject).split('.').next().unwrap_or("");
+        let root = strip_namespace_prefix(subject)
+            .split('.')
+            .next()
+            .unwrap_or("");
         if !BLESSED_SCRIPT_ROOTS.contains(&root) {
             if strict_ns {
                 bail!(
@@ -903,9 +904,8 @@ fn validate_scripts(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow
                     BLESSED_SCRIPT_ROOTS
                 );
             } else {
-                let suggestion = closest_blessed_script_root(root).map(|sugg| {
-                    format!("did you mean '{sugg}'?")
-                });
+                let suggestion =
+                    closest_blessed_script_root(root).map(|sugg| format!("did you mean '{sugg}'?"));
                 diagnostics.push(Diagnostic {
                     severity: DiagnosticSeverity::Warn,
                     code: "INVALID_SCRIPT_SUBJECT_ROOT".to_string(),
@@ -921,12 +921,9 @@ fn validate_scripts(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow
         }
 
         // SPEC §22.3 — `verb` is a closed enum, distinct from cognitive Verb.
-        let verb_str = entry
-            .get("verb")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                anyhow!("MISSING_SCRIPT_VERB: scripts entry '{subject}' is missing a `verb`")
-            })?;
+        let verb_str = entry.get("verb").and_then(Value::as_str).ok_or_else(|| {
+            anyhow!("MISSING_SCRIPT_VERB: scripts entry '{subject}' is missing a `verb`")
+        })?;
         if ScriptVerb::from_token(verb_str).is_none() {
             bail!(
                 "INVALID_SCRIPT_VERB: scripts entry '{subject}' has verb '{verb_str}'; \
@@ -984,16 +981,13 @@ fn validate_scripts(config: &Value, diagnostics: &mut Vec<Diagnostic>) -> anyhow
             }
             (None, Some(uri_str)) => {
                 // External body: hash is REQUIRED (we verify at stamp time).
-                let stored_hash = entry
-                    .get("hash")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "MISSING_SCRIPT_HASH: scripts entry '{subject}' uses an external \
+                let stored_hash = entry.get("hash").and_then(Value::as_str).ok_or_else(|| {
+                    anyhow!(
+                        "MISSING_SCRIPT_HASH: scripts entry '{subject}' uses an external \
                              `uri` but has no `hash`. Hash is required for uri-sourced bodies \
                              so the runtime can verify content-identity at load time (SPEC §22.2)."
-                        )
-                    })?;
+                    )
+                })?;
                 validate_hash_format(stored_hash, subject)?;
                 if !(uri_str.starts_with("file://")
                     || uri_str.starts_with("https://")
@@ -1055,7 +1049,11 @@ fn validate_hash_format(s: &str, subject: &str) -> anyhow::Result<()> {
         );
     }
     let hex = &s["sha256:".len()..];
-    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+    if hex.len() != 64
+        || !hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
         bail!(
             "INVALID_SCRIPT_HASH_FORMAT: scripts entry '{subject}' hash '{s}' has malformed \
              digest. Expected `sha256:<64 lowercase hex chars>` (SPEC §22.2)."
@@ -1311,7 +1309,9 @@ fn stamp_skills_library(config: &mut Value) {
         .and_then(Value::as_object_mut)
     {
         for def in workflows.values_mut() {
-            let Some(obj) = def.as_object_mut() else { continue };
+            let Some(obj) = def.as_object_mut() else {
+                continue;
+            };
             let referenced = collect_referenced_subjects(obj);
             if referenced.is_empty() {
                 continue;
@@ -1416,7 +1416,9 @@ fn stamp_scripts_library(config: &mut Value) -> anyhow::Result<()> {
         .and_then(Value::as_object_mut)
     {
         for def in workflows.values_mut() {
-            let Some(obj) = def.as_object_mut() else { continue };
+            let Some(obj) = def.as_object_mut() else {
+                continue;
+            };
             let referenced = collect_referenced_script_subjects(obj);
             if referenced.is_empty() {
                 continue;
@@ -1488,9 +1490,7 @@ fn collect_script_subject_from(scope: Option<&Value>, out: &mut HashSet<String>)
 fn read_script_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
     if let Some(path) = uri.strip_prefix("file://") {
         return std::fs::read_to_string(path).with_context(|| {
-            format!(
-                "reading scripts entry '{subject}' from {uri} (resolved path: {path})"
-            )
+            format!("reading scripts entry '{subject}' from {uri} (resolved path: {path})")
         });
     }
     if uri.starts_with("https://") {
@@ -1556,9 +1556,10 @@ fn read_git_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
             )
         })?;
 
-    let git_stdout = git.stdout.take().ok_or_else(|| {
-        anyhow!("scripts entry '{subject}' git archive missing stdout pipe")
-    })?;
+    let git_stdout = git
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("scripts entry '{subject}' git archive missing stdout pipe"))?;
 
     let mut tar = Command::new("tar")
         .arg("-x")
@@ -1571,9 +1572,7 @@ fn read_git_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| {
-            format!(
-                "spawning `tar` to extract scripts entry '{subject}' from git archive"
-            )
+            format!("spawning `tar` to extract scripts entry '{subject}' from git archive")
         })?;
 
     let mut body = String::new();
@@ -1581,16 +1580,16 @@ fn read_git_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
         .stdout
         .take()
         .ok_or_else(|| anyhow!("tar missing stdout pipe"))?;
-    tar_stdout.read_to_string(&mut body).with_context(|| {
-        format!("reading scripts entry '{subject}' body from tar stdout")
-    })?;
+    tar_stdout
+        .read_to_string(&mut body)
+        .with_context(|| format!("reading scripts entry '{subject}' body from tar stdout"))?;
 
-    let git_status = git.wait().with_context(|| {
-        format!("waiting on `git archive` for scripts entry '{subject}'")
-    })?;
-    let tar_status = tar.wait().with_context(|| {
-        format!("waiting on `tar` for scripts entry '{subject}'")
-    })?;
+    let git_status = git
+        .wait()
+        .with_context(|| format!("waiting on `git archive` for scripts entry '{subject}'"))?;
+    let tar_status = tar
+        .wait()
+        .with_context(|| format!("waiting on `tar` for scripts entry '{subject}'"))?;
 
     if !git_status.success() {
         bail!(
@@ -1636,9 +1635,10 @@ fn read_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
         .with_context(|| {
             format!("building blocking HTTP client for scripts entry '{subject}' {uri}")
         })?;
-    let resp = client.get(uri).send().with_context(|| {
-        format!("fetching scripts entry '{subject}' from {uri}")
-    })?;
+    let resp = client
+        .get(uri)
+        .send()
+        .with_context(|| format!("fetching scripts entry '{subject}' from {uri}"))?;
     let status = resp.status();
     if !status.is_success() {
         bail!(
@@ -1649,9 +1649,8 @@ fn read_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
             status.as_u16()
         );
     }
-    resp.text().with_context(|| {
-        format!("decoding body for scripts entry '{subject}' from {uri}")
-    })
+    resp.text()
+        .with_context(|| format!("decoding body for scripts entry '{subject}' from {uri}"))
 }
 
 /// SPEC §22.2 — rewrite relative `file://` URIs in `scripts:` entries to
@@ -1661,17 +1660,22 @@ fn read_https_uri(uri: &str, subject: &str) -> anyhow::Result<String> {
 /// Idempotent: an already-absolute `file:///etc/foo.sh` is left alone.
 /// Non-`file://` URIs are left alone (the validator will reject them).
 fn rewrite_script_uris_to_absolute(value: &mut Value, base_dir: &Path) {
-    let Some(scripts) = value
-        .pointer_mut("/scripts")
-        .and_then(Value::as_object_mut)
-    else {
+    let Some(scripts) = value.pointer_mut("/scripts").and_then(Value::as_object_mut) else {
         return;
     };
     for entry in scripts.values_mut() {
-        let Some(obj) = entry.as_object_mut() else { continue };
-        let Some(uri_val) = obj.get_mut("uri") else { continue };
-        let Some(uri_str) = uri_val.as_str() else { continue };
-        let Some(rest) = uri_str.strip_prefix("file://") else { continue };
+        let Some(obj) = entry.as_object_mut() else {
+            continue;
+        };
+        let Some(uri_val) = obj.get_mut("uri") else {
+            continue;
+        };
+        let Some(uri_str) = uri_val.as_str() else {
+            continue;
+        };
+        let Some(rest) = uri_str.strip_prefix("file://") else {
+            continue;
+        };
         if rest.starts_with('/') {
             // Already absolute.
             continue;
@@ -1791,9 +1795,8 @@ fn merge_declared_repos(mut host: Value, host_dir: &Path) -> anyhow::Result<Valu
         } else {
             host_dir.join(repo_path)
         };
-        let (manifest, repo_value) = crate::repo::load_repo(&repo_path).with_context(|| {
-            format!("loading repo at {}", repo_path.display())
-        })?;
+        let (manifest, repo_value) = crate::repo::load_repo(&repo_path)
+            .with_context(|| format!("loading repo at {}", repo_path.display()))?;
         // V20 — namespace uniqueness across declared repos.
         if let Some(prev_name) =
             seen_namespaces.insert(manifest.namespace.clone(), manifest.name.clone())
@@ -1816,10 +1819,7 @@ fn merge_declared_repos(mut host: Value, host_dir: &Path) -> anyhow::Result<Valu
     // appear in the explicit `overrides:` block. This closes the supply-chain
     // backdoor: an operator cannot silently shadow a vendored definition.
     let host_ids = host_definition_ids(&host);
-    let collisions: Vec<String> = host_ids
-        .intersection(&repo_provided_ids)
-        .cloned()
-        .collect();
+    let collisions: Vec<String> = host_ids.intersection(&repo_provided_ids).cloned().collect();
     for id in &collisions {
         if !overrides.contains(id) {
             bail!(
@@ -1856,9 +1856,7 @@ fn merge_declared_repos(mut host: Value, host_dir: &Path) -> anyhow::Result<Valu
 
 /// Remove the `repos:` and `overrides:` top-level keys from `host` and
 /// return their parsed payloads. Errors on shape mismatches.
-fn take_repos_and_overrides(
-    host: &mut Value,
-) -> anyhow::Result<(Vec<PathBuf>, HashSet<String>)> {
+fn take_repos_and_overrides(host: &mut Value) -> anyhow::Result<(Vec<PathBuf>, HashSet<String>)> {
     let Some(obj) = host.as_object_mut() else {
         return Ok((Vec::new(), HashSet::new()));
     };
@@ -1881,9 +1879,9 @@ fn take_repos_and_overrides(
             .into_iter()
             .map(|entry| match entry {
                 Value::String(s) if !s.is_empty() => Ok(s),
-                Value::String(_) => bail!(
-                    "INVALID_OVERRIDE_ENTRY: `overrides:` entries MUST be non-empty strings"
-                ),
+                Value::String(_) => {
+                    bail!("INVALID_OVERRIDE_ENTRY: `overrides:` entries MUST be non-empty strings")
+                }
                 other => bail!(
                     "INVALID_OVERRIDE_ENTRY: `overrides:` entries MUST be strings ({})",
                     short_value_kind(&other)
@@ -1902,15 +1900,12 @@ fn take_repos_and_overrides(
 /// Parse one `repos:` array entry. Accepts `{ path: <string> }`; expands
 /// `~/` to `$HOME` and `~` alone is treated literally (no expansion).
 fn parse_repo_entry(index: usize, entry: Value) -> anyhow::Result<PathBuf> {
-    let path_str = entry
-        .get("path")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            anyhow!(
-                "INVALID_REPO_ENTRY: `repos[{index}]` must be an object with a `path` field, \
+    let path_str = entry.get("path").and_then(Value::as_str).ok_or_else(|| {
+        anyhow!(
+            "INVALID_REPO_ENTRY: `repos[{index}]` must be an object with a `path` field, \
                  e.g. `- path: ~/repos/swe-core`"
-            )
-        })?;
+        )
+    })?;
     Ok(expand_repo_path(path_str))
 }
 
@@ -1931,7 +1926,9 @@ fn expand_repo_path(p: &str) -> PathBuf {
 /// blocks. Mirror of [`crate::repo::aggregate_ids`] for the host side.
 fn host_definition_ids(host: &Value) -> HashSet<String> {
     let mut out = HashSet::new();
-    let Some(obj) = host.as_object() else { return out };
+    let Some(obj) = host.as_object() else {
+        return out;
+    };
     for block in ["workflows", "skills", "scripts", "connections"] {
         if let Some(entries) = obj.get(block).and_then(Value::as_object) {
             for k in entries.keys() {

@@ -42,7 +42,7 @@ fn flowgate_bin_path() -> String {
     let mut ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     ws.pop(); // crates/
     ws.pop(); // workspace root
-    // Prefer release if it exists (e.g., CI built with --release). Otherwise dev.
+              // Prefer release if it exists (e.g., CI built with --release). Otherwise dev.
     let release = ws.join("target/release/flowgate");
     let debug = ws.join("target/debug/flowgate");
     if release.exists() {
@@ -196,8 +196,7 @@ fn exec_request(
 
 #[tokio::test]
 async fn fetch_provider_inventory_emits_anthropic_models_on_200() {
-    let body =
-        r#"{"data":[{"id":"claude-sonnet-4-6","type":"model"},{"id":"claude-opus-4-7","type":"model"}]}"#;
+    let body = r#"{"data":[{"id":"claude-sonnet-4-6","type":"model"},{"id":"claude-opus-4-7","type":"model"}]}"#;
     let (url, handle) = spawn_mock(200, body);
 
     let req = exec_request(
@@ -224,17 +223,18 @@ async fn fetch_provider_inventory_emits_anthropic_models_on_200() {
         "first model id should pass through; got: {result:#?}"
     );
     let models = parsed["inventory"]["anthropic"].as_array().expect("array");
-    assert_eq!(models.len(), 2, "expected 2 anthropic models in mocked response; got: {result:#?}");
+    assert_eq!(
+        models.len(),
+        2,
+        "expected 2 anthropic models in mocked response; got: {result:#?}"
+    );
     assert_eq!(
         models[1]["id"],
         json!("claude-opus-4-7"),
         "second model id should pass through; got: {result:#?}"
     );
     assert!(
-        parsed["errors"]
-            .as_array()
-            .unwrap_or(&vec![])
-            .is_empty(),
+        parsed["errors"].as_array().unwrap_or(&vec![]).is_empty(),
         "no errors on 200; got: {result:#?}"
     );
 }
@@ -260,7 +260,11 @@ async fn fetch_provider_inventory_classifies_anthropic_401_as_auth_error() {
 
     let parsed = &result.output["json"];
     let errors = parsed["errors"].as_array().expect("errors array");
-    assert_eq!(errors.len(), 1, "expected exactly one error; got: {result:#?}");
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected exactly one error; got: {result:#?}"
+    );
     assert_eq!(errors[0]["provider"], json!("anthropic"));
     assert_eq!(errors[0]["kind"], json!("Auth401"));
     // Inventory should be empty/absent for that provider on failure
@@ -287,10 +291,7 @@ async fn install_agents_config_writes_atomically_and_rolls_back_on_invalid() {
         "version: 1\ndefault:\n  - provider:\n      name: anthropic\n    model: claude-sonnet-4-6\n";
     let req = exec_request(
         "install.agents-config",
-        vec![
-            json!(valid_yaml),
-            json!(target.to_str().unwrap()),
-        ],
+        vec![json!(valid_yaml), json!(target.to_str().unwrap())],
         vec![("FLOWGATE_BIN", flowgate_bin.as_str())],
         true,
     );
@@ -310,15 +311,15 @@ async fn install_agents_config_writes_atomically_and_rolls_back_on_invalid() {
     let invalid_yaml = "version: 1\n# default field intentionally absent\n";
     let req2 = exec_request(
         "install.agents-config",
-        vec![
-            json!(invalid_yaml),
-            json!(target.to_str().unwrap()),
-        ],
+        vec![json!(invalid_yaml), json!(target.to_str().unwrap())],
         vec![("FLOWGATE_BIN", flowgate_bin.as_str())],
         // Must be false so ScriptExecutor doesn't propagate the exit-1 as Err
         false,
     );
-    let result2 = executor.execute(req2).await.expect("script runs (exit 1 allowed)");
+    let result2 = executor
+        .execute(req2)
+        .await
+        .expect("script runs (exit 1 allowed)");
     let parsed2 = &result2.output["json"];
     assert_eq!(
         parsed2["round_trip_ok"],
@@ -345,8 +346,7 @@ async fn auth_only_smoke_test_classifies_per_binding() {
     )
     .expect("write agents.yaml");
 
-    let (anth_url, anth_handle) =
-        spawn_mock(200, r#"{"id":"msg_1","content":[{"text":"."}]}"#);
+    let (anth_url, anth_handle) = spawn_mock(200, r#"{"id":"msg_1","content":[{"text":"."}]}"#);
     let (oai_url, oai_handle) = spawn_mock(401, r#"{"error":{"message":"bad key"}}"#);
 
     let req = exec_request(
@@ -367,21 +367,46 @@ async fn auth_only_smoke_test_classifies_per_binding() {
 
     let parsed = &result.output["json"];
     let results = parsed["results"].as_array().expect("results array");
-    assert_eq!(results.len(), 2, "two bindings → two results; got: {result:#?}");
+    assert_eq!(
+        results.len(),
+        2,
+        "two bindings → two results; got: {result:#?}"
+    );
 
     let anth = results
         .iter()
-        .find(|r| r["binding"].as_str().unwrap_or("").starts_with("anthropic/"))
+        .find(|r| {
+            r["binding"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("anthropic/")
+        })
         .expect("anthropic row");
-    assert_eq!(anth["auth_ok"], json!(true), "anthropic auth_ok; got: {anth:#?}");
-    assert_eq!(anth["class"], json!("Ok"), "anthropic class; got: {anth:#?}");
+    assert_eq!(
+        anth["auth_ok"],
+        json!(true),
+        "anthropic auth_ok; got: {anth:#?}"
+    );
+    assert_eq!(
+        anth["class"],
+        json!("Ok"),
+        "anthropic class; got: {anth:#?}"
+    );
 
     let oai = results
         .iter()
         .find(|r| r["binding"].as_str().unwrap_or("").starts_with("openai/"))
         .expect("openai row");
-    assert_eq!(oai["auth_ok"], json!(false), "openai auth_ok; got: {oai:#?}");
-    assert_eq!(oai["class"], json!("Auth401"), "openai class; got: {oai:#?}");
+    assert_eq!(
+        oai["auth_ok"],
+        json!(false),
+        "openai auth_ok; got: {oai:#?}"
+    );
+    assert_eq!(
+        oai["class"],
+        json!("Auth401"),
+        "openai class; got: {oai:#?}"
+    );
 
     assert!(
         parsed["disclaimer"]

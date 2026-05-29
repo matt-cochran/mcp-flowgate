@@ -114,7 +114,10 @@ pub fn validate_lexicon(config: &Value) -> Result<()> {
                 .get("bounded_context")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            by_context.entry(ctx).or_default().push((term.as_str(), obj));
+            by_context
+                .entry(ctx)
+                .or_default()
+                .push((term.as_str(), obj));
         }
     }
     for (ctx, entries) in &by_context {
@@ -132,9 +135,9 @@ fn build_combined_index_inner<'a>(
     let mut index: HashMap<&str, (&str, &Map<String, Value>)> = HashMap::new();
 
     let register = |key: &'a str,
-                        owner_term: &'a str,
-                        owner_obj: &'a Map<String, Value>,
-                        index: &mut HashMap<&'a str, (&'a str, &'a Map<String, Value>)>|
+                    owner_term: &'a str,
+                    owner_obj: &'a Map<String, Value>,
+                    index: &mut HashMap<&'a str, (&'a str, &'a Map<String, Value>)>|
      -> Result<()> {
         if let Some((existing_term, _)) = index.get(key) {
             bail!(
@@ -533,7 +536,9 @@ pub fn inject_pending_definitions(config: &mut Value, extra_subjects: &[String])
         .and_then(Value::as_object_mut)
     {
         for def in workflows.values_mut() {
-            let Some(obj) = def.as_object_mut() else { continue };
+            let Some(obj) = def.as_object_mut() else {
+                continue;
+            };
             // Only inject into workflows that have a _lexiconLibrary stamped.
             // If no _lexiconLibrary exists yet, create one (the workflow may have
             // no authored entries to merge with).

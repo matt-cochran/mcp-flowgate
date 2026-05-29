@@ -28,8 +28,8 @@ fn writes_base_mcp_json_to_default_path() {
     assert!(p.exists(), ".mcp.json should land at target dir root");
 
     let body = std::fs::read_to_string(&p).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&body)
-        .expect("generated file is valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).expect("generated file is valid JSON");
     assert!(
         parsed.pointer("/mcpServers/flowgate/command").is_some(),
         "expected mcpServers.flowgate.command in {body}"
@@ -55,7 +55,10 @@ fn claude_desktop_flag_writes_snippet_alongside_base() {
     run_init(&a).expect("init with --claude-desktop runs");
 
     let snippet = td.path().join("claude_desktop_config.json");
-    assert!(snippet.exists(), "--claude-desktop should write a snippet file");
+    assert!(
+        snippet.exists(),
+        "--claude-desktop should write a snippet file"
+    );
 }
 
 #[test]
@@ -103,8 +106,7 @@ fn idempotent_when_existing_contents_match_generated() {
 fn errors_when_target_directory_missing() {
     let td = TempDir::new().unwrap();
     let missing = td.path().join("does-not-exist");
-    let err = run_init(&args(missing.clone()))
-        .expect_err("missing dir should error");
+    let err = run_init(&args(missing.clone())).expect_err("missing dir should error");
     assert!(
         format!("{err}").contains("does not exist"),
         "error should name the missing dir"

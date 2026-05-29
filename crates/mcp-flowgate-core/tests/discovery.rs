@@ -257,7 +257,11 @@ async fn guidance_excluded_from_default_search_but_describable() {
 
     // Untargeted search: guidance must not surface.
     let hits = idx
-        .search(SearchRequest { query: String::new(), kind: None, limit: 20 })
+        .search(SearchRequest {
+            query: String::new(),
+            kind: None,
+            limit: 20,
+        })
         .await
         .unwrap();
     assert!(
@@ -276,13 +280,18 @@ async fn guidance_excluded_from_default_search_but_describable() {
         .await
         .unwrap();
     assert!(
-        targeted.iter().any(|h| h.item.id == "review.style.house-voice"),
+        targeted
+            .iter()
+            .any(|h| h.item.id == "review.style.house-voice"),
         "explicit kind=guidance search must include the fragment"
     );
 
     // Describe must always find it regardless of kind filtering.
     let described = idx.describe("review.style.house-voice").await.unwrap();
-    assert!(described.is_some(), "describe must always resolve a declared subject");
+    assert!(
+        described.is_some(),
+        "describe must always resolve a declared subject"
+    );
 
     // list(None) must also exclude guidance.
     let listed = idx.list(None).await.unwrap();

@@ -19,11 +19,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use mcp_flowgate_core::audit::{AuditSink, MemoryAuditSink};
 use mcp_flowgate_core::error::ExecutorError;
-use mcp_flowgate_core::model::{ExecuteRequest, ExecuteResult, Principal, StartWorkflow, SubmitTransition};
+use mcp_flowgate_core::guards::DefaultGuardEvaluator;
+use mcp_flowgate_core::model::{
+    ExecuteRequest, ExecuteResult, Principal, StartWorkflow, SubmitTransition,
+};
 use mcp_flowgate_core::ports::{Executor, ExecutorRegistry, WorkflowStore};
 use mcp_flowgate_core::runtime::WorkflowRuntime;
-use mcp_flowgate_core::store::{ConfigDefinitionStore, InMemoryEvidenceStore, InMemoryWorkflowStore};
-use mcp_flowgate_core::guards::DefaultGuardEvaluator;
+use mcp_flowgate_core::store::{
+    ConfigDefinitionStore, InMemoryEvidenceStore, InMemoryWorkflowStore,
+};
 use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------

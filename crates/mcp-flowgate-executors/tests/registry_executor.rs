@@ -80,8 +80,9 @@ async fn flag_off_does_not_invoke_store() {
 #[tokio::test]
 async fn flag_on_writes_through_to_store() {
     let audit = Arc::new(MemoryAuditSink::new());
-    let store: Arc<dyn DefinitionStoreWritable> =
-        Arc::new(InMemoryWritableDefinitionStore::new(audit.clone() as Arc<dyn AuditSink>));
+    let store: Arc<dyn DefinitionStoreWritable> = Arc::new(InMemoryWritableDefinitionStore::new(
+        audit.clone() as Arc<dyn AuditSink>,
+    ));
     let exec = RegistryExecutor::enabled(store.clone());
     let res = exec
         .execute(req(json!({
@@ -98,8 +99,9 @@ async fn flag_on_writes_through_to_store() {
 #[tokio::test]
 async fn flag_on_emits_published_audit_event() {
     let audit = Arc::new(MemoryAuditSink::new());
-    let store: Arc<dyn DefinitionStoreWritable> =
-        Arc::new(InMemoryWritableDefinitionStore::new(audit.clone() as Arc<dyn AuditSink>));
+    let store: Arc<dyn DefinitionStoreWritable> = Arc::new(InMemoryWritableDefinitionStore::new(
+        audit.clone() as Arc<dyn AuditSink>,
+    ));
     let exec = RegistryExecutor::enabled(store);
     let _ = exec
         .execute(req(json!({

@@ -4,7 +4,9 @@
 //! kinds, load-time validation, and write-time rejection at the
 //! transition boundary.
 
-use mcp_flowgate_core::slot_constraint::{evaluate_constraints, validate_constraints_in_definition};
+use mcp_flowgate_core::slot_constraint::{
+    evaluate_constraints, validate_constraints_in_definition,
+};
 use serde_json::json;
 
 // ── path_allowlist runtime evaluation ─────────────────────────────────────
@@ -53,7 +55,11 @@ fn path_allowlist_rejects_path_outside_allow() {
     let v = evaluate_constraints(&definition, "s", &context).expect_err("must reject");
     assert_eq!(v.slot, "changed_files");
     assert_eq!(v.constraint_kind, "path_allowlist");
-    assert!(v.message.contains("db/migrations/0001.sql"), "got: {}", v.message);
+    assert!(
+        v.message.contains("db/migrations/0001.sql"),
+        "got: {}",
+        v.message
+    );
     assert!(v.message.contains("SLOT_CONSTRAINT_VIOLATED"));
 }
 
@@ -76,7 +82,11 @@ fn path_allowlist_deny_overrides_allow_for_excluded_subtree() {
         "changed_files": ["auth/session.rs", "auth/legacy/v1.rs"]
     });
     let v = evaluate_constraints(&definition, "s", &context).expect_err("deny must reject");
-    assert!(v.message.contains("auth/legacy/v1.rs"), "got: {}", v.message);
+    assert!(
+        v.message.contains("auth/legacy/v1.rs"),
+        "got: {}",
+        v.message
+    );
     assert!(v.message.contains("`deny:`"), "got: {}", v.message);
 }
 
@@ -111,7 +121,7 @@ fn path_allowlist_rejects_non_array_slot_value() {
             }
         }
     });
-    let context = json!({ "changed_files": "auth/session.rs" });  // string, not array
+    let context = json!({ "changed_files": "auth/session.rs" }); // string, not array
     let v = evaluate_constraints(&definition, "s", &context).expect_err("must reject");
     assert!(v.message.contains("not an array"), "got: {}", v.message);
 }
@@ -163,7 +173,11 @@ fn subset_of_rejects_element_not_in_reference() {
         "active_features":   ["auth", "experimental_thing"]
     });
     let v = evaluate_constraints(&definition, "s", &context).expect_err("must reject");
-    assert!(v.message.contains("experimental_thing"), "got: {}", v.message);
+    assert!(
+        v.message.contains("experimental_thing"),
+        "got: {}",
+        v.message
+    );
     assert!(v.message.contains("not present in the reference array"));
 }
 
@@ -179,7 +193,11 @@ fn subset_of_fail_fast_when_reference_unset() {
     });
     let context = json!({ "active_features": ["auth"] }); // no declared_features
     let v = evaluate_constraints(&definition, "s", &context).expect_err("must reject");
-    assert!(v.message.contains("unset / unresolvable"), "got: {}", v.message);
+    assert!(
+        v.message.contains("unset / unresolvable"),
+        "got: {}",
+        v.message
+    );
 }
 
 // ── load-time constraint declaration validation ───────────────────────────
@@ -191,10 +209,12 @@ fn load_time_rejects_empty_allow() {
             "x": { "constraint": { "path_allowlist": { "allow": [] } } }
         }
     });
-    let err = validate_constraints_in_definition(&workflow)
-        .expect_err("empty allow must reject");
+    let err = validate_constraints_in_definition(&workflow).expect_err("empty allow must reject");
     let s = format!("{err:?}");
-    assert!(s.contains("INVALID_CONSTRAINT_DECLARATION") && s.contains("empty"), "got: {s}");
+    assert!(
+        s.contains("INVALID_CONSTRAINT_DECLARATION") && s.contains("empty"),
+        "got: {s}"
+    );
 }
 
 #[test]
@@ -208,10 +228,13 @@ fn load_time_rejects_malformed_glob() {
             }
         }
     });
-    let err = validate_constraints_in_definition(&workflow)
-        .expect_err("malformed glob must reject");
+    let err =
+        validate_constraints_in_definition(&workflow).expect_err("malformed glob must reject");
     let s = format!("{err:?}");
-    assert!(s.contains("INVALID_CONSTRAINT_DECLARATION") && s.contains("glob"), "got: {s}");
+    assert!(
+        s.contains("INVALID_CONSTRAINT_DECLARATION") && s.contains("glob"),
+        "got: {s}"
+    );
 }
 
 #[test]
@@ -221,10 +244,12 @@ fn load_time_rejects_unknown_constraint_kind() {
             "x": { "constraint": { "wat": "value" } }
         }
     });
-    let err = validate_constraints_in_definition(&workflow)
-        .expect_err("unknown kind must reject");
+    let err = validate_constraints_in_definition(&workflow).expect_err("unknown kind must reject");
     let s = format!("{err:?}");
-    assert!(s.contains("unknown constraint kind") && s.contains("wat"), "got: {s}");
+    assert!(
+        s.contains("unknown constraint kind") && s.contains("wat"),
+        "got: {s}"
+    );
 }
 
 #[test]
@@ -234,8 +259,8 @@ fn load_time_rejects_subset_of_with_non_string_value() {
             "x": { "constraint": { "subset_of": ["not", "a", "path"] } }
         }
     });
-    let err = validate_constraints_in_definition(&workflow)
-        .expect_err("subset_of array must reject");
+    let err =
+        validate_constraints_in_definition(&workflow).expect_err("subset_of array must reject");
     let s = format!("{err:?}");
     assert!(s.contains("subset_of must be a string"), "got: {s}");
 }

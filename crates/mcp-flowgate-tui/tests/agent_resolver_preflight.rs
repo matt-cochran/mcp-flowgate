@@ -37,14 +37,20 @@ fn clear_env() {
 
 fn resolver_from(yaml: &str) -> Resolver {
     let file = AgentsFile::from_yaml(yaml).expect("yaml parses");
-    Resolver::from_loaded(file, ConfigSource::Project(PathBuf::from("/tmp/agents.yaml")))
+    Resolver::from_loaded(
+        file,
+        ConfigSource::Project(PathBuf::from("/tmp/agents.yaml")),
+    )
 }
 
 // ── api_key_env_for ─────────────────────────────────────────────────────────
 
 #[test]
 fn api_key_env_per_provider() {
-    assert_eq!(api_key_env_for(&Provider::Anthropic), Some("ANTHROPIC_API_KEY"));
+    assert_eq!(
+        api_key_env_for(&Provider::Anthropic),
+        Some("ANTHROPIC_API_KEY")
+    );
     assert_eq!(api_key_env_for(&Provider::Openai), Some("OPENAI_API_KEY"));
     assert_eq!(api_key_env_for(&Provider::Google), Some("GOOGLE_API_KEY"));
     assert_eq!(api_key_env_for(&Provider::Ollama), None);
@@ -85,7 +91,9 @@ async fn probe_without_credential_reports_missing() {
     assert!(
         matches!(
             outcome,
-            PreflightOutcome::MissingCredential { env_var: "OPENAI_API_KEY" }
+            PreflightOutcome::MissingCredential {
+                env_var: "OPENAI_API_KEY"
+            }
         ),
         "got {outcome:?}"
     );

@@ -314,8 +314,7 @@ impl Executor for WorkflowExecutor {
                     // child context dies with the capability instance.
                     if let Some(use_val) = use_block.as_ref() {
                         let use_outputs = use_val.get("outputs").cloned().unwrap_or(json!({}));
-                        let projected_by_host =
-                            project_use_outputs(&use_outputs, &child_context);
+                        let projected_by_host = project_use_outputs(&use_outputs, &child_context);
                         if let Err(violations) = validate_outputs_against_snippet(
                             &snippet_outputs,
                             &use_outputs,

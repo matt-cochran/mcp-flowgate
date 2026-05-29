@@ -49,8 +49,8 @@ impl FlowgateChildCaller {
         config_path: Option<&str>,
         extra_env: HashMap<String, String>,
     ) -> Result<Self> {
-        let binary = flowgate_mcp::find_flowgate_binary()
-            .context("locating mcp-flowgate binary")?;
+        let binary =
+            flowgate_mcp::find_flowgate_binary().context("locating mcp-flowgate binary")?;
         let mut cmd = tokio::process::Command::new(&binary);
         if let Some(p) = config_path {
             cmd.env("FLOWGATE_CONFIG", p);

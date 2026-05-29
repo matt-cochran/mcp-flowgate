@@ -148,10 +148,7 @@ impl WorkflowRuntime {
             .get("max_fires_per_visit")
             .and_then(Value::as_u64)
         {
-            let key = format!(
-                "_fire_count.{}.{}",
-                instance.state, request.transition
-            );
+            let key = format!("_fire_count.{}.{}", instance.state, request.transition);
             let current = instance
                 .context
                 .get(&key)
@@ -169,10 +166,7 @@ impl WorkflowRuntime {
                              and resets when the workflow advances. Either raise \
                              the cap, or have the workflow advance to a different \
                              state before re-firing.",
-                            request.transition,
-                            current,
-                            instance.state,
-                            max_fires
+                            request.transition, current, instance.state, max_fires
                         ),
                         &request.transition,
                         &correlation_id,
@@ -295,8 +289,7 @@ impl WorkflowRuntime {
             .await
             {
                 Ok(result) => {
-                    executor_outcome =
-                        Some((true, exec_started.elapsed().as_millis() as u64));
+                    executor_outcome = Some((true, exec_started.elapsed().as_millis() as u64));
                     merge_output(
                         &mut next.context,
                         transition.get("output"),
@@ -424,10 +417,7 @@ impl WorkflowRuntime {
             .and_then(Value::as_u64)
             .is_some()
         {
-            let key = format!(
-                "_fire_count.{}.{}",
-                instance.state, request.transition
-            );
+            let key = format!("_fire_count.{}.{}", instance.state, request.transition);
             if let Some(ctx) = next.context.as_object_mut() {
                 let n = ctx
                     .get(&key)

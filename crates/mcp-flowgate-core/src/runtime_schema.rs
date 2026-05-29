@@ -1,7 +1,6 @@
-use serde_json::Value;
 use anyhow::anyhow;
 use anyhow::bail;
-
+use serde_json::Value;
 
 /// Walk the schema's `properties` and fill in any `default` for keys missing
 /// from `value`. Recurses into nested object properties so defaults apply at
@@ -27,7 +26,11 @@ pub(crate) fn apply_schema_defaults(schema: Option<&Value>, value: &mut Value) {
     }
 }
 
-pub(crate) fn validate_schema(schema: Option<&Value>, value: &Value, label: &str) -> anyhow::Result<()> {
+pub(crate) fn validate_schema(
+    schema: Option<&Value>,
+    value: &Value,
+    label: &str,
+) -> anyhow::Result<()> {
     let Some(schema) = schema else {
         return Ok(());
     };

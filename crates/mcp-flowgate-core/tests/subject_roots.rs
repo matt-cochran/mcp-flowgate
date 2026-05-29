@@ -111,8 +111,7 @@ fn unblessed_root_rejected_under_explicit_strict() {
 
 #[test]
 fn invalid_subject_root_error_lists_all_blessed_roots() {
-    let err = config::resolve_str(&skills_yaml("nonsense.foo.bar", None))
-        .expect_err("error path");
+    let err = config::resolve_str(&skills_yaml("nonsense.foo.bar", None)).expect_err("error path");
     let msg = format!("{err}");
     for root in BLESSED_SUBJECT_ROOTS {
         assert!(
@@ -165,7 +164,10 @@ fn uppercase_subject_segment_rejected() {
     let err = config::resolve_str(&skills_yaml("Review.style.x", None))
         .expect_err("uppercase first segment must reject");
     let msg = format!("{err}");
-    assert!(msg.contains("Review"), "error must name the offending subject; got: {msg}");
+    assert!(
+        msg.contains("Review"),
+        "error must name the offending subject; got: {msg}"
+    );
 }
 
 #[test]

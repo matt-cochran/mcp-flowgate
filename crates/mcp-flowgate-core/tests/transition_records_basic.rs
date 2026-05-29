@@ -38,7 +38,7 @@ async fn record_emitted_per_applied_transition() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -80,7 +80,7 @@ async fn record_write_failure_aborts_transition() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -96,7 +96,7 @@ async fn record_write_failure_aborts_transition() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await;
@@ -121,7 +121,7 @@ async fn version_unchanged_when_record_write_fails() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -137,7 +137,7 @@ async fn version_unchanged_when_record_write_fails() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await;
@@ -187,7 +187,7 @@ async fn timeout_emits_workflow_transition_record_with_system_actor() {
             definition_id: "short_lived".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -202,7 +202,7 @@ async fn timeout_emits_workflow_transition_record_with_system_actor() {
         .get(GetWorkflow {
             workflow_id: wf_id.clone(),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -294,14 +294,15 @@ async fn blackboard_delta_populated_with_output_writes() {
         }),
     });
     let guards = Arc::new(mcp_flowgate_core::guards::DefaultGuardEvaluator::new());
-    let runtime = WorkflowRuntime::new(definitions, store.clone(), executors, guards, audit.clone());
+    let runtime =
+        WorkflowRuntime::new(definitions, store.clone(), executors, guards, audit.clone());
 
     let start = runtime
         .start(StartWorkflow {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -317,7 +318,7 @@ async fn blackboard_delta_populated_with_output_writes() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -362,7 +363,7 @@ async fn blackboard_delta_empty_when_no_context_change() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -377,7 +378,7 @@ async fn blackboard_delta_empty_when_no_context_change() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -433,7 +434,7 @@ async fn guards_array_populated_with_kind_and_result() {
             definition_id: "wf".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -448,7 +449,7 @@ async fn guards_array_populated_with_kind_and_result() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -521,7 +522,7 @@ async fn blackboard_delta_chain_hops_have_distinct_deltas() {
             definition_id: "pipeline".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -532,15 +533,26 @@ async fn blackboard_delta_chain_hops_have_distinct_deltas() {
         .iter()
         .filter(|e| e.event_type == "workflow.transition")
         .collect();
-    assert_eq!(records.len(), 2, "expected 2 chain-hop records; got {}", records.len());
+    assert_eq!(
+        records.len(),
+        2,
+        "expected 2 chain-hop records; got {}",
+        records.len()
+    );
 
     // Hop 1 writes only `first`; the executor's $.output.v1 == "alpha".
     let d1 = records[0].payload.get("blackboardDelta").unwrap();
     assert_eq!(d1["first"], json!("alpha"));
-    assert!(d1.get("second").is_none(), "delta for hop 1 must not include slots written by hop 2: {d1}");
+    assert!(
+        d1.get("second").is_none(),
+        "delta for hop 1 must not include slots written by hop 2: {d1}"
+    );
 
     // Hop 2 writes only `second`.
     let d2 = records[1].payload.get("blackboardDelta").unwrap();
     assert_eq!(d2["second"], json!("beta"));
-    assert!(d2.get("first").is_none(), "delta for hop 2 must not re-include hop 1's slot: {d2}");
+    assert!(
+        d2.get("first").is_none(),
+        "delta for hop 2 must not re-include hop 1's slot: {d2}"
+    );
 }

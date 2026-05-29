@@ -55,12 +55,10 @@ async fn frontmatter_with_explicit_verb_produces_fragment() {
     assert_eq!(f["subject"].as_str(), Some("review.style.house-voice"));
     assert_eq!(f["verb"].as_str(), Some("review"));
     assert_eq!(f["lifecycle"].as_str(), Some("experimental"));
-    assert!(
-        f["body"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("reader's problem")
-    );
+    assert!(f["body"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("reader's problem"));
     assert!(f["hash"]
         .as_str()
         .unwrap_or_default()
@@ -106,7 +104,10 @@ async fn closed_verb_passes_through_without_diagnostic() {
         .iter()
         .filter(|d| d["code"].as_str() == Some("VERB_MAPPED"))
         .collect();
-    assert!(mapped.is_empty(), "closed-set verb must not emit VERB_MAPPED");
+    assert!(
+        mapped.is_empty(),
+        "closed-set verb must not emit VERB_MAPPED"
+    );
 }
 
 // ── Subject inference from path ────────────────────────────────────────────

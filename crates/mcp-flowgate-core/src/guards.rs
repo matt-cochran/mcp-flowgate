@@ -172,7 +172,9 @@ impl GuardEvaluator for DefaultGuardEvaluator {
                 let subject = guard
                     .get("subject")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| anyhow::anyhow!("guidance_acknowledged guard needs `subject`"))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("guidance_acknowledged guard needs `subject`")
+                    })?;
 
                 // Look up the expected hash from the per-instance skill
                 // library snapshot. If the subject isn't in the snapshot
@@ -211,9 +213,7 @@ impl GuardEvaluator for DefaultGuardEvaluator {
                 let subject = guard
                     .get("subject")
                     .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("script_acknowledged guard needs `subject`")
-                    })?;
+                    .ok_or_else(|| anyhow::anyhow!("script_acknowledged guard needs `subject`"))?;
 
                 let expected_hash = instance
                     .definition
@@ -234,9 +234,7 @@ impl GuardEvaluator for DefaultGuardEvaluator {
                     // Workflows that use this guard MUST wire one.
                     return Ok(false);
                 };
-                let recorded = store
-                    .last_acknowledged_hash(&instance.id, subject)
-                    .await?;
+                let recorded = store.last_acknowledged_hash(&instance.id, subject).await?;
                 Ok(recorded.as_deref() == Some(expected_hash))
             }
 
@@ -337,13 +335,15 @@ impl DefaultGuardEvaluator {
             let would_pass_without_digest_filter =
                 req.require_digest && matching_full + dropped_digest >= req.count;
             let would_pass_without_confidence_filter =
-                req.min_confidence.is_some()
-                    && matching_full + dropped_confidence >= req.count;
+                req.min_confidence.is_some() && matching_full + dropped_confidence >= req.count;
             if would_pass_without_digest_filter {
                 return Ok((false, Some("EVIDENCE_DIGEST_REQUIRED".to_string())));
             }
             if would_pass_without_confidence_filter {
-                return Ok((false, Some("EVIDENCE_CONFIDENCE_BELOW_THRESHOLD".to_string())));
+                return Ok((
+                    false,
+                    Some("EVIDENCE_CONFIDENCE_BELOW_THRESHOLD".to_string()),
+                ));
             }
             // No filter-attributable cause. Generic quorum-miss.
             return Ok((false, None));
@@ -426,11 +426,7 @@ fn parse_evidence_requirement(v: &Value) -> Option<EvidenceRequirement> {
 ///
 /// `null == null` is true; `null` compared to anything else is false
 /// (except `!=` which inverts).
-fn eval_expr(
-    expr: &str,
-    instance: &WorkflowInstance,
-    arguments: &Value,
-) -> anyhow::Result<bool> {
+fn eval_expr(expr: &str, instance: &WorkflowInstance, arguments: &Value) -> anyhow::Result<bool> {
     let Some((left, op, right)) = parse_binary_expr(expr) else {
         return Ok(false);
     };

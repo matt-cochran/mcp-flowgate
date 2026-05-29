@@ -125,7 +125,7 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -147,7 +147,7 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -162,7 +162,7 @@ async fn evidence_guard_blocks_until_required_kind_recorded() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -233,7 +233,7 @@ async fn evidence_guard_rejects_without_required_kind() {
             definition_id: "demo".into(),
             input: json!({}),
             principal: Principal::anonymous(),
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -249,7 +249,7 @@ async fn evidence_guard_rejects_without_required_kind() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await
@@ -264,7 +264,7 @@ async fn evidence_guard_rejects_without_required_kind() {
             arguments: json!({}),
             principal: Principal::anonymous(),
             summary: None,
-                    trace_id: None,
+            trace_id: None,
             run_id: None,
         })
         .await

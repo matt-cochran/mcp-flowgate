@@ -114,9 +114,7 @@ pub fn build_slot_table(
         .and_then(Value::as_object)
     {
         for (state_name, state_def) in states {
-            let Some(transitions) = state_def
-                .pointer("/transitions")
-                .and_then(Value::as_object)
+            let Some(transitions) = state_def.pointer("/transitions").and_then(Value::as_object)
             else {
                 continue;
             };
@@ -140,7 +138,9 @@ pub fn build_slot_table(
                     .unwrap_or("");
                 let snippet = cap_snippet_outputs.get(target_id);
                 for (host_path, cap_name_value) in use_outputs {
-                    let Some(cap_name) = cap_name_value.as_str() else { continue };
+                    let Some(cap_name) = cap_name_value.as_str() else {
+                        continue;
+                    };
                     let schema = snippet
                         .and_then(|s| s.get(cap_name))
                         .cloned()
@@ -303,20 +303,17 @@ mod tests {
         let t = build_slot_table(&orch, &caps).expect("no errors");
         let entry = t.get("$.context.verdict").expect("present");
         assert!(matches!(&entry.source, SlotSource::State(s) if s == "vetting"));
-        assert_eq!(entry.schema.pointer("/type").and_then(Value::as_str), Some("string"));
+        assert_eq!(
+            entry.schema.pointer("/type").and_then(Value::as_str),
+            Some("string")
+        );
     }
 
     #[test]
     fn build_flags_v14_when_two_states_write_incompatible_types() {
         let mut caps = HashMap::new();
-        caps.insert(
-            "cap.a".to_string(),
-            json!({ "v": { "type": "string" } }),
-        );
-        caps.insert(
-            "cap.b".to_string(),
-            json!({ "v": { "type": "integer" } }),
-        );
+        caps.insert("cap.a".to_string(), json!({ "v": { "type": "string" } }));
+        caps.insert("cap.b".to_string(), json!({ "v": { "type": "integer" } }));
         let orch = json!({
             "states": {
                 "s1": {
@@ -336,7 +333,11 @@ mod tests {
             }
         });
         let err = build_slot_table(&orch, &caps).expect_err("V14 should fire");
-        assert!(err.iter().any(|d| d.message().contains("SLOT_TYPE_CONFLICT")), "{err:?}");
+        assert!(
+            err.iter()
+                .any(|d| d.message().contains("SLOT_TYPE_CONFLICT")),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -352,8 +353,7 @@ mod tests {
     #[test]
     fn assert_reachable_returns_diagnostic_for_undeclared_slot() {
         let t = SlotTable::default();
-        let d = assert_reachable(&t, "$.context.missing", "flow", "s", "t")
-            .expect("must emit");
+        let d = assert_reachable(&t, "$.context.missing", "flow", "s", "t").expect("must emit");
         assert!(d.message().contains("UNREACHABLE_SLOT"));
         assert!(d.message().contains("$.context.missing"));
     }

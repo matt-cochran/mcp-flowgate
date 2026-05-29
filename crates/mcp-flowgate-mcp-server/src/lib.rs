@@ -31,8 +31,8 @@ use mcp_flowgate_core::model::Principal;
 use mcp_flowgate_core::runtime::WorkflowRuntime;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, Implementation, InitializeRequestParams,
-    InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
-    ServerCapabilities, ServerInfo, Tool,
+    InitializeResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
+    ServerInfo, Tool,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer};
 use rmcp::ErrorData as McpError;
@@ -89,8 +89,7 @@ pub struct FlowgateServer {
     /// the union (overlay wins on collision). Survives only for the
     /// runtime's lifetime — operators persist by editing
     /// `flowgate.yaml` and reloading.
-    pub(crate) lexicon_overlay:
-        Arc<std::sync::RwLock<std::collections::HashMap<String, Value>>>,
+    pub(crate) lexicon_overlay: Arc<std::sync::RwLock<std::collections::HashMap<String, Value>>>,
     /// SPEC §30 — the config-loaded lexicon block (the persistent base).
     /// Empty when no `lexicon:` block was declared in the config.
     /// `search` / `lookup` read `lexicon_base` ∪ `lexicon_overlay`;
@@ -102,8 +101,7 @@ pub struct FlowgateServer {
     /// entries from this set when they resolve a subject. Cancel uses it
     /// to distinguish "is a placeholder" from "is a real entry"
     /// (SPEC §30.10.9).
-    pub(crate) pending_subjects:
-        Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
+    pub(crate) pending_subjects: Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
     /// SPEC §30.10.10 — optional Tier 3 embedding backend. Defaults to
     /// `NoopEmbedder` (disabled). Set via `with_embedder(...)`. When a
     /// non-noop backend is configured, `handle_lexicon_define` computes and
@@ -127,13 +125,9 @@ impl FlowgateServer {
             scripts_search_enabled: false,
             lexicon_writes_enabled: false,
             script_ack_store: None,
-            lexicon_overlay: Arc::new(std::sync::RwLock::new(
-                std::collections::HashMap::new(),
-            )),
+            lexicon_overlay: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
             lexicon_base: Arc::new(json!({})),
-            pending_subjects: Arc::new(std::sync::RwLock::new(
-                std::collections::HashSet::new(),
-            )),
+            pending_subjects: Arc::new(std::sync::RwLock::new(std::collections::HashSet::new())),
             embedder: Arc::new(NoopEmbedder),
         }
     }
@@ -264,14 +258,10 @@ impl FlowgateServer {
 
         // Process base entries first.
         for (term, entry) in base_entries {
-            if entry
-                .get("_embedding")
-                .is_some()
-            {
+            if entry.get("_embedding").is_some() {
                 continue; // already has embedding
             }
-            if entry.get("state").and_then(serde_json::Value::as_str)
-                == Some("PENDING_DEFINITION")
+            if entry.get("state").and_then(serde_json::Value::as_str) == Some("PENDING_DEFINITION")
             {
                 continue; // skip placeholders
             }
@@ -325,7 +315,10 @@ impl FlowgateServer {
                 .lexicon_overlay
                 .read()
                 .expect("lexicon overlay lock poisoned");
-            overlay.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            overlay
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect()
         };
 
         let mut overlay_updates: Vec<(String, serde_json::Value)> = Vec::new();
@@ -333,8 +326,7 @@ impl FlowgateServer {
             if entry.get("_embedding").is_some() {
                 continue;
             }
-            if entry.get("state").and_then(serde_json::Value::as_str)
-                == Some("PENDING_DEFINITION")
+            if entry.get("state").and_then(serde_json::Value::as_str) == Some("PENDING_DEFINITION")
             {
                 continue;
             }
@@ -482,8 +474,8 @@ impl FlowgateServer {
                 // §32: `define` shape (subject namespaced + definition) is gated
                 // by with_lexicon_writes(true). Default-off in production (safe
                 // by construction); authoring builds opt in via the builder.
-                let parsed: crate::args::CommandArgs =
-                    serde_json::from_value(args.clone()).unwrap_or(crate::args::CommandArgs {
+                let parsed: crate::args::CommandArgs = serde_json::from_value(args.clone())
+                    .unwrap_or(crate::args::CommandArgs {
                         definition_id: None,
                         input: None,
                         workflow_id: None,

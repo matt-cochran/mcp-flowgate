@@ -35,7 +35,7 @@ use mcp_flowgate_core::model::Principal;
 fn cli_principal() -> Principal {
     Principal {
         subject: "cli".to_string(),
-        roles:  vec!["human".to_string()],
+        roles: vec!["human".to_string()],
         permissions: Vec::new(),
     }
 }
@@ -204,11 +204,7 @@ fn run_define(args: DefineArgs) -> Result<ExitCode> {
     let is_human = principal.is_human();
     let merged = build_merged_definition(&overlay, args.config.as_deref())?;
     if !is_human {
-        if let Err(msg) = mcp_flowgate_core::lexicon::define_allowed(
-            &merged,
-            &args.term,
-            false,
-        ) {
+        if let Err(msg) = mcp_flowgate_core::lexicon::define_allowed(&merged, &args.term, false) {
             anyhow::bail!("{msg}");
         }
     }

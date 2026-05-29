@@ -83,10 +83,16 @@ fn enable_human_ask_injected_transition_has_required_shape() {
     let ask = resolved
         .pointer("/workflows/agentic/states/planning/transitions/ask_human")
         .expect("ask_human injected");
-    assert_eq!(ask.pointer("/target").and_then(Value::as_str), Some("planning"));
+    assert_eq!(
+        ask.pointer("/target").and_then(Value::as_str),
+        Some("planning")
+    );
     assert_eq!(ask.pointer("/actor").and_then(Value::as_str), Some("human"));
     assert_eq!(ask.pointer("/purpose").and_then(Value::as_str), Some("ask"));
-    assert_eq!(ask.pointer("/lightweight").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        ask.pointer("/lightweight").and_then(Value::as_bool),
+        Some(true)
+    );
     assert_eq!(
         ask.pointer("/max_fires_per_visit").and_then(Value::as_u64),
         Some(5),
@@ -98,7 +104,10 @@ fn enable_human_ask_injected_transition_has_required_shape() {
         .expect("inputSchema.required is an array");
     let req_strs: Vec<&str> = req.iter().filter_map(Value::as_str).collect();
     assert!(req_strs.contains(&"question"), "question is required");
-    assert!(req_strs.contains(&"context_summary"), "context_summary is required");
+    assert!(
+        req_strs.contains(&"context_summary"),
+        "context_summary is required"
+    );
     assert!(
         req_strs.contains(&"attempted_alternatives"),
         "attempted_alternatives is required (SPEC §29.6 self-service poka-yoke)"

@@ -49,7 +49,12 @@ async fn guard_fails_when_no_ack_store_wired() {
     let evaluator = DefaultGuardEvaluator::new();
     let instance = instance_with_skill("review.style.x", "sha256:abc");
     let pass = evaluator
-        .evaluate(&guard("review.style.x"), &instance, &json!({}), &Principal::anonymous())
+        .evaluate(
+            &guard("review.style.x"),
+            &instance,
+            &json!({}),
+            &Principal::anonymous(),
+        )
         .await
         .expect("evaluate succeeds");
     assert!(!pass, "without ack store the guard cannot be satisfied");
@@ -59,11 +64,17 @@ async fn guard_fails_when_no_ack_store_wired() {
 
 #[tokio::test]
 async fn guard_fails_when_subject_never_described() {
-    let ack: Arc<dyn GuidanceAcknowledgmentStore> = Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
+    let ack: Arc<dyn GuidanceAcknowledgmentStore> =
+        Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
     let evaluator = DefaultGuardEvaluator::new().with_ack_store(ack);
     let instance = instance_with_skill("review.style.x", "sha256:abc");
     let pass = evaluator
-        .evaluate(&guard("review.style.x"), &instance, &json!({}), &Principal::anonymous())
+        .evaluate(
+            &guard("review.style.x"),
+            &instance,
+            &json!({}),
+            &Principal::anonymous(),
+        )
         .await
         .expect("evaluate succeeds");
     assert!(!pass);
@@ -73,12 +84,20 @@ async fn guard_fails_when_subject_never_described() {
 
 #[tokio::test]
 async fn guard_passes_when_subject_described_with_current_hash() {
-    let ack: Arc<dyn GuidanceAcknowledgmentStore> = Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
-    ack.record("wf_test", "review.style.x", "sha256:abc").await.unwrap();
+    let ack: Arc<dyn GuidanceAcknowledgmentStore> =
+        Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
+    ack.record("wf_test", "review.style.x", "sha256:abc")
+        .await
+        .unwrap();
     let evaluator = DefaultGuardEvaluator::new().with_ack_store(ack);
     let instance = instance_with_skill("review.style.x", "sha256:abc");
     let pass = evaluator
-        .evaluate(&guard("review.style.x"), &instance, &json!({}), &Principal::anonymous())
+        .evaluate(
+            &guard("review.style.x"),
+            &instance,
+            &json!({}),
+            &Principal::anonymous(),
+        )
         .await
         .expect("evaluate succeeds");
     assert!(pass);
@@ -88,14 +107,22 @@ async fn guard_passes_when_subject_described_with_current_hash() {
 
 #[tokio::test]
 async fn hash_flip_invalidates_prior_ack() {
-    let ack: Arc<dyn GuidanceAcknowledgmentStore> = Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
+    let ack: Arc<dyn GuidanceAcknowledgmentStore> =
+        Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
     // LLM described the body when its hash was abc...
-    ack.record("wf_test", "review.style.x", "sha256:abc").await.unwrap();
+    ack.record("wf_test", "review.style.x", "sha256:abc")
+        .await
+        .unwrap();
     let evaluator = DefaultGuardEvaluator::new().with_ack_store(ack);
     // ...but the current snapshot's hash is now def (body was edited).
     let instance = instance_with_skill("review.style.x", "sha256:def");
     let pass = evaluator
-        .evaluate(&guard("review.style.x"), &instance, &json!({}), &Principal::anonymous())
+        .evaluate(
+            &guard("review.style.x"),
+            &instance,
+            &json!({}),
+            &Principal::anonymous(),
+        )
         .await
         .expect("evaluate succeeds");
     assert!(!pass, "hash flip must invalidate the prior ack");
@@ -105,23 +132,35 @@ async fn hash_flip_invalidates_prior_ack() {
 
 #[tokio::test]
 async fn ack_from_different_workflow_does_not_satisfy_guard() {
-    let ack: Arc<dyn GuidanceAcknowledgmentStore> = Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
+    let ack: Arc<dyn GuidanceAcknowledgmentStore> =
+        Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
     // Different workflow described it.
-    ack.record("OTHER_workflow_id", "review.style.x", "sha256:abc").await.unwrap();
+    ack.record("OTHER_workflow_id", "review.style.x", "sha256:abc")
+        .await
+        .unwrap();
     let evaluator = DefaultGuardEvaluator::new().with_ack_store(ack);
     let instance = instance_with_skill("review.style.x", "sha256:abc");
     let pass = evaluator
-        .evaluate(&guard("review.style.x"), &instance, &json!({}), &Principal::anonymous())
+        .evaluate(
+            &guard("review.style.x"),
+            &instance,
+            &json!({}),
+            &Principal::anonymous(),
+        )
         .await
         .expect("evaluate succeeds");
-    assert!(!pass, "ack from another workflow must not leak across instances");
+    assert!(
+        !pass,
+        "ack from another workflow must not leak across instances"
+    );
 }
 
 // ── Edge: subject not in snapshot → GUIDANCE_SUBJECT_UNKNOWN error ─────────
 
 #[tokio::test]
 async fn unknown_subject_in_snapshot_surfaces_as_error_not_silent_fail() {
-    let ack: Arc<dyn GuidanceAcknowledgmentStore> = Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
+    let ack: Arc<dyn GuidanceAcknowledgmentStore> =
+        Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
     let evaluator = DefaultGuardEvaluator::new().with_ack_store(ack);
     let instance = instance_with_skill("review.style.x", "sha256:abc");
     let err = evaluator
@@ -140,7 +179,8 @@ async fn unknown_subject_in_snapshot_surfaces_as_error_not_silent_fail() {
 
 #[tokio::test]
 async fn guard_without_subject_errors() {
-    let ack: Arc<dyn GuidanceAcknowledgmentStore> = Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
+    let ack: Arc<dyn GuidanceAcknowledgmentStore> =
+        Arc::new(InMemoryGuidanceAcknowledgmentStore::new());
     let evaluator = DefaultGuardEvaluator::new().with_ack_store(ack);
     let instance = instance_with_skill("review.style.x", "sha256:abc");
     let err = evaluator
