@@ -5,6 +5,10 @@ description: "Reference for the structured audit events that every workflow acti
 
 Every workflow action emits a structured JSON audit event. You don't add logging -- it's already there. The gateway records what happened, when, and who did it, automatically.
 
+:::note[event_type vs. tool name]
+`event_type` values like `workflow.started` and `transition.requested` are **payload strings inside the audit record** — they are not MCP tool names. The two MCP tools are `flowgate.query` and `flowgate.command`. When filtering audit records in a dashboard, query on `tool_name = "flowgate.query"` or `tool_name = "flowgate.command"` to find the MCP call; query on `event_type = "workflow.started"` to find what happened as a result.
+:::
+
 ## Configuration
 
 ```yaml
@@ -74,7 +78,7 @@ Every event has the same structure:
 
 | Event type | When it fires |
 |-----------|---------------|
-| `workflow.started` | A new workflow instance is created via `workflow.start` |
+| `workflow.started` | A new workflow instance is created via `flowgate.command({definitionId})` |
 | `workflow.transitioned` | A workflow successfully moves to a new state |
 | `workflow.completed` | A workflow reaches a terminal state |
 | `workflow.timed_out` | A workflow exceeded its `timeoutMs` and auto-transitioned |
@@ -83,7 +87,7 @@ Every event has the same structure:
 
 | Event type | When it fires |
 |-----------|---------------|
-| `transition.requested` | A `workflow.submit` call is received |
+| `transition.requested` | A `flowgate.command({workflowId, transition})` submit call is received |
 | `transition.rejected` | A submission is rejected (guard failure, version conflict, actor mismatch, etc.) |
 | `transition.branched` | A transition's branch condition matched, changing the target state |
 
@@ -217,3 +221,36 @@ Audit events are structured JSON, one line per event. They're designed to be pip
 - **CloudWatch / Datadog / Splunk** -- forward the log file or stdout stream through their agents.
 
 The `correlation_id` field ties related events together across a single operation. The `workflow_id` groups everything for one workflow instance. Between the two, you can reconstruct the full story of any workflow run.
+
+## Filtering in dashboards
+
+When querying audit records, remember: `tool_name` and `event_type` are different axes.
+
+**Filter by tool (which MCP call triggered the record):**
+
+```sql
+WHERE tool_name = 'flowgate.query'
+  AND args->>'workflowId' IS NOT NULL
+```
+
+This finds all workflow-get and workflow-explain calls.
+
+```sql
+WHERE tool_name = 'flowgate.command'
+  AND args->>'definitionId' IS NOT NULL
+```
+
+This finds all workflow-start calls.
+
+**Filter by what happened (event_type in the payload):**
+
+```sql
+WHERE event_type = 'workflow.started'
+```
+
+```sql
+WHERE event_type = 'transition.requested'
+  AND payload->>'transition' = 'deploy'
+```
+
+The two axes are complementary. `tool_name` answers "what did the model call?" — `event_type` answers "what did the runtime record as a result?"
