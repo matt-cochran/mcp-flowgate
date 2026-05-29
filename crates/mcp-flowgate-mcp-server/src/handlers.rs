@@ -571,9 +571,9 @@ impl FlowgateServer {
             .ok_or_else(|| anyhow::anyhow!("lexicon.define requires `term`"))?
             .to_string();
         let definition = args
-            .get("definition")
+            .get("definition_short")
             .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("lexicon.define requires `definition`"))?;
+            .ok_or_else(|| anyhow::anyhow!("lexicon.define requires `definition_short`"))?;
         let bounded_context = args
             .get("bounded_context")
             .and_then(Value::as_str)
@@ -786,13 +786,14 @@ impl FlowgateServer {
         match parse_subject_namespace(subject) {
             (Some("lexicon"), term) => {
                 // Reshape into the existing lexicon-define argument format.
-                // handle_lexicon_define expects: { term, definition (string),
+                // handle_lexicon_define expects: { term, definition_short (string),
                 // bounded_context?, refs?, governance? }.
-                // CommandArgs.definition is an object:
-                //   { definition: "...", boundedContext: "...", refs: [...], governance: "..." }
+                // CommandArgs.definition is an object with primary field
+                // `definition_short` (SPEC §30.10.1).
+                //   { definition_short: "...", boundedContext: "...", refs: [...], governance: "..." }
                 let def_obj = parsed.definition.as_ref();
                 let definition_str = def_obj
-                    .and_then(|d| d.get("definition"))
+                    .and_then(|d| d.get("definition_short"))
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 let bounded_context = def_obj
@@ -808,11 +809,11 @@ impl FlowgateServer {
                     .cloned()
                     .unwrap_or(Value::Null);
                 let reshape = json!({
-                    "term":            term,
-                    "definition":      definition_str,
-                    "bounded_context": bounded_context,
-                    "refs":            refs,
-                    "governance":      governance,
+                    "term":             term,
+                    "definition_short": definition_str,
+                    "bounded_context":  bounded_context,
+                    "refs":             refs,
+                    "governance":       governance,
                 });
                 self.handle_lexicon_define(reshape, principal).await
             }
@@ -911,7 +912,7 @@ fn ambiguous_intent_command() -> Value {
         "links": [
             { "rel": "start_example",  "method": "flowgate.command", "args": { "definitionId": "<your-workflow>" } },
             { "rel": "submit_example", "method": "flowgate.command", "args": { "workflowId": "<id>", "expectedVersion": 0, "transition": "<name>" } },
-            { "rel": "define_example", "method": "flowgate.command", "args": { "subject": "lexicon:<term>", "definition": { "definition": "..." } } }
+            { "rel": "define_example", "method": "flowgate.command", "args": { "subject": "lexicon:<term>", "definition": { "definition_short": "..." } } }
         ]
     })
 }

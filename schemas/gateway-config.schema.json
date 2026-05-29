@@ -33,6 +33,12 @@
     "audit": { "$ref": "#/$defs/auditConfig" },
     "discovery": { "$ref": "#/$defs/discoveryConfig" },
     "store": { "$ref": "#/$defs/storeConfig" },
+    "lexicon": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/lexiconEntry" },
+      "default": {},
+      "description": "Curated ubiquitous-language vocabulary (SPEC §30). Each key is the canonical term; each value carries a one-sentence `definition_short`, an optional multi-paragraph `definition_long`, optional surface-form `aliases`, an optional DDD `bounded_context`, optional `refs` to related terms, and a `governance` marker (default `human-only`). At config load the full block is snapshot-stamped onto every workflow definition (`_lexiconLibrary`). Same-bounded-context alias collisions fail at load."
+    },
     "skills": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/skillFragment" },
@@ -880,6 +886,41 @@
         "path": { "type": "string" }
       }
     },
-    "jsonSchema": { "type": "object" }
+    "jsonSchema": { "type": "object" },
+    "lexiconEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definition_short"],
+      "properties": {
+        "definition_short": {
+          "type": "string",
+          "description": "Required. One-sentence summary of the term. The canonical human- and agent-readable label used in search and discovery. (SPEC §30.10.1)"
+        },
+        "definition_long": {
+          "type": "string",
+          "description": "Optional. Multi-paragraph elaboration — examples, nuance, historical context. Not required for the index to function. (SPEC §30.10.1)"
+        },
+        "aliases": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional. Recognized surface-form variants of the canonical term (e.g. plural, hyphenated, abbreviated forms). Aliases are indexed alongside the canonical term in the combined-form index. Within a bounded_context, no alias may collide with another entry's term or alias. (SPEC §30.10.1)"
+        },
+        "bounded_context": {
+          "type": "string",
+          "description": "DDD bounded context this term belongs to. Cross-context overlap is allowed; within a single context, all terms and aliases must be unique."
+        },
+        "refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Term names of related entries. Used for navigation and discoverability."
+        },
+        "governance": {
+          "type": "string",
+          "enum": ["human-only", "agent-may-propose"],
+          "default": "human-only",
+          "description": "Controls who may write (define) this term. `human-only` (default) — agents are rejected. `agent-may-propose` — agents may propose; a human transition commits. (SPEC §30.6)"
+        }
+      }
+    }
   }
 }

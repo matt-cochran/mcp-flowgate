@@ -132,7 +132,7 @@ fn command_args_admits_define_shape() {
     let a: CommandArgs = serde_json::from_value(json!({
         "subject": "lexicon:churn",
         "definition": {
-            "definition": "Loss of paying customer in a billing period.",
+            "definition_short": "Loss of paying customer in a billing period.",
             "boundedContext": "billing"
         }
     })).unwrap();
@@ -397,7 +397,7 @@ async fn command_lexicon_define_shape_dispatches_to_define() {
             json!({
                 "subject": "lexicon:churn",
                 "definition": {
-                    "definition": "Loss of a paying customer in a billing period.",
+                    "definition_short": "Loss of a paying customer in a billing period.",
                     "boundedContext": "billing"
                 }
             }),
@@ -453,7 +453,7 @@ async fn command_subject_plus_workflow_id_is_ambiguous() {
             json!({
                 "subject": "lexicon:churn",
                 "workflowId": "wf_01",
-                "definition": { "definition": "x" }
+                "definition": { "definition_short": "x" }
             }),
             Principal::anonymous(),
         )
@@ -521,7 +521,7 @@ async fn lexicon_define_via_dispatch_call_is_blocked_when_writes_disabled() {
     let server = test_server().await; // default: with_lexicon_writes NOT enabled
     let params = call("flowgate.command", json!({
         "subject": "lexicon:churn",
-        "definition": { "definition": "loss of paying customer" }
+        "definition": { "definition_short": "loss of paying customer" }
     }));
     let resp = server.dispatch_call(params).await.expect("dispatch_call");
     assert_eq!(
@@ -573,7 +573,7 @@ async fn lexicon_define_via_dispatch_call_succeeds_when_writes_enabled() {
         .dispatch_command(
             json!({
                 "subject": "lexicon:churn",
-                "definition": { "definition": "loss of paying customer" }
+                "definition": { "definition_short": "loss of paying customer" }
             }),
             human,
         )

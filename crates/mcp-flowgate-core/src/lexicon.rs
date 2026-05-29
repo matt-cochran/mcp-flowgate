@@ -31,6 +31,8 @@
 //! follow the same shape; a `LexiconStore` trait is reserved but the
 //! Tier 1 in-config form is the only one shipped today.
 
+use std::collections::HashMap;
+
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Map, Value};
 
@@ -41,13 +43,18 @@ use serde_json::{json, Map, Value};
 /// an explicit choice to accept faster iteration over discipline.
 pub const DEFAULT_GOVERNANCE: &str = "human-only";
 
+/// Alias to keep the collision-detection map type readable.
+type ContextEntries<'a> = Vec<(&'a str, &'a Map<String, Value>)>;
+
 /// Validate the top-level `lexicon:` block at config load. Catches:
 /// - non-object entries
-/// - missing `definition` field
+/// - missing `definition_short` field
 /// - invalid `governance` value
 /// - non-string `refs` entries
+/// - same-bounded-context alias collisions (SPEC §30.10.1)
 ///
-/// Surfaces `INVALID_LEXICON_ENTRY` with the offending term named.
+/// Surfaces `INVALID_LEXICON_ENTRY` or `LEXICON_ALIAS_COLLISION` with the
+/// offending term(s) named.
 pub fn validate_lexicon(config: &Value) -> Result<()> {
     let Some(lexicon) = config.get("lexicon").and_then(Value::as_object) else {
         return Ok(()); // no lexicon block is fine
@@ -56,11 +63,11 @@ pub fn validate_lexicon(config: &Value) -> Result<()> {
         let entry_obj = entry.as_object().ok_or_else(|| {
             anyhow!(
                 "INVALID_LEXICON_ENTRY: lexicon entry '{term}' must be an object \
-                 with at least `definition:` set"
+                 with at least `definition_short:` set"
             )
         })?;
         let definition = entry_obj
-            .get("definition")
+            .get("definition_short")
             .and_then(Value::as_str)
             .ok_or_else(|| {
                 anyhow!(
@@ -94,7 +101,92 @@ pub fn validate_lexicon(config: &Value) -> Result<()> {
             }
         }
     }
+
+    // ── SPEC §30.10.1 — same-bounded-context alias collision detection ────
+    //
+    // Group entries by bounded_context (empty string = no context).
+    // Within each group build the combined-form index; if any alias or
+    // canonical term appears more than once → LEXICON_ALIAS_COLLISION.
+    let mut by_context: HashMap<&str, ContextEntries<'_>> = HashMap::new();
+    for (term, entry) in lexicon {
+        if let Some(obj) = entry.as_object() {
+            let ctx = obj
+                .get("bounded_context")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            by_context.entry(ctx).or_default().push((term.as_str(), obj));
+        }
+    }
+    for (ctx, entries) in &by_context {
+        build_combined_index_inner(entries, ctx)?;
+    }
     Ok(())
+}
+
+/// Internal helper: build the combined-form index for a slice of entries
+/// that share a bounded context. Returns an error on the first collision.
+fn build_combined_index_inner<'a>(
+    entries: &[(&'a str, &'a Map<String, Value>)],
+    bounded_context: &str,
+) -> Result<HashMap<&'a str, &'a Map<String, Value>>> {
+    let mut index: HashMap<&str, (&str, &Map<String, Value>)> = HashMap::new();
+
+    let register = |key: &'a str,
+                        owner_term: &'a str,
+                        owner_obj: &'a Map<String, Value>,
+                        index: &mut HashMap<&'a str, (&'a str, &'a Map<String, Value>)>|
+     -> Result<()> {
+        if let Some((existing_term, _)) = index.get(key) {
+            bail!(
+                "LEXICON_ALIAS_COLLISION: within bounded_context '{bounded_context}', \
+                 key '{key}' is claimed by both '{existing_term}' and '{owner_term}'. \
+                 Aliases must be unique within a bounded context. (SPEC §30.10.1)"
+            );
+        }
+        index.insert(key, (owner_term, owner_obj));
+        Ok(())
+    };
+
+    for &(term, obj) in entries {
+        register(term, term, obj, &mut index)?;
+        if let Some(aliases) = obj.get("aliases").and_then(Value::as_array) {
+            for alias_val in aliases {
+                if let Some(alias) = alias_val.as_str() {
+                    register(alias, term, obj, &mut index)?;
+                }
+            }
+        }
+    }
+    Ok(index.into_iter().map(|(k, (_, v))| (k, v)).collect())
+}
+
+/// SPEC §30.10.1 — build the snapshot-time combined-form index for a
+/// single bounded context. Returns a `HashMap<&str, &Map<String, Value>>`
+/// keyed by canonical term + every alias, all pointing at the same entry
+/// object. O(1) lookup against any surface form.
+///
+/// Call once per bounded context at snapshot-stamp time (or validation).
+/// Returns `Err` on collision (same check as `validate_lexicon`).
+pub fn build_combined_index<'a>(
+    lexicon_obj: &'a Map<String, Value>,
+    bounded_context: &str,
+) -> Result<HashMap<&'a str, &'a Map<String, Value>>> {
+    let entries: Vec<(&str, &Map<String, Value>)> = lexicon_obj
+        .iter()
+        .filter_map(|(k, v)| {
+            let obj = v.as_object()?;
+            let entry_ctx = obj
+                .get("bounded_context")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if entry_ctx == bounded_context {
+                Some((k.as_str(), obj))
+            } else {
+                None
+            }
+        })
+        .collect();
+    build_combined_index_inner(&entries, bounded_context)
 }
 
 /// SPEC §30.4 — stamp the full lexicon onto every workflow that exists
@@ -174,7 +266,7 @@ pub fn search_terms(
         }
         let term_match = term.to_lowercase().contains(&q_lower);
         let def_match = entry
-            .get("definition")
+            .get("definition_short")
             .and_then(Value::as_str)
             .map(|d| d.to_lowercase().contains(&q_lower))
             .unwrap_or(false);
@@ -235,20 +327,22 @@ pub fn define_allowed(
     }
 }
 
-/// SPEC §30.5 — build a proposed entry value from `gateway.lexicon.define`
-/// arguments. Used by the MCP handler before persisting; centralized so
-/// the shape is consistent and validation runs in one place.
+/// SPEC §30.5 / §30.10.1 — build a proposed entry value from
+/// `gateway.lexicon.define` arguments. Uses `definition_short` as the
+/// primary one-sentence definition field. Used by the MCP handler before
+/// persisting; centralized so the shape is consistent and validation runs
+/// in one place.
 pub fn build_entry(
-    definition: &str,
+    definition_short: &str,
     bounded_context: Option<&str>,
     refs: Option<&Vec<String>>,
     governance: Option<&str>,
 ) -> Result<Value> {
-    if definition.trim().is_empty() {
+    if definition_short.trim().is_empty() {
         bail!("INVALID_LEXICON_ENTRY: definition must be non-empty");
     }
     let mut entry = Map::new();
-    entry.insert("definition".into(), json!(definition));
+    entry.insert("definition_short".into(), json!(definition_short));
     if let Some(ctx) = bounded_context {
         entry.insert("bounded_context".into(), json!(ctx));
     }

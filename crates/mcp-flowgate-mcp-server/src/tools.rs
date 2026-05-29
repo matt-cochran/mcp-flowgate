@@ -120,7 +120,7 @@ Dispatch by present-field shape:
 
   flowgate.command { definitionId }                                    → start
   flowgate.command { workflowId, expectedVersion, transition }         → submit
-  flowgate.command { subject: "lexicon:<term>", definition: { ... } }  → define
+  flowgate.command { subject: "lexicon:<term>", definition: { definition_short: "..." } }  → define
 
 Typical flow:
 1. Call flowgate.query {} to get the discovery home with HATEOAS links.

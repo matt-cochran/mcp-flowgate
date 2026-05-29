@@ -5,7 +5,7 @@
 
 use mcp_flowgate_core::config::resolve;
 use mcp_flowgate_core::lexicon::{
-    build_entry, define_allowed, governance_for, lookup_term, search_terms,
+    build_combined_index, build_entry, define_allowed, governance_for, lookup_term, search_terms,
     stamp_lexicon_library, validate_lexicon,
 };
 use serde_json::json;
@@ -29,7 +29,7 @@ fn config_with_lexicon(lexicon: serde_json::Value) -> serde_json::Value {
 fn validate_accepts_well_formed_lexicon() {
     let cfg = config_with_lexicon(json!({
         "connector": {
-            "definition": "A unit of integration between the gateway and an external system.",
+            "definition_short": "A unit of integration between the gateway and an external system.",
             "bounded_context": "gateway",
             "refs": ["capability"],
             "governance": "human-only"
@@ -50,7 +50,7 @@ fn validate_rejects_missing_definition() {
 
 #[test]
 fn validate_rejects_empty_definition() {
-    let cfg = config_with_lexicon(json!({ "broken": { "definition": "   " } }));
+    let cfg = config_with_lexicon(json!({ "broken": { "definition_short": "   " } }));
     let err = validate_lexicon(&cfg).expect_err("must reject");
     assert!(format!("{err:?}").contains("empty `definition:`"));
 }
@@ -58,7 +58,7 @@ fn validate_rejects_empty_definition() {
 #[test]
 fn validate_rejects_unknown_governance() {
     let cfg = config_with_lexicon(json!({
-        "x": { "definition": "y", "governance": "free-for-all" }
+        "x": { "definition_short": "y", "governance": "free-for-all" }
     }));
     let err = validate_lexicon(&cfg).expect_err("must reject");
     assert!(format!("{err:?}").contains("unknown `governance: free-for-all`"));
@@ -69,13 +69,13 @@ fn validate_rejects_unknown_governance() {
 #[test]
 fn stamping_writes_lexicon_library_onto_every_workflow() {
     let mut cfg = config_with_lexicon(json!({
-        "connector": { "definition": "Integration unit." }
+        "connector": { "definition_short": "Integration unit." }
     }));
     stamp_lexicon_library(&mut cfg);
     let lib = cfg.pointer("/workflows/demo/_lexiconLibrary").unwrap();
     assert!(lib.get("connector").is_some());
     assert_eq!(
-        lib.pointer("/connector/definition").and_then(|v| v.as_str()),
+        lib.pointer("/connector/definition_short").and_then(|v| v.as_str()),
         Some("Integration unit.")
     );
 }
@@ -85,7 +85,7 @@ fn full_resolve_pipeline_stamps_lexicon() {
     // Through the public resolve() — confirms validate + stamp are wired.
     let cfg = config_with_lexicon(json!({
         "ubiquitous_language": {
-            "definition": "Shared vocabulary between domain experts and developers.",
+            "definition_short": "Shared vocabulary between domain experts and developers.",
             "bounded_context": "ddd"
         }
     }));
@@ -101,13 +101,13 @@ fn full_resolve_pipeline_stamps_lexicon() {
 #[test]
 fn lookup_returns_stamped_entry() {
     let mut cfg = config_with_lexicon(json!({
-        "x": { "definition": "X is X." }
+        "x": { "definition_short": "X is X." }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
     let entry = lookup_term(def, "x", None).expect("term must exist");
     assert_eq!(
-        entry.get("definition").and_then(|v| v.as_str()),
+        entry.get("definition_short").and_then(|v| v.as_str()),
         Some("X is X.")
     );
 }
@@ -123,7 +123,7 @@ fn lookup_returns_none_for_unknown_term() {
 #[test]
 fn lookup_with_bounded_context_filter() {
     let mut cfg = config_with_lexicon(json!({
-        "x": { "definition": "X in A", "bounded_context": "A" }
+        "x": { "definition_short": "X in A", "bounded_context": "A" }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -136,9 +136,9 @@ fn lookup_with_bounded_context_filter() {
 #[test]
 fn search_matches_term_name_substring() {
     let mut cfg = config_with_lexicon(json!({
-        "connector":  { "definition": "Integration." },
-        "capability": { "definition": "Surface." },
-        "executor":   { "definition": "Runs work." }
+        "connector":  { "definition_short": "Integration." },
+        "capability": { "definition_short": "Surface." },
+        "executor":   { "definition_short": "Runs work." }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -150,8 +150,8 @@ fn search_matches_term_name_substring() {
 #[test]
 fn search_matches_definition_substring() {
     let mut cfg = config_with_lexicon(json!({
-        "alpha": { "definition": "The first letter." },
-        "beta":  { "definition": "The second letter." }
+        "alpha": { "definition_short": "The first letter." },
+        "beta":  { "definition_short": "The second letter." }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -163,8 +163,8 @@ fn search_matches_definition_substring() {
 #[test]
 fn search_respects_bounded_context_filter() {
     let mut cfg = config_with_lexicon(json!({
-        "x_in_a": { "definition": "X", "bounded_context": "A" },
-        "x_in_b": { "definition": "X", "bounded_context": "B" }
+        "x_in_a": { "definition_short": "X", "bounded_context": "A" },
+        "x_in_b": { "definition_short": "X", "bounded_context": "B" }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -176,9 +176,9 @@ fn search_respects_bounded_context_filter() {
 #[test]
 fn search_respects_limit() {
     let mut cfg = config_with_lexicon(json!({
-        "a": { "definition": "match" },
-        "b": { "definition": "match" },
-        "c": { "definition": "match" }
+        "a": { "definition_short": "match" },
+        "b": { "definition_short": "match" },
+        "c": { "definition_short": "match" }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -191,7 +191,7 @@ fn search_respects_limit() {
 #[test]
 fn governance_defaults_to_human_only_when_unset() {
     let mut cfg = config_with_lexicon(json!({
-        "term_no_gov": { "definition": "no governance field" }
+        "term_no_gov": { "definition_short": "no governance field" }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -201,7 +201,7 @@ fn governance_defaults_to_human_only_when_unset() {
 #[test]
 fn agent_rejected_against_human_only_term() {
     let mut cfg = config_with_lexicon(json!({
-        "locked": { "definition": "x", "governance": "human-only" }
+        "locked": { "definition_short": "x", "governance": "human-only" }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -213,7 +213,7 @@ fn agent_rejected_against_human_only_term() {
 #[test]
 fn human_always_allowed() {
     let mut cfg = config_with_lexicon(json!({
-        "locked": { "definition": "x", "governance": "human-only" }
+        "locked": { "definition_short": "x", "governance": "human-only" }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -223,7 +223,7 @@ fn human_always_allowed() {
 #[test]
 fn agent_allowed_against_agent_may_propose_term() {
     let mut cfg = config_with_lexicon(json!({
-        "open": { "definition": "x", "governance": "agent-may-propose" }
+        "open": { "definition_short": "x", "governance": "agent-may-propose" }
     }));
     stamp_lexicon_library(&mut cfg);
     let def = cfg.pointer("/workflows/demo").unwrap();
@@ -235,7 +235,7 @@ fn agent_allowed_against_agent_may_propose_term() {
 #[test]
 fn build_entry_sets_defaults() {
     let entry = build_entry("a real def", None, None, None).expect("ok");
-    assert_eq!(entry.pointer("/definition").and_then(|v| v.as_str()), Some("a real def"));
+    assert_eq!(entry.pointer("/definition_short").and_then(|v| v.as_str()), Some("a real def"));
     assert_eq!(entry.pointer("/governance").and_then(|v| v.as_str()), Some("human-only"));
 }
 
@@ -249,4 +249,101 @@ fn build_entry_rejects_empty_definition() {
 fn build_entry_rejects_unknown_governance() {
     let err = build_entry("a", None, None, Some("wat")).expect_err("must reject");
     assert!(format!("{err:?}").contains("governance must be"));
+}
+
+// ── SPEC §30.10.1 — definition_short / definition_long / aliases ──────────
+
+#[test]
+fn schema_accepts_definition_short_long_and_aliases() {
+    // All three new fields accepted without error.
+    let cfg = config_with_lexicon(json!({
+        "evidence-pack": {
+            "definition_short": "A bundle of artefacts that proves a claim.",
+            "definition_long": "An evidence-pack is a versioned, immutable bundle...",
+            "aliases": ["evidence-packs", "evidence pack"],
+            "bounded_context": "swe-agent"
+        }
+    }));
+    assert!(validate_lexicon(&cfg).is_ok());
+}
+
+#[test]
+fn alias_lookup_returns_same_entry_as_canonical() {
+    // Combined-form index: "evidence-packs" and "evidence pack" resolve to
+    // the same entry as the canonical term "evidence-pack".
+    let lexicon = json!({
+        "evidence-pack": {
+            "definition_short": "Proves a claim.",
+            "aliases": ["evidence-packs", "evidence pack"],
+            "bounded_context": "swe-agent"
+        }
+    });
+    let lib = lexicon.as_object().unwrap();
+    let index = build_combined_index(lib, "swe-agent").expect("no collision");
+    assert!(index.contains_key("evidence-pack"), "canonical term must be indexed");
+    assert!(index.contains_key("evidence-packs"), "alias 'evidence-packs' must be indexed");
+    assert!(index.contains_key("evidence pack"), "alias 'evidence pack' must be indexed");
+    // All three keys map to the same entry (pointer identity).
+    let canonical = index["evidence-pack"] as *const _;
+    let alias1 = index["evidence-packs"] as *const _;
+    let alias2 = index["evidence pack"] as *const _;
+    assert!(std::ptr::eq(canonical, alias1), "alias1 should point at same entry as canonical");
+    assert!(std::ptr::eq(canonical, alias2), "alias2 should point at same entry as canonical");
+}
+
+#[test]
+fn cross_bounded_context_alias_overlap_is_allowed() {
+    // Two entries in DIFFERENT bounded_contexts may share an alias.
+    let cfg = config_with_lexicon(json!({
+        "risk_deployment": {
+            "definition_short": "Risk of deploy failure.",
+            "bounded_context": "deployment",
+            "aliases": ["deployment-risk"]
+        },
+        "risk_billing": {
+            "definition_short": "Risk of billing interruption.",
+            "bounded_context": "billing",
+            "aliases": ["billing-risk"]
+        }
+    }));
+    assert!(validate_lexicon(&cfg).is_ok());
+}
+
+#[test]
+fn same_bounded_context_alias_collides_with_another_terms_canonical_name() {
+    // "blackboard" has alias "evidence-pack" — collides with term "evidence-pack".
+    let cfg = config_with_lexicon(json!({
+        "evidence-pack": {
+            "definition_short": "Proves a claim.",
+            "bounded_context": "swe-agent"
+        },
+        "blackboard": {
+            "definition_short": "Shared state store.",
+            "bounded_context": "swe-agent",
+            "aliases": ["evidence-pack"]
+        }
+    }));
+    let err = validate_lexicon(&cfg).expect_err("must reject alias-term collision");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("LEXICON_ALIAS_COLLISION"), "got: {msg}");
+}
+
+#[test]
+fn same_bounded_context_alias_collides_with_another_alias() {
+    // X has alias "foo", Y has alias "foo" — alias-alias collision.
+    let cfg = config_with_lexicon(json!({
+        "x": {
+            "definition_short": "Term X.",
+            "bounded_context": "swe-agent",
+            "aliases": ["foo"]
+        },
+        "y": {
+            "definition_short": "Term Y.",
+            "bounded_context": "swe-agent",
+            "aliases": ["foo"]
+        }
+    }));
+    let err = validate_lexicon(&cfg).expect_err("must reject alias-alias collision");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("LEXICON_ALIAS_COLLISION"), "got: {msg}");
 }
