@@ -277,4 +277,14 @@ pub struct CommandArgs {
     /// as a uniqueness assertion per §32 (collisions return
     /// `RUN_ID_ALREADY_RUNNING`).
     pub run_id: Option<String>,
+    /// SPEC §30.10.7C — dispatch intent for out-of-band resolution commands.
+    /// Present → `cancel_pending_subject` → drop a PENDING_DEFINITION
+    /// placeholder without creating or modifying a lexicon entry.
+    pub intent: Option<String>,
+    /// SPEC §30.10.7C — subject to cancel. Required when
+    /// `intent == "cancel_pending_subject"`. Wire key is `unknown_subject`
+    /// (snake_case, not camelCase) matching the HATEOAS cancel-link shape
+    /// emitted by SPEC §30.10.5.
+    #[serde(rename = "unknown_subject")]
+    pub unknown_subject: Option<String>,
 }

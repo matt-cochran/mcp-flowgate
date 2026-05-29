@@ -95,6 +95,14 @@ pub struct FlowgateServer {
     /// `search` / `lookup` read `lexicon_base` ∪ `lexicon_overlay`;
     /// overlay wins on collision.
     pub(crate) lexicon_base: Arc<Value>,
+    /// SPEC §30.10.3 — runtime-mutable set of subject names that were
+    /// detected as PENDING_DEFINITION placeholders at config-load time.
+    /// Resolution handlers (link_as_alias, define_new, cancel) remove
+    /// entries from this set when they resolve a subject. Cancel uses it
+    /// to distinguish "is a placeholder" from "is a real entry"
+    /// (SPEC §30.10.9).
+    pub(crate) pending_subjects:
+        Arc<std::sync::RwLock<std::collections::HashSet<String>>>,
 }
 
 impl FlowgateServer {
@@ -115,6 +123,9 @@ impl FlowgateServer {
                 std::collections::HashMap::new(),
             )),
             lexicon_base: Arc::new(json!({})),
+            pending_subjects: Arc::new(std::sync::RwLock::new(
+                std::collections::HashSet::new(),
+            )),
         }
     }
 
@@ -170,6 +181,18 @@ impl FlowgateServer {
     /// Mirror of the `with_skills_search` / `with_scripts_search` opt-ins.
     pub fn with_lexicon_writes(mut self, enabled: bool) -> Self {
         self.lexicon_writes_enabled = enabled;
+        self
+    }
+
+    /// SPEC §30.10.3 — seed the set of pending (PENDING_DEFINITION) subjects
+    /// detected at config-load time. Callers pass the list returned by
+    /// `mcp_flowgate_core::lexicon::pending_subjects_from_resolved(config)`.
+    /// Resolution handlers remove entries from this set; cancel uses it to
+    /// distinguish bookkeeping placeholders from authored entries.
+    pub fn with_pending_subjects(mut self, subjects: Vec<String>) -> Self {
+        self.pending_subjects = Arc::new(std::sync::RwLock::new(
+            subjects.into_iter().collect(),
+        ));
         self
     }
 
@@ -290,6 +313,8 @@ impl FlowgateServer {
                         summary: None,
                         trace_id: None,
                         run_id: None,
+                        intent: None,
+                        unknown_subject: None,
                     });
                 let is_lexicon_define = parsed
                     .subject

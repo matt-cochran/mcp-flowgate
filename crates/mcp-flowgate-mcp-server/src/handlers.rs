@@ -595,13 +595,28 @@ impl FlowgateServer {
         // governance: human-only marker, agents (non-human principals)
         // must be rejected. New terms inherit the DEFAULT_GOVERNANCE
         // (human-only); agent must go through a human transition.
-        let merged = self.lexicon_merged_definition();
-        if let Err(msg) = mcp_flowgate_core::lexicon::define_allowed(
-            &merged,
-            &term,
-            principal.is_human(),
-        ) {
-            return Err(anyhow::anyhow!("{msg}"));
+        //
+        // Exception (SPEC §30.10.7B): when the term is a PENDING_DEFINITION
+        // placeholder (i.e., it appears in `pending_subjects`), the resolver
+        // is filling in a gap — not overwriting a human-curated entry. The
+        // governance gate is skipped so the agent that received
+        // SUBJECT_NEEDS_DEFINITION can complete the `define_new` resolution.
+        let is_pending = {
+            let pending = self
+                .pending_subjects
+                .read()
+                .expect("pending_subjects lock poisoned");
+            pending.contains(&term)
+        };
+        if !is_pending {
+            let merged = self.lexicon_merged_definition();
+            if let Err(msg) = mcp_flowgate_core::lexicon::define_allowed(
+                &merged,
+                &term,
+                principal.is_human(),
+            ) {
+                return Err(anyhow::anyhow!("{msg}"));
+            }
         }
 
         let entry = mcp_flowgate_core::lexicon::build_entry(
@@ -720,10 +735,11 @@ impl FlowgateServer {
     /// See SPEC §32 for the dispatch table.
     ///
     /// Dispatch table (exclusive shapes):
-    /// - `definitionId` only (no workflowId, no subject)           → start
-    /// - `workflowId + transition + expectedVersion` (no subject)   → submit
+    /// - `definitionId` only (no workflowId, no subject)                           → start
+    /// - `workflowId + transition + expectedVersion` (no subject)                   → submit
     /// - `subject` with `:` namespace + `definition` (no workflowId, no definitionId) → define
-    /// - anything else                                               → AMBIGUOUS_INTENT
+    /// - `intent == "cancel_pending_subject"` + `unknown_subject`                   → cancel
+    /// - anything else                                                               → AMBIGUOUS_INTENT
     pub async fn dispatch_command(
         &self,
         args: Value,
@@ -742,9 +758,11 @@ impl FlowgateServer {
             && parsed.definition.is_some()
             && parsed.workflow_id.is_none()
             && parsed.definition_id.is_none();
+        let is_cancel = parsed.intent.as_deref() == Some("cancel_pending_subject")
+            && parsed.unknown_subject.is_some();
 
-        match (is_start, is_submit, is_define) {
-            (true, false, false) => {
+        match (is_start, is_submit, is_define, is_cancel) {
+            (true, false, false, false) => {
                 // Start: reshape CommandArgs → StartArgs wire shape.
                 let start_args = json!({
                     "definitionId": parsed.definition_id,
@@ -754,7 +772,7 @@ impl FlowgateServer {
                 });
                 self.handle_start(start_args, principal).await
             }
-            (false, true, false) => {
+            (false, true, false, false) => {
                 // Submit: reshape CommandArgs → SubmitArgs wire shape.
                 let submit_args = json!({
                     "workflowId":      parsed.workflow_id,
@@ -767,13 +785,20 @@ impl FlowgateServer {
                 });
                 self.handle_submit(submit_args, principal).await
             }
-            (false, false, true) => self.dispatch_lexicon_define(args, principal).await,
+            (false, false, true, false) => self.dispatch_lexicon_define(args, principal).await,
+            (false, false, false, true) => {
+                // Cancel pending subject placeholder.
+                let subject = parsed.unknown_subject.expect("checked above");
+                self.handle_cancel_pending_subject(&subject, principal).await
+            }
             _ => Ok(ambiguous_intent_command()),
         }
     }
 
     /// Shim: extract `<term>` from `subject: "lexicon:<term>"` and delegate
-    /// to the existing `handle_lexicon_define`. Other subject namespaces
+    /// to the appropriate handler. Detects `aliases_add` in the definition
+    /// body (SPEC §30.10.7A) and routes to `handle_alias_add`; otherwise
+    /// falls through to the normal define path. Other subject namespaces
     /// (`script:`, `workflow:`, `skill:`) are reserved but have no writable
     /// primitive today — they return AMBIGUOUS_INTENT.
     async fn dispatch_lexicon_define(
@@ -785,13 +810,29 @@ impl FlowgateServer {
         let subject = parsed.subject.as_deref().unwrap_or("");
         match parse_subject_namespace(subject) {
             (Some("lexicon"), term) => {
-                // Reshape into the existing lexicon-define argument format.
+                let def_obj = parsed.definition.as_ref();
+
+                // SPEC §30.10.7A — alias-add path: definition carries
+                // `aliases_add` array, not `definition_short`.
+                if let Some(aliases_add) = def_obj
+                    .and_then(|d| d.get("aliases_add"))
+                    .and_then(Value::as_array)
+                {
+                    let aliases: Vec<String> = aliases_add
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    return self
+                        .handle_alias_add(term, &aliases, principal)
+                        .await;
+                }
+
+                // Normal define path (define_new).
                 // handle_lexicon_define expects: { term, definition_short (string),
                 // bounded_context?, refs?, governance? }.
                 // CommandArgs.definition is an object with primary field
                 // `definition_short` (SPEC §30.10.1).
                 //   { definition_short: "...", boundedContext: "...", refs: [...], governance: "..." }
-                let def_obj = parsed.definition.as_ref();
                 let definition_str = def_obj
                     .and_then(|d| d.get("definition_short"))
                     .and_then(Value::as_str)
@@ -815,10 +856,225 @@ impl FlowgateServer {
                     "refs":             refs,
                     "governance":       governance,
                 });
-                self.handle_lexicon_define(reshape, principal).await
+                let result = self.handle_lexicon_define(reshape, principal).await?;
+                // SPEC §30.10.7B — if this was a PENDING_DEFINITION subject,
+                // remove it from the pending set now that it has a real entry.
+                {
+                    let mut pending = self
+                        .pending_subjects
+                        .write()
+                        .expect("pending_subjects lock poisoned");
+                    pending.remove(term);
+                }
+                Ok(result)
             }
             _ => Ok(ambiguous_intent_command()),
         }
+    }
+
+    /// SPEC §30.10.7A — add one or more aliases to an existing lexicon entry.
+    ///
+    /// Checks for same-bounded-context collision across the full overlay+base.
+    /// On success, appends aliases to the entry in the overlay, removes any
+    /// of the added aliases from the pending-subjects set, and emits
+    /// `lexicon.alias_added` per alias.
+    async fn handle_alias_add(
+        &self,
+        target_term: &str,
+        aliases_to_add: &[String],
+        principal: Principal,
+    ) -> anyhow::Result<Value> {
+        // Load the current entry for the target term.
+        let merged = self.lexicon_merged_definition();
+        let existing = merged
+            .get("_lexiconLibrary")
+            .and_then(Value::as_object)
+            .and_then(|lib| lib.get(target_term))
+            .cloned();
+        let mut entry = match existing {
+            Some(e) if e.get("state").and_then(Value::as_str) != Some("PENDING_DEFINITION") => {
+                // Real entry — proceed.
+                e.as_object().cloned().unwrap_or_default()
+            }
+            _ => {
+                return Ok(json!({
+                    "error": {
+                        "code": "LEXICON_ENTRY_NOT_FOUND",
+                        "message": format!(
+                            "LEXICON_ENTRY_NOT_FOUND: no real entry for term '{target_term}'. \
+                             link_as_alias requires an existing authored entry as target."
+                        ),
+                        "hint": "Use define_new to create the target term first."
+                    }
+                }));
+            }
+        };
+
+        // Collision check: build the combined index for the target's bounded
+        // context and verify none of the new aliases appear there already.
+        let lib = merged
+            .get("_lexiconLibrary")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let target_ctx = entry
+            .get("bounded_context")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        match mcp_flowgate_core::lexicon::build_combined_index(&lib, target_ctx) {
+            Err(collision_msg) => {
+                // Collision already exists in the index — check if any of our
+                // new aliases would conflict. Rerun with candidate aliases
+                // added to a scratch map.
+                return Ok(json!({
+                    "error": {
+                        "code": "LEXICON_ALIAS_COLLISION",
+                        "message": collision_msg.to_string(),
+                    }
+                }));
+            }
+            Ok(index) => {
+                // Check each new alias against the existing index.
+                for alias in aliases_to_add {
+                    if let Some(existing_entry) = index.get(alias.as_str()) {
+                        // Alias is already taken by a term in this context.
+                        let owner = existing_entry
+                            .get("definition_short")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?");
+                        let _ = owner;
+                        return Ok(json!({
+                            "error": {
+                                "code": "LEXICON_ALIAS_COLLISION",
+                                "message": format!(
+                                    "LEXICON_ALIAS_COLLISION: within bounded_context \
+                                     '{target_ctx}', key '{alias}' is already claimed. \
+                                     Aliases must be unique within a bounded context. \
+                                     (SPEC §30.10.1)"
+                                ),
+                            }
+                        }));
+                    }
+                }
+            }
+        }
+
+        // Append aliases to the entry.
+        let current_aliases = entry
+            .get("aliases")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut new_aliases = current_aliases;
+        for alias in aliases_to_add {
+            let v = serde_json::Value::String(alias.clone());
+            if !new_aliases.contains(&v) {
+                new_aliases.push(v);
+            }
+        }
+        entry.insert("aliases".to_string(), serde_json::Value::Array(new_aliases));
+
+        // Persist into the overlay.
+        {
+            let mut overlay = self
+                .lexicon_overlay
+                .write()
+                .expect("lexicon overlay lock poisoned");
+            overlay.insert(target_term.to_string(), serde_json::Value::Object(entry));
+        }
+
+        // Remove added aliases from pending-subjects set and emit audit events.
+        {
+            let mut pending = self
+                .pending_subjects
+                .write()
+                .expect("pending_subjects lock poisoned");
+            for alias in aliases_to_add {
+                pending.remove(alias.as_str());
+            }
+        }
+        for alias in aliases_to_add {
+            let _ = self
+                .runtime
+                .audit()
+                .record(
+                    AuditEvent::new("lexicon.alias_added")
+                        .with_actor(&principal.subject)
+                        .with_payload(json!({
+                            "term":      target_term,
+                            "alias":     alias,
+                            "principal": principal.subject,
+                        })),
+                )
+                .await;
+        }
+
+        Ok(json!({
+            "term":    target_term,
+            "aliases": aliases_to_add,
+            "persisted_to": "overlay"
+        }))
+    }
+
+    /// SPEC §30.10.7C — drop a PENDING_DEFINITION placeholder without creating
+    /// or modifying a lexicon entry. Returns INVALID_RESOLUTION when the
+    /// named subject is not in the known pending set (i.e., it is a real
+    /// authored entry or unknown). Emits `lexicon.pending_cancelled`.
+    async fn handle_cancel_pending_subject(
+        &self,
+        subject: &str,
+        principal: Principal,
+    ) -> anyhow::Result<Value> {
+        // Check: the subject must be in the pending set.
+        let was_pending = {
+            let pending = self
+                .pending_subjects
+                .read()
+                .expect("pending_subjects lock poisoned");
+            pending.contains(subject)
+        };
+
+        if !was_pending {
+            return Ok(json!({
+                "error": {
+                    "code": "INVALID_RESOLUTION",
+                    "message": format!(
+                        "INVALID_RESOLUTION: subject '{subject}' is not a pending \
+                         placeholder. Cancel applies only to PENDING_DEFINITION \
+                         subjects. (SPEC §30.10.9)"
+                    ),
+                    "hint": "Use flowgate.query to inspect the lexicon entry."
+                }
+            }));
+        }
+
+        // Remove from pending set.
+        {
+            let mut pending = self
+                .pending_subjects
+                .write()
+                .expect("pending_subjects lock poisoned");
+            pending.remove(subject);
+        }
+
+        // Emit audit event.
+        let _ = self
+            .runtime
+            .audit()
+            .record(
+                AuditEvent::new("lexicon.pending_cancelled")
+                    .with_actor(&principal.subject)
+                    .with_payload(json!({
+                        "term":         subject,
+                        "cancelled_by": principal.subject,
+                    })),
+            )
+            .await;
+
+        Ok(json!({
+            "cancelled":   subject,
+            "persisted_to": "pending_subjects"
+        }))
     }
 
     /// Build a synthetic "workflow definition" carrying the merged
