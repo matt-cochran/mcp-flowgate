@@ -3,7 +3,7 @@
 [![CI](https://github.com/matt-cochran/mcp-flowgate/actions/workflows/ci.yml/badge.svg)](https://github.com/matt-cochran/mcp-flowgate/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-**Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with ten.**
+**Your LLM reads your entire tool list on every call. mcp-flowgate replaces it with two.**
 
 Wire in any number of MCP servers, CLI commands, and REST APIs. The
 model never sees them in its tool list. It searches for what it needs,
@@ -31,18 +31,26 @@ governance. You get a flat list and a prayer.
 
 ---
 
-## The fix: ten tools, any number of capabilities
+## The fix: two tools, any number of capabilities
 
-mcp-flowgate exposes exactly ten MCP tools regardless of how many
+mcp-flowgate exposes exactly two MCP tools regardless of how many
 capabilities you wire in:
 
-| Layer | Tools | Purpose |
-|-------|-------|---------|
-| **Discovery** | `gateway.home`, `gateway.search`, `gateway.describe` | Find capabilities by keyword, get schemas on demand |
-| **Action** | `workflow.start`, `workflow.get`, `workflow.submit`, `workflow.explain` | Execute capabilities through governed state machines |
-| **Vocabulary** | `gateway.lexicon.search`, `gateway.lexicon.lookup`, `gateway.lexicon.define` | Persistent ubiquitous-language store; vocabulary accumulates across runs (SPEC §30) |
+| Tool | Purpose | Key args |
+|------|---------|----------|
+| **`flowgate.query`** | Read-only: discover, inspect, and look up anything | `{}` (home), `{query, kind?, limit?}` (search), `{subject}` (describe/lookup), `{workflowId}` (get), `{workflowId, transition}` (explain) |
+| **`flowgate.command`** | State-mutating: start, advance, or define | `{definitionId, input?}` (start workflow), `{workflowId, expectedVersion, transition, arguments?}` (submit transition), `{subject: "lexicon:<term>", definition}` (define term) |
 
-The model's tool list is always ten entries. Your 50 capabilities
+Everything that used to be spread across ten named tools — `gateway.home`,
+`gateway.search`, `gateway.describe`, `workflow.start`, `workflow.get`,
+`workflow.submit`, `workflow.explain`, `gateway.lexicon.search`,
+`gateway.lexicon.lookup`, `gateway.lexicon.define` — dispatches through
+these two. The dispatch is driven by which args are present; every
+response carries pre-filled `links[]` so the model never has to derive
+the next call from the schema. (See SPEC §30.10 for the full dispatch
+table and §32 for the HATEOAS contract.)
+
+The model's tool list is always two entries. Your 50 capabilities
 surface through search results and response links — loaded one at a
 time, only when relevant.
 
@@ -119,9 +127,10 @@ Wire it into Claude Desktop
 }
 ```
 
-Restart the host. Seven tools appear. The model can find and call
-`hello.echo` through them. You just shipped a tool with discovery,
-schema validation, and audit built in.
+Restart the host. Two tools appear: `flowgate.query` and
+`flowgate.command`. The model can find and call `hello.echo` through
+them. You just shipped a tool with discovery, schema validation, and
+audit built in.
 
 | Host | Config location | Example |
 |------|----------------|---------|
@@ -129,7 +138,7 @@ schema validation, and audit built in.
 | Zed | `~/.config/zed/settings.json` | [`examples/zed-gateway/`](examples/zed-gateway/) |
 
 That was one tool. The interesting part is what happens when you add
-fifty — and the model's tool list stays at ten.
+fifty — and the model's tool list stays at two.
 
 ---
 
@@ -288,9 +297,9 @@ states:
         actor: agent                      # chain stops — LLM decides here
 ```
 
-The model calls `workflow.start`. The runtime chains through lint →
-test → build automatically and returns the response at
-`ready_to_deploy`. Three executor calls, zero LLM round trips. The
+The model calls `flowgate.command({ definitionId: "deploy_pipeline", input: {...} })`.
+The runtime chains through lint → test → build automatically and
+returns the response at `ready_to_deploy`. Three executor calls, zero LLM round trips. The
 response includes a `chain` trace of what happened and `guidance`
 telling the model what to think about next.
 
@@ -323,7 +332,7 @@ The response surfaces these as a `guidance` object. The model arrives
 at a decision point with pre-shaped instructions — not just prefilled
 arguments, but context for *how to reason* about the choice.
 
-`goal` and `guidance` are indexed by `gateway.search`, so they
+`goal` and `guidance` are indexed by `flowgate.query({query})`, so they
 improve discoverability as well as runtime decisions.
 
 ---
@@ -338,7 +347,7 @@ from a mechanical driver (the same pattern
 **Turn 1 — the model searches, not scans.**
 
 ```jsonc
-→ gateway.search { "query": "publish content" }
+→ flowgate.query { "query": "publish content" }
 
 ← { "items": [
       { "id": "workflow:content_publish",
@@ -351,7 +360,7 @@ One hit. Not 50 tool definitions — one search result with a title.
 **Turn 2 — start the workflow. Note the prefilled link.**
 
 ```jsonc
-→ workflow.start {
+→ flowgate.command {
     "definitionId": "content_publish",
     "input": { "topic": "Q2 launch", "audience": "enterprise" } }
 
@@ -359,7 +368,7 @@ One hit. Not 50 tool definitions — one search result with a title.
     "result":   { "status": "started" },
     "links": [
       { "rel":    "create_outline",
-        "method": "workflow.submit",
+        "method": "flowgate.command",
         "args": {
           "workflowId":      "wf_8f3a",
           "expectedVersion": 0,
@@ -374,9 +383,9 @@ link.
 **Turns 3–5 — the model walks the links forward.**
 
 ```
-workflow.submit(create_outline)   → state="outlined",       link → write_draft
-workflow.submit(write_draft)      → state="drafted",        link → run_brand_review
-workflow.submit(run_brand_review) → state="brand_reviewed", link → request_approval
+flowgate.command(create_outline)   → state="outlined",       link → write_draft
+flowgate.command(write_draft)      → state="drafted",        link → run_brand_review
+flowgate.command(run_brand_review) → state="brand_reviewed", link → request_approval
 ```
 
 Each response advances state and offers only the legal next moves.
@@ -384,7 +393,7 @@ Each response advances state and offers only the legal next moves.
 **Turn 6 — governance stops the model cold.**
 
 ```jsonc
-→ workflow.submit { "transition": "request_approval", ... }
+→ flowgate.command { "transition": "request_approval", ... }
 
 ← { "workflow": { "state": "awaiting_approval" },
     "links": [
@@ -489,9 +498,9 @@ workflow (Flowgate YAML)". Copy-paste runnable.
    `diagnose.codebase.search`, `implement.edit.constrained`,
    `review.code.adversarial`, `review.code.final-approval`) — markdown
    blobs with `verb` and `lifecycle` per [SPEC §5](SPEC.md).
-5. **Wire the LLM client** to call `workflow.start` on `swe_agent`
+5. **Wire the LLM client** to call `flowgate.command({ definitionId: "swe_agent", input: {...} })`
    with the incoming ticket, then drive the returned HATEOAS links
-   until completion. The LLM sees only the ten Flowgate tools at any
+   until completion. The LLM sees only the two Flowgate tools at any
    time; the workflow's state surfaces the next legal moves.
 
 ### What you get
@@ -543,7 +552,8 @@ workflows:
 Each script is **content-identified by hash** — workflows reference
 them by subject, and the runtime materializes the body from the
 workflow's pinned snapshot (SPEC §8.2 invariant). Editing the script
-body after `workflow.start` is invisible to in-flight instances. An
+body after `flowgate.command({definitionId})` (workflow start) is
+invisible to in-flight instances. An
 audit replay can pull the exact body that ran by hash from cold
 storage.
 
@@ -553,8 +563,8 @@ verification. Hash drift fails the load with `SCRIPT_HASH_MISMATCH`.
 
 For destructive scripts (deploys, migrations), pair the `script`
 executor with a `script_acknowledged` guard — the workflow refuses to
-run until an operator has called `gateway.describe` on the current
-body (review-before-execute, hash-flip-invalidated).
+run until an operator has called `flowgate.query({ subject: "..." })`
+on the current body (review-before-execute, hash-flip-invalidated).
 
 The curated library lives in the sibling
 [`cognitive-architectures`](https://github.com/matt-cochran/cognitive-architectures)
@@ -586,8 +596,8 @@ What the interpreter does:
 
 - **States with `delegate:`** spawn an isolated session running the
   named agent config. Returns when the sub-agent calls
-  `workflow.submit` (advancing the workflow) or hits its timeout /
-  step limit.
+  `flowgate.command` with a transition (advancing the workflow) or
+  hits its timeout / step limit.
 - **States with a single non-deterministic actionable link** auto-advance
   without any LLM involvement. No tokens spent on decisions that
   guards can make.
