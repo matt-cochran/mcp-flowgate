@@ -2441,14 +2441,26 @@ operators can review the system's vocabulary evolution.
 | `SUBJECT_NEEDS_DEFINITION` | Runtime: a command's reachable subjects include a `PENDING_DEFINITION` placeholder (returned as `Ok(structured response)`, not an MCP protocol error) |
 | `INVALID_RESOLUTION` | Runtime: a resolution call (`link_as_alias` / `define_new` / `cancel`) targets a subject that is not currently pending, or the resolution payload is malformed |
 
-#### 30.10.10 Optional semantic embeddings (queued for v0.5)
+#### 30.10.10 Optional semantic embeddings (queued for v0.5, opt-in at the end)
 
 Vector embeddings make the `SUBJECT_NEEDS_DEFINITION` candidates list
 much smarter — the runtime can surface terms that are semantically
 close even when they're lexically distant (e.g., "proof bundle"
 matches `evidence-pack`; "user retention metric" matches `churn`).
-**Embeddings are fully optional.** The runtime works without them;
-candidates degrade to Tiers 1+2+4 (canonical / alias / Levenshtein).
+
+**Embeddings are completely optional and OFF by default.** Because
+they come with a real cost — either a third-party API bill or the
+operator standing up a local embedding service — the system is
+designed to be fully functional without them. The
+`SUBJECT_NEEDS_DEFINITION` interaction, the alias system, and the
+Levenshtein candidate ranking (Tiers 1, 2, 4) all work with
+`embeddings.backend: none` (the default). Operators who want better
+candidate quality flip the switch; everyone else gets a working
+system with zero embedding overhead.
+
+Implementation lands as the **last** step of Group 3 so that the
+preceding lexicon discipline ships independently — if the embedding
+work slips or stalls, the rest of Group 3 still delivers.
 
 ##### 30.10.10.1 Definition split
 

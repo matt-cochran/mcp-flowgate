@@ -35,13 +35,17 @@ Group 2 — run_id uniqueness
    ├─ runtime.rs:     pre-create lookup, RUN_ID_ALREADY_RUNNING error
    └─ tests:          new trace_run_id_plumbing.rs cases
 
-Group 3 — embedded lexicon + CLI
-   ├─ core/lexicon_extract.rs:  term-extractor (regex first-pass; design discussion
-   │                            scheduled at start of this group)
-   ├─ runtime.rs:               extract terms from snapshot at start; attach to instance
+Group 3 — Lexicon discipline (aliases + placeholders + SUBJECT_NEEDS_DEFINITION)
+   ├─ lexicon.rs:               definition_short/_long, aliases, snapshot index, collision detection
+   ├─ runtime.rs:               PENDING_DEFINITION placeholders + pre-start subject walk
+   ├─ SUBJECT_NEEDS_DEFINITION: structured interaction with queued_command + candidates + 3 resolution links
+   ├─ candidates.rs:            Tier 1+2+4 (exact / alias / Levenshtein) ranking
+   ├─ handlers.rs:               resolution handlers (link_as_alias / define_new / cancel)
    ├─ handlers.rs/runtime:      embed { lexicon: {...} } in describe/get/explain bodies
-   │                            (size budget: 200 bytes inline, lookup_link otherwise)
-   └─ flowgate CLI:             lexicon define subcommand
+   ├─ flowgate CLI:             lexicon subcommand suite (define/alias/cancel/list/pending)
+   ├─ doctor.rs:                lexicon coverage check
+   └─ embeddings.rs (3.9 OPT-IN, LAST): optional semantic Tier 3 via HttpEmbedder
+                                (default OFF; system fully functional without)
 
 Group 4 — docs + site
    ├─ SPEC.md:        §5, §8.2, §12, §17, §22, §30 prose updates
@@ -510,13 +514,14 @@ Resolved in conversation. Decisions locked into SPEC §30.10:
   - Rename `definition: String` → `definition_short: String` (required).
   - Add `definition_long: Option<String>`.
   - Add `aliases: Option<Vec<String>>`.
-  - Add `embedding: Option<Vec<f32>>` field (populated by Task 3.3.5; nullable here so 3.1 doesn't depend on the embedding backend).
+
+  Note: the `embedding: Option<Vec<f32>>` field is NOT added in this task. Task 3.9 (the opt-in semantic upgrade at the end of Group 3) adds it. Group 3 tasks 3.2–3.8 don't need it.
 
   At snapshot-pin time, build a single `HashMap<String, &LexiconEntry>` keyed by canonical term + every alias. Implement load-time collision detection within bounded context.
 
   Update every internal caller / existing test fixture that constructed entries with the old `definition` field. This is a wide refactor — expect to touch test fixtures across the workspace.
 
-- [ ] **Commit:** `feat(core): lexicon entry shape (definition_short/_long, aliases, embedding); snapshot-time index (SPEC §30.10.1, §30.10.10.1)`
+- [ ] **Commit:** `feat(core): lexicon entry shape (definition_short/_long, aliases); snapshot-time index (SPEC §30.10.1)`
 
 ### Task 3.2: Config-load subject discovery + `PENDING_DEFINITION` placeholders
 
@@ -544,65 +549,34 @@ Resolved in conversation. Decisions locked into SPEC §30.10:
 
 - [ ] **Commit:** `feat(runtime): pre-start subject walk; SUBJECT_NEEDS_DEFINITION interaction (SPEC §30.10.4-5)`
 
-### Task 3.3.5: Embedding backend trait + adapters
-
-**Files:**
-- Create: `crates/mcp-flowgate-core/src/embeddings.rs` — `EmbeddingProvider` trait, `NoopEmbedder`, `HttpEmbedder` (ollama + openai_compatible request adapters).
-- Modify: `crates/mcp-flowgate-core/src/config.rs` (or equivalent) — parse the new `embeddings:` config block.
-- Modify: `crates/mcp-flowgate-core/src/error.rs` — add `EmbeddingBackendFailed` variant.
-- Modify: `crates/mcp-flowgate-core/src/lexicon.rs` — wire embedding computation at lexicon write + config-load backfill.
-
-- [ ] **Failing tests.**
-  - `NoopEmbedder::embed("anything")` returns an empty vector; nothing semantic is expected of it.
-  - `HttpEmbedder` with `request_format: ollama` against a mock HTTP server: POST shape is `{model, prompt}`, response parsing extracts `embedding`.
-  - `HttpEmbedder` with `request_format: openai_compatible` against a mock: POST shape is `{model, input}`, response parsing extracts `data[0].embedding`.
-  - Config parse: missing `embeddings:` block defaults `backend: none`. Invalid `request_format` fails load.
-  - At lexicon write with `backend: http` mocked: entry's `embedding` field is populated with the mock vector.
-  - At lexicon write with `backend: none`: `embedding` stays `None`.
-  - Backend failure on write returns `EMBEDDING_BACKEND_FAILED`.
-
-- [ ] **Implement.**
-  ```rust
-  #[async_trait]
-  pub trait EmbeddingProvider: Send + Sync {
-      async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
-      fn dimensions(&self) -> usize;
-      fn backend_name(&self) -> &'static str;
-  }
-  ```
-  `NoopEmbedder` returns `Ok(vec![])` and `0` dimensions; semantic ranking skipped when this backend is in use.
-  `HttpEmbedder` uses `reqwest` (already in workspace deps for the doctor probe). Adapter selection at construction time. Validates the returned vector's length against the configured `dimensions`.
-
-  Lexicon write path (currently `handle_lexicon_define` → runtime): synchronously embed `<canonical> + <aliases joined> + <definition_short> + <definition_long.unwrap_or_default()>` and store the vector on the entry. Reject the write with `EMBEDDING_BACKEND_FAILED` if the backend fails.
-
-  Config-load backfill: after the snapshot-stamp, walk entries with `embedding: None` and compute. Report count to doctor; don't fail the load if backfill has failures (warn instead).
-
-- [ ] **Commit:** `feat(core): embedding backend abstraction + ollama/openai_compatible http adapters (SPEC §30.10.10.2-3)`
-
-### Task 3.4: Tiered candidate ranking (canonical → alias → semantic → Levenshtein)
+### Task 3.4: Candidate ranking — canonical → alias → Levenshtein (no embeddings yet)
 
 **Files:**
 - Create: `crates/mcp-flowgate-core/src/lexicon_candidates.rs`
 - Integrate from §3.3's response builder.
 
+This task ships the candidate-ranking machinery with Tiers 1, 2, and 4 (exact canonical, exact alias, Levenshtein fuzzy). Tier 3 (semantic) is added later in Task 3.9 as a pure additive enhancement when an embedding backend is configured. The system is fully functional without semantic ranking.
+
 - [ ] **Failing tests.**
-  - Tier 1+2 only (backend: none): unknown subject `evidence-foo` against lexicon with `evidence-pack` + `evidence-record` returns Levenshtein candidates.
-  - Tier 3 enabled (mock embedder returning controlled vectors): cosine similarity above the 0.85 threshold surfaces a `match_kind: semantic` candidate ranked above Levenshtein matches.
-  - Combined ordering: semantic > exact-alias-low-similarity > fuzzy_close > fuzzy_loose.
+  - Exact canonical match takes priority over everything else.
+  - Exact alias match returns the canonical entry.
+  - Levenshtein distance ≤ 1 produces a `fuzzy_close` candidate; ≤ 2 produces `fuzzy_loose`; > 2 is excluded.
+  - Combined ordering: `exact` > `alias` > `fuzzy_close` > `fuzzy_loose`.
+  - Bounded-context isolation: candidates are searched only within the current bounded context (cross-context terms don't surface).
 
 - [ ] **Implement.** For the unknown subject:
-  1. Compute its embedding via the configured backend (`embed("<verb> <unknown_subject>")`). Skip when `NoopEmbedder`.
-  2. Walk every entry in the bounded context. For each:
-     - Tier 1: if `entry.term == subject`, return immediately.
-     - Tier 2: if any alias matches exactly, return immediately.
-     - Tier 3: if embedding available, compute cosine similarity against the entry's embedding. If ≥ 0.85, candidate.
-     - Tier 4: Levenshtein distance against canonical + aliases. ≤ 2 → candidate.
-  3. Sort by unified score (semantic similarity weighted above Levenshtein).
-  4. Return top 5.
+  1. Walk every entry in the bounded context. For each:
+     - Tier 1: if `entry.term == subject`, return immediately with `match_kind: "exact"`.
+     - Tier 2: if any alias matches exactly, return immediately with `match_kind: "alias"`.
+     - Tier 4: Levenshtein distance against canonical + aliases. ≤ 1 → `fuzzy_close`. ≤ 2 → `fuzzy_loose`.
+  2. Sort by unified score (exact > alias > fuzzy_close > fuzzy_loose, then by distance).
+  3. Return top 5.
 
-  Each candidate: `{ term, distance: f32, match_kind: "exact"|"alias"|"semantic"|"fuzzy_close"|"fuzzy_loose", definition_preview: first-100-chars-of-definition_short }`.
+  Each candidate: `{ term, distance: f32, match_kind: "exact"|"alias"|"fuzzy_close"|"fuzzy_loose", definition_preview: first-100-chars-of-definition_short }`.
 
-- [ ] **Commit:** `feat(core): tiered candidate ranking with optional semantic (SPEC §30.10.10.4)`
+  Design the function so a future `match_kind: "semantic"` slots in cleanly (Task 3.9 will extend this).
+
+- [ ] **Commit:** `feat(core): candidate ranking with exact/alias/Levenshtein tiers (SPEC §30.10.10.4)`
 
 ### Task 3.5: Resolution handlers — `link_as_alias`, `define_new`, `cancel`
 
@@ -655,6 +629,63 @@ Resolved in conversation. Decisions locked into SPEC §30.10:
 
 - [ ] **Commit:** `feat(doctor): lexicon coverage check`
 
+---
+
+**END OF CORE GROUP 3.** Tasks 3.1–3.8 ship a complete, functional lexicon-discipline system. The system works without any embedding backend; the candidate ranking uses Tiers 1, 2, and 4 (canonical, alias, Levenshtein). Operators with no embedding infrastructure get a fully working SUBJECT_NEEDS_DEFINITION flow.
+
+The remaining task (3.9) is **purely opt-in** and additive. It can be deferred to a follow-up release without affecting the rest of Group 3.
+
+---
+
+### Task 3.9: Optional semantic embeddings (opt-in, additive)
+
+This task adds Tier 3 (semantic) to the candidate ranking. It is **completely optional**; the system is fully functional without it (Tiers 1+2+4 cover the SUBJECT_NEEDS_DEFINITION flow). Operators who enable embeddings pay either a third-party API bill (OpenAI / OpenRouter / etc.) or the system cost of running a local embedding service (Ollama / vectorlite-in-docker / their own).
+
+**Files:**
+- Modify: `crates/mcp-flowgate-core/src/lexicon.rs` — add `embedding: Option<Vec<f32>>` field to the lexicon entry struct (was deferred from Task 3.1).
+- Create: `crates/mcp-flowgate-core/src/embeddings.rs` — `EmbeddingProvider` trait, `NoopEmbedder`, `HttpEmbedder` (ollama + openai_compatible request adapters).
+- Modify: `crates/mcp-flowgate-core/src/config.rs` (or equivalent) — parse the new `embeddings:` config block.
+- Modify: `crates/mcp-flowgate-core/src/error.rs` — add `EmbeddingBackendFailed` variant.
+- Modify: `crates/mcp-flowgate-core/src/lexicon.rs` — wire embedding computation at lexicon write + config-load backfill.
+- Modify: `crates/mcp-flowgate-core/src/lexicon_candidates.rs` — extend with Tier 3 (semantic) ranking.
+- Modify: `schemas/gateway-config.schema.json` — add `embeddings:` config block.
+
+- [ ] **Failing tests (embedder).**
+  - `NoopEmbedder::embed("anything")` returns an empty vector; 0 dimensions; semantic ranking skipped.
+  - `HttpEmbedder` with `request_format: ollama` against a mock HTTP server: POST shape is `{model, prompt}`, response parsing extracts `embedding`.
+  - `HttpEmbedder` with `request_format: openai_compatible` against a mock: POST shape is `{model, input}`, response parsing extracts `data[0].embedding`.
+  - Config parse: missing `embeddings:` block defaults `backend: none`. Invalid `request_format` fails load.
+  - At lexicon write with `backend: http` mocked: entry's `embedding` field is populated.
+  - At lexicon write with `backend: none`: `embedding` stays `None`.
+  - Backend failure on write returns `EMBEDDING_BACKEND_FAILED`.
+
+- [ ] **Failing tests (semantic ranking).**
+  - Tier 3 enabled (mock embedder with controlled vectors): cosine similarity ≥ 0.85 produces a `match_kind: "semantic"` candidate ranked above Levenshtein matches.
+  - Tier 3 disabled (NoopEmbedder): existing Tier 1+2+4 tests continue to pass; no `semantic` candidates surface.
+  - Combined ordering: `exact` > `alias` > `semantic` (when present) > `fuzzy_close` > `fuzzy_loose`.
+
+- [ ] **Implement embedder.**
+  ```rust
+  #[async_trait]
+  pub trait EmbeddingProvider: Send + Sync {
+      async fn embed(&self, text: &str) -> Result<Vec<f32>, EmbeddingError>;
+      fn dimensions(&self) -> usize;
+      fn backend_name(&self) -> &'static str;
+  }
+  ```
+  `NoopEmbedder` returns `Ok(vec![])` and `0` dimensions.
+  `HttpEmbedder` uses `reqwest`. Adapter selection at construction time. Validates the returned vector's length against the configured `dimensions`.
+
+  Lexicon write path: synchronously embed `<canonical> + <aliases joined> + <definition_short> + <definition_long.unwrap_or_default()>` and store the vector. Reject the write with `EMBEDDING_BACKEND_FAILED` if the backend fails.
+
+  Config-load backfill: after the snapshot-stamp, walk entries with `embedding: None` and compute. Report count to doctor; don't fail the load if backfill has failures (warn instead).
+
+  Storage: embeddings live in the lexicon entry's JSON as a `Vec<f32>` field. No vector DB. Naive cosine-similarity scan is sub-millisecond at lexicon scale.
+
+- [ ] **Implement semantic tier in ranking.** Extend `lexicon_candidates.rs`: when an embedding backend is configured, compute the unknown subject's embedding (`embed("<verb> <unknown_subject>")`) and compare against each entry's stored embedding via cosine similarity. Threshold default 0.85; candidates exceeding the threshold get `match_kind: "semantic"`. Insert into the result list ordered above Levenshtein but below exact/alias.
+
+- [ ] **Commit:** `feat(core): optional semantic embeddings + tiered candidate ranking with Tier 3 (SPEC §30.10.10)`
+
 ### Group 3 acceptance
 
 - [ ] Lexicon entries support `aliases`; collisions are caught at load.
@@ -664,6 +695,8 @@ Resolved in conversation. Decisions locked into SPEC §30.10:
 - [ ] After resolution, the original command's retry succeeds.
 - [ ] Describe/get/explain responses include embedded lexicon for subject + `refs` neighbors, inline ≤200 bytes else lookup_link.
 - [ ] `flowgate lexicon {define,alias,cancel,list,pending}` CLI works end-to-end.
+- [ ] Without `embeddings.backend` configured, system is fully functional; Tier 3 is skipped.
+- [ ] With `embeddings.backend: http` configured against a mock service, Tier 3 (semantic) candidates surface and rank above Levenshtein matches.
 - [ ] `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings` green.
 
 Group 3 complete.
